@@ -28,9 +28,18 @@ npm run dev
 ```powershell
 npm run typecheck
 npm run build
+npm run test:rust
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
+
+## M2 本地阅读
+
+- 点击“导入 TXT / EPUB”选择本地文件，单文件限制为 64 MB。
+- TXT 会尝试识别 UTF-8、UTF-16LE/BE 和 GB18030，并按“第 X 章/节/回/卷”等标题拆分。
+- EPUB 首先读取标准 container.xml、OPF manifest/spine 和 XHTML 正文；复杂脚本、DRM 和特殊布局暂不保证。
+- 书籍、章节正文和阅读进度写入本机 SQLite；阅读设置保存在应用本地存储。
+- 当前不会联网上传导入文件，也不会内置版权书源。
 
 ## 本地数据
 
@@ -41,3 +50,4 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - WebView2 缺失：安装 Microsoft Edge WebView2 Runtime 后重启应用。
 - Vite 端口被占用：释放 1420 端口，或调整 `vite.config.ts` 与 `tauri.conf.json` 中的端口配置。
 - 浏览器预览模式下，SQLite 命令不可用是正常现象；请使用 `npm run tauri dev` 验证桌面桥接。
+- 如果导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB。
