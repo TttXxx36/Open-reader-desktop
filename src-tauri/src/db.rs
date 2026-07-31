@@ -1,4 +1,3 @@
-use crate::library::ParsedBook;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::{
@@ -84,7 +83,11 @@ impl Database {
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
 
-    pub fn import_book(&self, source_name: &str, parsed: ParsedBook) -> Result<BookSummary, DbError> {
+    pub fn import_book(
+        &self,
+        source_name: &str,
+        parsed: ParsedBook,
+    ) -> Result<BookSummary, DbError> {
         let book_id = format!(
             "book-{}",
             SystemTime::now()
@@ -211,7 +214,12 @@ impl Database {
              SET current_chapter = ?1, progress = ?2, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?3
                AND EXISTS (SELECT 1 FROM chapters WHERE id = ?4 AND book_id = ?3)",
-            params![current_chapter, progress.clamp(0.0, 1.0), book_id, chapter_id],
+            params![
+                current_chapter,
+                progress.clamp(0.0, 1.0),
+                book_id,
+                chapter_id
+            ],
         )?;
         if changed == 0 {
             return Err(DbError::NotFound);
