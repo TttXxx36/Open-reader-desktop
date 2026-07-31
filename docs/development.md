@@ -118,6 +118,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - CI 已运行非严格预检；它不会替代签名证书、干净 Windows 安装/升级/卸载和 WebView2 环境回归。
 - 现有 `src-tauri/icons/*.b64` 是占位编码文件，不是可直接发布的 Windows 图标；准备真实图标后再开启 Tauri bundle。
 
+- GitHub Actions 的 `Windows release candidate` 只允许手动触发，严格预检通过后才构建 Tauri 安装包，并生成 `release-sha256.txt`；未签名候选仅用于内部回归。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
