@@ -493,7 +493,9 @@ mod tests {
             .save_source_cache("cache-key", &saved.id, "book", r#"{"title":"Fixture"}"#, 60)
             .expect("cache should save");
         assert_eq!(
-            database.get_source_cache("cache-key").expect("cache should read"),
+            database
+                .get_source_cache("cache-key")
+                .expect("cache should read"),
             Some(r#"{"title":"Fixture"}"#.to_string())
         );
         assert_eq!(
