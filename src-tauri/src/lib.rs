@@ -369,7 +369,7 @@ async fn fetch_source_chapter(
     source_id: String,
     chapter: source::SourceChapter,
     force_refresh: bool,
-) -> Result<source::SourceChapterContent, String> {
+) -> Result<RemoteChapterContent, String> {
     if chapter.url.trim().is_empty() {
         return Err("章节链接不能为空".to_string());
     }
@@ -382,7 +382,7 @@ async fn fetch_source_chapter(
             .get_source_cache(&cache_key)
             .map_err(|error| error.to_string())?
         {
-            if let Ok(cached) = serde_json::from_str::<source::SourceChapterContent>(&payload) {
+            if let Ok(cached) = serde_json::from_str::<RemoteChapterContent>(&payload) {
                 return Ok(cached);
             }
         }
