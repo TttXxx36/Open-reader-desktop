@@ -3,7 +3,10 @@ use reqwest::header::CONTENT_TYPE;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use url::{form_urlencoded, Url};
 
@@ -265,9 +268,9 @@ impl SourceEngine {
             }
         }
 
-        let first_result = search_results.first().ok_or_else(|| {
-            pipeline_error("search_parse", SourceError::NoMatch)
-        })?;
+        let first_result = search_results
+            .first()
+            .ok_or_else(|| pipeline_error("search_parse", SourceError::NoMatch))?;
         let book_url = first_result.book_url.clone().ok_or_else(|| {
             pipeline_error(
                 "search_parse",
@@ -277,12 +280,10 @@ impl SourceEngine {
         let book_info = self
             .fetch_book_info(source, &book_url, &mut debug_steps)
             .await?;
-        let chapters = self
-            .fetch_toc(source, &book_url, &mut debug_steps)
-            .await?;
-        let first_chapter = chapters.first().ok_or_else(|| {
-            pipeline_error("toc_parse", SourceError::NoMatch)
-        })?;
+        let chapters = self.fetch_toc(source, &book_url, &mut debug_steps).await?;
+        let first_chapter = chapters
+            .first()
+            .ok_or_else(|| pipeline_error("toc_parse", SourceError::NoMatch))?;
         let first_chapter_content = self
             .fetch_chapter_content(source, first_chapter, &mut debug_steps)
             .await?;
@@ -377,7 +378,9 @@ impl SourceEngine {
             Some(last_path_segment(book_url)),
             None,
         );
-        let body = self.fetch_stage("book_info", &url, &source.headers, debug_steps).await?;
+        let body = self
+            .fetch_stage("book_info", &url, &source.headers, debug_steps)
+            .await?;
         let rules = source
             .book_info
             .as_ref()
@@ -411,7 +414,9 @@ impl SourceEngine {
             Some(last_path_segment(book_url)),
             None,
         );
-        let body = self.fetch_stage("toc", &url, &source.headers, debug_steps).await?;
+        let body = self
+            .fetch_stage("toc", &url, &source.headers, debug_steps)
+            .await?;
         let rules = source
             .toc
             .as_ref()
@@ -436,7 +441,9 @@ impl SourceEngine {
             None,
             Some(last_path_segment(&chapter.url)),
         );
-        let body = self.fetch_stage("content", &url, &source.headers, debug_steps).await?;
+        let body = self
+            .fetch_stage("content", &url, &source.headers, debug_steps)
+            .await?;
         let rules = source
             .content
             .as_ref()
