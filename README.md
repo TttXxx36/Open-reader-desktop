@@ -21,14 +21,24 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [技术路线 ADR](docs/adr/0001-tech-stack.md)
 - [书源兼容性矩阵](docs/compatibility-matrix.md)
 - [开发路线图](docs/roadmap.md)
+- [开发环境](docs/development.md)
 
 ## 当前状态
 
 - [x] 创建公开仓库并明确产品边界
-- [ ] 初始化 Tauri + Vue + Rust 工程
+- [x] 初始化 Tauri + Vue + Rust 工程
 - [ ] 完成本地 TXT/EPUB 阅读 MVP
 - [ ] 完成单书源端到端流程
 - [ ] 完成多源搜索、缓存、替换规则和发布流程
+
+## 本地开发
+
+```powershell
+npm install
+npm run tauri dev
+```
+
+检查命令和 Windows/WebView2 环境说明见 [docs/development.md](docs/development.md)。
 
 ## 参与开发
 
