@@ -20,6 +20,7 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [产品范围](docs/product-scope.md)
 - [技术路线 ADR](docs/adr/0001-tech-stack.md)
 - [书源兼容性矩阵](docs/compatibility-matrix.md)
+- [书源协议](docs/source-protocol.md)
 - [开发路线图](docs/roadmap.md)
 - [开发环境](docs/development.md)
 
@@ -28,7 +29,8 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [x] 创建公开仓库并明确产品边界
 - [x] 初始化 Tauri + Vue + Rust 工程
 - [x] 完成本地 TXT/EPUB 阅读 MVP
-- [ ] 完成单书源端到端流程
+- [x] 定义并测试基础书源协议
+- [ ] 完成授权测试站点的单书源端到端流程
 - [ ] 完成多源搜索、缓存、替换规则和发布流程
 
 ## 本地开发
@@ -38,7 +40,7 @@ npm install
 npm run tauri dev
 ```
 
-M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。详细检查命令见 [docs/development.md](docs/development.md)。
+M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览。详细检查命令见 [docs/development.md](docs/development.md)。
 
 ## 参与开发
 
