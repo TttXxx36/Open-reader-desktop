@@ -101,6 +101,14 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - 强制刷新失败时优先返回本机缓存并标记 `stale`，同时显示 `refresh_error`；没有可用缓存时才向前端返回错误。
 - 目录指纹是变化检测信号，不是版权、授权或内容完整性证明；真实来源仍需单独确认授权和服务条款。
 
+## M5.5 安全审计与发布前验收
+
+- 书源可填写 `permission` 权限记录；“安全审计”会检查权限状态、主机范围、敏感请求头和结构错误。
+- “缓存状态”只显示条目数、字节数、过期条目数与容量上限，不展示缓存正文；应用启动和缓存写入后的淘汰会在 Rust stderr 记录实际删除数量。
+- Rust 网络客户端最多跟随 5 次重定向；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
+- Windows 安装包当前仍是发布阻塞项：`bundle.active=false`，因为 `src-tauri/icons/icon.ico`、签名证书和干净安装/升级/卸载环境尚未准备。不要在这些验收完成前发布安装包。
+- 当前可执行验收：`npm run typecheck`、`npm run build`、`npm run test:rust`、`cargo fmt --check --manifest-path src-tauri/Cargo.toml` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
