@@ -24,10 +24,8 @@ fn main() {
     let windows_icon_path = out_dir.join("open-reader.ico");
     fs::write(&windows_icon_path, ico).expect("unable to write the build icon");
 
-    tauri_build::try_build(
-        tauri_build::Attributes::new().windows_attributes(
-            tauri_build::WindowsAttributes::new().window_icon_path(windows_icon_path),
-        ),
-    )
+    tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(
+        tauri_build::WindowsAttributes::new().window_icon_path(windows_icon_path),
+    ))
     .expect("failed to run tauri build script");
 }
