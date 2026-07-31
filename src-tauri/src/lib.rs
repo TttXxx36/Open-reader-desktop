@@ -200,6 +200,38 @@ struct RemoteBookDetail {
     book_info: source::BookInfo,
     chapters: Vec<source::SourceChapter>,
     debug_steps: Vec<source::SourceDebugStep>,
+    #[serde(default)]
+    chapter_fingerprint: String,
+    #[serde(default)]
+    chapter_update: Option<source::ChapterUpdateSummary>,
+    #[serde(default)]
+    stale: bool,
+    #[serde(default)]
+    refresh_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemoteChapterContent {
+    title: String,
+    content: String,
+    #[serde(default)]
+    next_url: Option<String>,
+    #[serde(default)]
+    stale: bool,
+    #[serde(default)]
+    refresh_error: Option<String>,
+}
+
+impl From<source::SourceChapterContent> for RemoteChapterContent {
+    fn from(content: source::SourceChapterContent) -> Self {
+        Self {
+            title: content.title,
+            content: content.content,
+            next_url: content.next_url,
+            stale: false,
+            refresh_error: None,
+        }
+    }
 }
 
 const SOURCE_BOOK_CACHE_TTL_SECS: u64 = 5 * 60;
@@ -231,6 +263,26 @@ fn source_cache_key(kind: &str, summary: &SourceSummary, url: &str) -> String {
     format!("{kind}|{}|{}|{url}", summary.id, summary.updated_at)
 }
 
+fn cached_remote_book(
+    database: &Database,
+    cache_key: &str,
+) -> Result<Option<RemoteBookDetail>, String> {
+    let payload = database
+        .get_source_cache_any(cache_key)
+        .map_err(|error| error.to_string())?;
+    Ok(payload.and_then(|value| serde_json::from_str::<RemoteBookDetail>(&value).ok()))
+}
+
+fn cached_remote_chapter(
+    database: &Database,
+    cache_key: &str,
+) -> Result<Option<RemoteChapterContent>, String> {
+    let payload = database
+        .get_source_cache_any(cache_key)
+        .map_err(|error| error.to_string())?;
+    Ok(payload.and_then(|value| serde_json::from_str::<RemoteChapterContent>(&value).ok()))
+}
+
 #[tauri::command]
 async fn fetch_source_preview(url: String) -> Result<SourcePreview, String> {
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
@@ -250,6 +302,7 @@ async fn fetch_source_book(
 
     let (summary, source) = load_enabled_source(&database, &source_id)?;
     let cache_key = source_cache_key("book", &summary, &book_url);
+    let previous = cached_remote_book(&database, &cache_key)?;
     if !force_refresh {
         if let Some(payload) = database
             .get_source_cache(&cache_key)
@@ -262,18 +315,37 @@ async fn fetch_source_book(
     }
 
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
-    let detail: SourceBookDetail = engine
-        .fetch_book_detail(&source, &book_url)
-        .await
-        .map_err(|error| error.to_string())?;
-    let result = RemoteBookDetail {
+    let detail: SourceBookDetail = match engine.fetch_book_detail(&source, &book_url).await {
+        Ok(detail) => detail,
+        Err(error) => {
+            if let Some(mut fallback) = previous {
+                fallback.stale = true;
+                fallback.refresh_error = Some(error.to_string());
+                fallback.chapter_update = None;
+                return Ok(fallback);
+            }
+            return Err(error.to_string());
+        }
+    };
+    let chapter_update = previous.as_ref().map(|cached| {
+        source::summarize_chapter_update(&cached.chapters, &detail.chapters)
+    });
+    let mut result = RemoteBookDetail {
         source_id: summary.id.clone(),
         source_name: summary.name.clone(),
         book_info: detail.book_info,
+        chapter_fingerprint: source::chapter_fingerprint(&detail.chapters),
         chapters: detail.chapters,
         debug_steps: detail.debug_steps,
+        chapter_update,
+        stale: false,
+        refresh_error: None,
     };
-    let payload = serde_json::to_string(&result).map_err(|error| error.to_string())?;
+    let mut cache_result = result.clone();
+    cache_result.chapter_update = None;
+    cache_result.stale = false;
+    cache_result.refresh_error = None;
+    let payload = serde_json::to_string(&cache_result).map_err(|error| error.to_string())?;
     database
         .save_source_cache(
             &cache_key,
@@ -304,6 +376,7 @@ async fn fetch_source_chapter(
 
     let (summary, source) = load_enabled_source(&database, &source_id)?;
     let cache_key = source_cache_key("chapter", &summary, &chapter.url);
+    let previous = cached_remote_chapter(&database, &cache_key)?;
     if !force_refresh {
         if let Some(payload) = database
             .get_source_cache(&cache_key)
@@ -317,11 +390,24 @@ async fn fetch_source_chapter(
 
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
     let mut debug_steps = Vec::new();
-    let result = engine
+    let result = match engine
         .fetch_chapter_content(&source, &chapter, &mut debug_steps)
         .await
-        .map_err(|error| error.to_string())?;
-    let payload = serde_json::to_string(&result).map_err(|error| error.to_string())?;
+    {
+        Ok(content) => RemoteChapterContent::from(content),
+        Err(error) => {
+            if let Some(mut fallback) = previous {
+                fallback.stale = true;
+                fallback.refresh_error = Some(error.to_string());
+                return Ok(fallback);
+            }
+            return Err(error.to_string());
+        }
+    };
+    let mut cache_result = result.clone();
+    cache_result.stale = false;
+    cache_result.refresh_error = None;
+    let payload = serde_json::to_string(&cache_result).map_err(|error| error.to_string())?;
     database
         .save_source_cache(
             &cache_key,
