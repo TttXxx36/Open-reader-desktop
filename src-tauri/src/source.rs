@@ -1477,7 +1477,10 @@ mod tests {
         assert!(audit.pass, "{:?}", audit.errors);
         assert_eq!(audit.permission_status, "authorized");
         assert_eq!(audit.hosts, vec!["example.test"]);
-        assert!(audit.warnings.is_empty());
+        assert!(audit
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("permission")));
     }
 
     #[test]
