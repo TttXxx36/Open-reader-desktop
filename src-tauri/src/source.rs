@@ -834,10 +834,10 @@ mod tests {
         let mut source: BookSource =
             serde_json::from_str(include_str!("../fixtures/sample_source.json"))
                 .expect("fixture source should parse");
-        source.search_url = format!("{base_url}/search?q={{keyword}}");
-        source.book_info_url = Some(format!("{base_url}/book/{{bookId}}"));
-        source.toc_url = Some(format!("{base_url}/book/{{bookId}}/toc"));
-        source.content_url = Some(format!("{base_url}/chapter/{{chapterId}}"));
+        source.search_url = format!("{base_url}/search?q={{{{keyword}}}}");
+        source.book_info_url = Some(format!("{base_url}/book/{{{{bookId}}}}"));
+        source.toc_url = Some(format!("{base_url}/book/{{{{bookId}}}}/toc"));
+        source.content_url = Some(format!("{base_url}/chapter/{{{{chapterId}}}}"));
 
         let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
         let result = engine
