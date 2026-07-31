@@ -31,6 +31,7 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [x] 完成本地 TXT/EPUB 阅读 MVP
 - [x] 定义并测试基础书源协议
 - [x] 完成本地授权夹具的单书源端到端流程
+- [x] 完成书源保存、启用/停用与端到端调试面板
 - [ ] 完成多源搜索、缓存、替换规则和发布流程
 
 ## 本地开发
@@ -40,7 +41,7 @@ npm install
 npm run tauri dev
 ```
 
-M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4 将搜索、详情、目录和首章正文串成可测试的本地授权夹具链路。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)。
+M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4/M4.1 将搜索、详情、目录和首章正文串成可测试链路，并加入书源持久化、启停和调试诊断。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)。
 
 ## 参与开发
 
