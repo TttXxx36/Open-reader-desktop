@@ -3,7 +3,7 @@ use reqwest::header::CONTENT_TYPE;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, time::{Duration, Instant}};
 use thiserror::Error;
 use url::{form_urlencoded, Url};
 
@@ -33,6 +33,8 @@ pub enum SourceError {
     InvalidJsonPath(String),
     #[error("invalid JSON response: {0}")]
     InvalidJson(String),
+    #[error("{stage} 阶段失败：{message}")]
+    Pipeline { stage: String, message: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,11 +160,28 @@ pub struct SourcePreview {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SourceDebugStep {
+    pub stage: String,
+    pub url: String,
+    pub duration_ms: u64,
+    pub status: Option<u16>,
+    pub bytes: Option<usize>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SourcePipelineResult {
     pub search_results: Vec<SearchResult>,
     pub book_info: BookInfo,
     pub chapters: Vec<SourceChapter>,
     pub first_chapter: SourceChapterContent,
+    pub debug_steps: Vec<SourceDebugStep>,
+}
+
+struct FetchedText {
+    body: String,
+    status: u16,
+    bytes: usize,
 }
 
 pub struct SourceEngine {
@@ -232,42 +251,100 @@ impl SourceEngine {
         source: &BookSource,
         keyword: &str,
     ) -> Result<SourcePipelineResult, SourceError> {
+        let mut debug_steps = Vec::new();
         let search_url = render_url(&source.search_url, Some(keyword), None, None, None);
-        let search_body = self.fetch_text(&search_url).await?;
-        let mut search_results = self.parse_search_html(source, &search_body)?;
+        let search_body = self
+            .fetch_stage("search", &search_url, &source.headers, &mut debug_steps)
+            .await?;
+        let mut search_results = self
+            .parse_search_html(source, &search_body)
+            .map_err(|error| pipeline_error("search_parse", error))?;
         for result in &mut search_results {
             if let Some(url) = &result.book_url {
                 result.book_url = Some(absolutize_url(&search_url, url));
             }
         }
 
-        let first_result = search_results.first().ok_or(SourceError::NoMatch)?;
-        let book_url = first_result.book_url.clone().ok_or_else(|| {
-            SourceError::InvalidConfig("search result has no book URL".to_string())
+        let first_result = search_results.first().ok_or_else(|| {
+            pipeline_error("search_parse", SourceError::NoMatch)
         })?;
-        let book_info = self.fetch_book_info(source, &book_url).await?;
-        let chapters = self.fetch_toc(source, &book_url).await?;
-        let first_chapter = chapters.first().ok_or(SourceError::NoMatch)?;
-        let first_chapter_content = self.fetch_chapter_content(source, first_chapter).await?;
+        let book_url = first_result.book_url.clone().ok_or_else(|| {
+            pipeline_error(
+                "search_parse",
+                SourceError::InvalidConfig("search result has no book URL".to_string()),
+            )
+        })?;
+        let book_info = self
+            .fetch_book_info(source, &book_url, &mut debug_steps)
+            .await?;
+        let chapters = self
+            .fetch_toc(source, &book_url, &mut debug_steps)
+            .await?;
+        let first_chapter = chapters.first().ok_or_else(|| {
+            pipeline_error("toc_parse", SourceError::NoMatch)
+        })?;
+        let first_chapter_content = self
+            .fetch_chapter_content(source, first_chapter, &mut debug_steps)
+            .await?;
 
         Ok(SourcePipelineResult {
             search_results,
             book_info,
             chapters,
             first_chapter: first_chapter_content,
+            debug_steps,
         })
     }
 
-    async fn fetch_text(&self, url: &str) -> Result<String, SourceError> {
+    async fn fetch_stage(
+        &self,
+        stage: &str,
+        url: &str,
+        headers: &HashMap<String, String>,
+        debug_steps: &mut Vec<SourceDebugStep>,
+    ) -> Result<String, SourceError> {
+        let started = Instant::now();
+        match self.fetch_text(url, headers).await {
+            Ok(response) => {
+                debug_steps.push(SourceDebugStep {
+                    stage: stage.to_string(),
+                    url: redact_url(url),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    status: Some(response.status),
+                    bytes: Some(response.bytes),
+                    error: None,
+                });
+                Ok(response.body)
+            }
+            Err(error) => {
+                let message = error.to_string();
+                debug_steps.push(SourceDebugStep {
+                    stage: stage.to_string(),
+                    url: redact_url(url),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    status: None,
+                    bytes: None,
+                    error: Some(message.clone()),
+                });
+                Err(pipeline_error(stage, error))
+            }
+        }
+    }
+
+    async fn fetch_text(
+        &self,
+        url: &str,
+        headers: &HashMap<String, String>,
+    ) -> Result<FetchedText, SourceError> {
         validate_url(url)?;
-        let response = self
-            .client
-            .get(expand_url_template(url))
-            .send()
-            .await?
-            .error_for_status()?;
+        let mut request = self.client.get(expand_url_template(url));
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        let response = request.send().await?;
+        let status = response.status().as_u16();
+        let mut response = response.error_for_status()?;
         let mut body = Vec::new();
-        let mut response = response;
 
         while let Some(chunk) = response.chunk().await? {
             if body.len() + chunk.len() > self.max_body_bytes {
@@ -276,13 +353,18 @@ impl SourceEngine {
             body.extend_from_slice(&chunk);
         }
 
-        Ok(String::from_utf8_lossy(&body).into_owned())
+        Ok(FetchedText {
+            status,
+            bytes: body.len(),
+            body: String::from_utf8_lossy(&body).into_owned(),
+        })
     }
 
     async fn fetch_book_info(
         &self,
         source: &BookSource,
         book_url: &str,
+        debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<BookInfo, SourceError> {
         let template = source
             .book_info_url
@@ -295,7 +377,7 @@ impl SourceEngine {
             Some(last_path_segment(book_url)),
             None,
         );
-        let body = self.fetch_text(&url).await?;
+        let body = self.fetch_stage("book_info", &url, &source.headers, debug_steps).await?;
         let rules = source
             .book_info
             .as_ref()
@@ -316,6 +398,7 @@ impl SourceEngine {
         &self,
         source: &BookSource,
         book_url: &str,
+        debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
         let template = source
             .toc_url
@@ -328,7 +411,7 @@ impl SourceEngine {
             Some(last_path_segment(book_url)),
             None,
         );
-        let body = self.fetch_text(&url).await?;
+        let body = self.fetch_stage("toc", &url, &source.headers, debug_steps).await?;
         let rules = source
             .toc
             .as_ref()
@@ -340,6 +423,7 @@ impl SourceEngine {
         &self,
         source: &BookSource,
         chapter: &SourceChapter,
+        debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<SourceChapterContent, SourceError> {
         let template = source
             .content_url
@@ -352,7 +436,7 @@ impl SourceEngine {
             None,
             Some(last_path_segment(&chapter.url)),
         );
-        let body = self.fetch_text(&url).await?;
+        let body = self.fetch_stage("content", &url, &source.headers, debug_steps).await?;
         let rules = source
             .content
             .as_ref()
@@ -427,6 +511,22 @@ impl SourceEngine {
 
         Ok(results)
     }
+}
+
+fn pipeline_error(stage: &str, error: SourceError) -> SourceError {
+    SourceError::Pipeline {
+        stage: stage.to_string(),
+        message: error.to_string(),
+    }
+}
+
+fn redact_url(value: &str) -> String {
+    let Ok(mut parsed) = Url::parse(value) else {
+        return value.to_string();
+    };
+    parsed.set_query(None);
+    parsed.set_fragment(None);
+    parsed.to_string()
 }
 
 fn extract_document_rule(
@@ -590,6 +690,15 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
     }
     if source.content_url.is_none() {
         warnings.push("未配置 contentUrl，端到端流程无法完成正文链路".to_string());
+    }
+    for header in source.headers.keys() {
+        let normalized = header.to_ascii_lowercase();
+        if matches!(
+            normalized.as_str(),
+            "authorization" | "cookie" | "proxy-authorization"
+        ) {
+            errors.push(format!("headers 不允许携带敏感认证头：{header}"));
+        }
     }
 
     SourceValidation {
@@ -849,6 +958,8 @@ mod tests {
         assert_eq!(result.book_info.title, "测试书");
         assert_eq!(result.chapters[0].title, "第一章");
         assert!(result.first_chapter.content.contains("这是正文"));
+        assert_eq!(result.debug_steps.len(), 4);
+        assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
         server.join().expect("fixture server should stop");
     }
 
