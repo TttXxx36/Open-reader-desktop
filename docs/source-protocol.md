@@ -39,6 +39,19 @@ M3 只完成模型和提取器；M4 再将这些模型串接到授权/公开测�
 - regex 可选，存在捕获组时返回第一个捕获组。
 - JSON 响应支持简单路径，例如 $.books[*].title。
 
+## replaceRules 内容替换
+
+replaceRules 是可选数组，应用在正文提取完成后，按照数组顺序逐条执行。每条规则包含 pattern、replacement 和可选的 enabled 字段；enabled 未填写时默认为 true。
+
+```json
+"replaceRules": [
+  { "pattern": "\\\\s+", "replacement": " ", "enabled": true },
+  { "pattern": "广告.*?$", "replacement": "" }
+]
+```
+
+pattern 使用 Rust regex 语法，replacement 支持 $1 等捕获组引用。单个书源最多 32 条规则，pattern 最多 512 字节，replacement 最多 4 KiB；停用规则会在校验结果中给出提示。替换只作用于章节正文，不改变搜索、详情或目录字段。
+
 ## HTTP 安全边界
 
 - 只允许 http 和 https。
