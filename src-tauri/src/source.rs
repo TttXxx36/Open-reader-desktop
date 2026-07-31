@@ -196,6 +196,15 @@ pub struct SourceChapter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChapterUpdateSummary {
+    pub changed: bool,
+    pub fingerprint: String,
+    pub added: usize,
+    pub removed: usize,
+    pub retained: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceChapterContent {
     pub title: String,
     pub content: String,
@@ -774,6 +783,47 @@ fn extract_document_rule_from_element(
     Ok(Some(extract_from_element(element, rule)?))
 }
 
+pub fn chapter_fingerprint(chapters: &[SourceChapter]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for chapter in chapters {
+        for byte in chapter_identity(chapter).as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+pub fn summarize_chapter_update(
+    previous: &[SourceChapter],
+    current: &[SourceChapter],
+) -> ChapterUpdateSummary {
+    let previous_keys: HashSet<String> = previous.iter().map(chapter_identity).collect();
+    let current_keys: HashSet<String> = current.iter().map(chapter_identity).collect();
+    let added = current_keys.difference(&previous_keys).count();
+    let removed = previous_keys.difference(&current_keys).count();
+    let retained = current_keys.intersection(&previous_keys).count();
+
+    ChapterUpdateSummary {
+        changed: chapter_fingerprint(previous) != chapter_fingerprint(current),
+        fingerprint: chapter_fingerprint(current),
+        added,
+        removed,
+        retained,
+    }
+}
+
+fn chapter_identity(chapter: &SourceChapter) -> String {
+    let url = chapter.url.trim();
+    if url.is_empty() {
+        format!("index:{}|title:{}", chapter.index, chapter.title.trim())
+    } else {
+        format!("url:{url}")
+    }
+}
+
 fn render_url(
     template: &str,
     keyword: Option<&str>,
@@ -1245,6 +1295,38 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("replaceRules[0]")));
+    }
+
+    #[test]
+    fn summarizes_chapter_updates() {
+        let previous = vec![
+            SourceChapter {
+                title: "第一章".to_string(),
+                url: "https://example.test/chapter/1".to_string(),
+                index: 0,
+            },
+            SourceChapter {
+                title: "第二章".to_string(),
+                url: "https://example.test/chapter/2".to_string(),
+                index: 1,
+            },
+        ];
+        let current = vec![
+            previous[0].clone(),
+            SourceChapter {
+                title: "第三章".to_string(),
+                url: "https://example.test/chapter/3".to_string(),
+                index: 1,
+            },
+        ];
+
+        let summary = summarize_chapter_update(&previous, &current);
+        assert!(summary.changed);
+        assert_eq!(summary.added, 1);
+        assert_eq!(summary.removed, 1);
+        assert_eq!(summary.retained, 1);
+        assert_eq!(summary.fingerprint, chapter_fingerprint(&current));
+        assert_ne!(chapter_fingerprint(&previous), summary.fingerprint);
     }
 
     #[test]
