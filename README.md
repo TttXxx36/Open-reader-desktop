@@ -23,6 +23,7 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [书源协议](docs/source-protocol.md)
 - [开发路线图](docs/roadmap.md)
 - [开发环境](docs/development.md)
+- [Windows 发布验收清单](docs/release-checklist.md)
 
 ## 当前状态
 
