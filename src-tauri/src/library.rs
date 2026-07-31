@@ -1,3 +1,4 @@
+use encoding_rs::{GB18030, UTF_16BE, UTF_16LE};
 use std::{
     collections::HashMap,
     io::{Cursor, Read, Seek},
