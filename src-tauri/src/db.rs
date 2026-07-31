@@ -50,6 +50,15 @@ pub struct BookDetail {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SourceSummary {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub config_json: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ChapterContent {
     pub id: String,
     pub title: String,
@@ -134,6 +143,86 @@ impl Database {
         transaction.commit()?;
         drop(connection);
         self.get_book_summary(&book_id)
+    }
+
+    pub fn list_sources(&self) -> Result<Vec<SourceSummary>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let mut statement = connection.prepare(
+            "SELECT id, name, enabled, config_json, updated_at
+             FROM book_sources
+             ORDER BY name COLLATE NOCASE",
+        )?;
+        let rows = statement.query_map([], source_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn save_source(
+        &self,
+        source_id: Option<&str>,
+        name: &str,
+        config_json: &str,
+    ) -> Result<SourceSummary, DbError> {
+        let id = source_id
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| generated_id("source"));
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection.execute(
+            "INSERT INTO book_sources (id, name, config_json)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name,
+               config_json = excluded.config_json,
+               updated_at = CURRENT_TIMESTAMP",
+            params![id, name, config_json],
+        )?;
+        connection
+            .query_row(
+                "SELECT id, name, enabled, config_json, updated_at
+                 FROM book_sources
+                 WHERE id = ?1",
+                params![id],
+                source_from_row,
+            )
+            .map_err(DbError::from)
+    }
+
+    pub fn set_source_enabled(
+        &self,
+        source_id: &str,
+        enabled: bool,
+    ) -> Result<SourceSummary, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let changed = connection.execute(
+            "UPDATE book_sources
+             SET enabled = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![enabled, source_id],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        connection
+            .query_row(
+                "SELECT id, name, enabled, config_json, updated_at
+                 FROM book_sources
+                 WHERE id = ?1",
+                params![source_id],
+                source_from_row,
+            )
+            .map_err(DbError::from)
+    }
+
+    pub fn delete_source(&self, source_id: &str) -> Result<(), DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let changed = connection.execute(
+            "DELETE FROM book_sources WHERE id = ?1",
+            params![source_id],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
     }
 
     pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
@@ -255,6 +344,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
     for (version, sql) in [
         (1_i64, include_str!("../migrations/0001_init.sql")),
         (2_i64, include_str!("../migrations/0002_library.sql")),
+        (3_i64, include_str!("../migrations/0003_sources.sql")),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -289,4 +379,24 @@ fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
         progress: row.get(6)?,
         updated_at: row.get(7)?,
     })
+}
+
+fn source_from_row(row: &Row<'_>) -> rusqlite::Result<SourceSummary> {
+    Ok(SourceSummary {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        enabled: row.get::<_, i64>(2)? != 0,
+        config_json: row.get(3)?,
+        updated_at: row.get(4)?,
+    })
+}
+
+fn generated_id(prefix: &str) -> String {
+    format!(
+        "{prefix}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    )
 }
