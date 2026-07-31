@@ -56,6 +56,14 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - 端到端测试使用本机临时 TCP 服务和合成 HTML，不连接真实版权站点。测试范围与后续授权要求见 [docs/source-pipeline.md](source-pipeline.md)。
 - Rust 协议层可使用 `cargo test --manifest-path src-tauri/Cargo.toml` 验证；完整 CI 还会执行前端类型检查、构建和 Rust 检查。
 
+## M4.1 书源管理与调试
+
+- 书源配置保存到 SQLite 的 `book_sources` 表，迁移文件为 `0003_sources.sql`。
+- `list_sources`、`save_source`、`set_source_enabled` 和 `delete_source` 提供保存、启用/停用和删除能力。
+- 书源调试面板调用 `run_source_pipeline`，显示搜索、详情、目录、正文四个阶段的状态、耗时、响应大小和脱敏 URL。
+- 配置中的 `Authorization`、`Cookie` 和 `Proxy-Authorization` 请求头会被拒绝；不要把私人账号或令牌提交到仓库。
+- 前端检查命令为 `npm run typecheck` 和 `npm run build`。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
