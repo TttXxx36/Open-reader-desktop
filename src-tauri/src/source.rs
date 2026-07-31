@@ -652,7 +652,7 @@ fn search_result_key(item: &UnifiedSearchResult) -> String {
     if title.is_empty() && author.is_empty() {
         return format!("url:{}", normalize_search_text(item.book_url.as_deref().unwrap_or_default()));
     }
-    format!("{}\u{{1f}}{}", title, author)
+    format!("{}|{}", title, author)
 }
 
 fn normalize_search_text(value: &str) -> String {
