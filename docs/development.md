@@ -106,7 +106,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - 书源可填写 `permission` 权限记录；“安全审计”会检查权限状态、主机范围、敏感请求头和结构错误。
 - “缓存状态”只显示条目数、字节数、过期条目数与容量上限，不展示缓存正文；应用启动和缓存写入后的淘汰会在 Rust stderr 记录实际删除数量。
 - Rust 网络客户端最多跟随 5 次重定向；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
-- Windows 安装包当前仍是发布阻塞项：`bundle.active=false`，因为 `src-tauri/icons/icon.ico`、签名证书和干净安装/升级/卸载环境尚未准备。不要在这些验收完成前发布安装包。
+- Windows 图标已加入仓库，`bundle.active=true`；签名证书暂缓，GitHub Actions 发布的安装器和便携 ZIP 会明确标记为未签名，干净安装/升级/卸载环境仍需回归。
 - 当前可执行验收：`npm run typecheck`、`npm run build`、`npm run test:rust`、`cargo fmt --check --manifest-path src-tauri/Cargo.toml` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
 
 - 完整的安装包、签名和回滚验收项见 [Windows 发布验收清单](release-checklist.md)。
@@ -115,10 +115,10 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 - `npm run verify:release` 检查 package/Tauri 版本一致性、产品名、图标路径和 `bundle.active`，当前会报告但不放行外部阻塞项。
 - `npm run verify:release:strict` 额外要求真实图标、`bundle.active=true` 和已生成的 `dist/index.html`，用于发布前最终门禁。
-- CI 已运行非严格预检；它不会替代签名证书、干净 Windows 安装/升级/卸载和 WebView2 环境回归。
-- 现有 `src-tauri/icons/*.b64` 是占位编码文件，不是可直接发布的 Windows 图标；准备真实图标后再开启 Tauri bundle。
+- CI 已运行非严格预检；GitHub Actions 的版本标签工作流会在严格预检后生成 NSIS/MSI 安装器、便携 ZIP 和 SHA-256 清单，并创建标记为 unsigned 的 Release。
+- `src-tauri/icons/icon.ico` 与 `icon.png` 是实际打包资产；签名仍暂缓，Windows SmartScreen 可能显示警告。
 
-- GitHub Actions 的 `Windows release candidate` 只允许手动触发，严格预检通过后才构建 Tauri 安装包，并生成 `release-sha256.txt`；未签名候选仅用于内部回归。
+- GitHub Actions 的 `Windows release` 支持手动触发和 `v*` 版本标签；严格预检通过后构建安装器与便携 ZIP，标签触发会自动创建未签名 GitHub Release，并生成 `release-sha256.txt`。
 
 ## 本地数据
 
