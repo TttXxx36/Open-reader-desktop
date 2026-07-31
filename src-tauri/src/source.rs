@@ -661,8 +661,7 @@ fn search_result_key(item: &UnifiedSearchResult) -> String {
 fn normalize_search_text(value: &str) -> String {
     value
         .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+        .collect::<String>()
         .to_lowercase()
 }
 
