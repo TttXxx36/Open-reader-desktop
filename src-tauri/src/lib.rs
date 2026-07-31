@@ -2,7 +2,7 @@ mod db;
 mod library;
 mod source;
 
-use db::{BookDetail, BookSummary, ChapterContent, Database, SourceSummary};
+use db::{BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceSummary};
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
 use source::{
@@ -111,6 +111,45 @@ fn delete_source(database: tauri::State<'_, Database>, source_id: String) -> Res
     database
         .delete_source(&source_id)
         .map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SourceAuditReport {
+    source_id: String,
+    source_name: String,
+    enabled: bool,
+    permission_status: String,
+    permission_scope: Option<String>,
+    reviewed_at: Option<String>,
+    hosts: Vec<String>,
+    sensitive_headers: Vec<String>,
+    errors: Vec<String>,
+    warnings: Vec<String>,
+    pass: bool,
+}
+
+#[tauri::command]
+fn audit_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceAuditReport>, String> {
+    let sources = database.list_sources().map_err(|error| error.to_string())?;
+    Ok(sources
+        .into_iter()
+        .map(|summary| {
+            let audit = source::audit_source_json(&summary.config_json);
+            SourceAuditReport {
+                source_id: summary.id,
+                source_name: summary.name,
+                enabled: summary.enabled,
+                permission_status: audit.permission_status,
+                permission_scope: audit.permission_scope,
+                reviewed_at: audit.reviewed_at,
+                hosts: audit.hosts,
+                sensitive_headers: audit.sensitive_headers,
+                errors: audit.errors,
+                warnings: audit.warnings,
+                pass: audit.pass,
+            }
+        })
+        .collect())
 }
 
 const MAX_SOURCE_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
@@ -239,6 +278,33 @@ const SOURCE_CHAPTER_CACHE_TTL_SECS: u64 = 10 * 60;
 const SOURCE_CACHE_MAX_ENTRIES: usize = 256;
 const SOURCE_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
+#[derive(Debug, Clone, Serialize)]
+struct SourceCacheStatus {
+    entries: usize,
+    bytes: usize,
+    expired_entries: usize,
+    oldest_fetched_at: Option<i64>,
+    max_entries: usize,
+    max_bytes: usize,
+}
+
+#[tauri::command]
+fn get_source_cache_status(
+    database: tauri::State<'_, Database>,
+) -> Result<SourceCacheStatus, String> {
+    let stats: SourceCacheStats = database
+        .source_cache_stats()
+        .map_err(|error| error.to_string())?;
+    Ok(SourceCacheStatus {
+        entries: stats.entries,
+        bytes: stats.bytes,
+        expired_entries: stats.expired_entries,
+        oldest_fetched_at: stats.oldest_fetched_at,
+        max_entries: SOURCE_CACHE_MAX_ENTRIES,
+        max_bytes: SOURCE_CACHE_MAX_BYTES,
+    })
+}
+
 fn load_enabled_source(
     database: &Database,
     source_id: &str,
@@ -261,6 +327,16 @@ fn load_enabled_source(
 
 fn source_cache_key(kind: &str, summary: &SourceSummary, url: &str) -> String {
     format!("{kind}|{}|{}|{url}", summary.id, summary.updated_at)
+}
+
+fn log_cache_prune(database: &Database, context: &str) {
+    match database.prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES) {
+        Ok(removed) if removed > 0 => {
+            eprintln!("source cache pruned {removed} entries ({context})");
+        }
+        Ok(_) => {}
+        Err(error) => eprintln!("unable to prune source cache ({context}): {error}"),
+    }
 }
 
 fn cached_remote_book(
@@ -355,11 +431,7 @@ async fn fetch_source_book(
             SOURCE_BOOK_CACHE_TTL_SECS,
         )
         .map_err(|error| error.to_string())?;
-    if let Err(error) =
-        database.prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
-    {
-        eprintln!("unable to prune source cache after write: {error}");
-    }
+    log_cache_prune(&database, "after write");
     Ok(result)
 }
 
@@ -417,11 +489,7 @@ async fn fetch_source_chapter(
             SOURCE_CHAPTER_CACHE_TTL_SECS,
         )
         .map_err(|error| error.to_string())?;
-    if let Err(error) =
-        database.prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
-    {
-        eprintln!("unable to prune source cache after write: {error}");
-    }
+    log_cache_prune(&database, "after write");
     Ok(result)
 }
 
@@ -487,14 +555,14 @@ pub fn run() {
                 .app_data_dir()
                 .expect("unable to resolve the application data directory");
             let database = Database::open(&app_data_dir).expect("unable to initialize SQLite");
-            if let Err(error) = database.clear_expired_source_cache() {
-                eprintln!("unable to clear expired source cache: {error}");
+            match database.clear_expired_source_cache() {
+                Ok(removed) if removed > 0 => {
+                    eprintln!("source cache expired cleanup removed {removed} entries");
+                }
+                Ok(_) => {}
+                Err(error) => eprintln!("unable to clear expired source cache: {error}"),
             }
-            if let Err(error) =
-                database.prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
-            {
-                eprintln!("unable to prune source cache: {error}");
-            }
+            log_cache_prune(&database, "startup");
             app.manage(database);
             Ok(())
         })
@@ -509,13 +577,15 @@ pub fn run() {
             save_source,
             set_source_enabled,
             delete_source,
+            audit_sources,
             export_sources,
             import_sources,
             fetch_source_preview,
             search_sources,
             fetch_source_book,
             fetch_source_chapter,
-            run_source_pipeline
+            run_source_pipeline,
+            get_source_cache_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running Open Reader Desktop");
