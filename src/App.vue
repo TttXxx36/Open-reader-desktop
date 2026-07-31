@@ -382,7 +382,7 @@ function nextChapter() {
           <div v-if="!sourceValidation" class="source-result-empty">
             <div class="empty-icon">✓</div>
             <h3>等待校验</h3>
-            <p>先检查 URL、CSS 选择器和正则表达式，再进入 M4 的真实测试站点流程。</p>
+            <p>先检查 URL、CSS 选择器和正则表达式，再进入 M4 的本地授权夹具流程。</p>
           </div>
           <template v-else>
             <div class="validation-state" :class="{ valid: sourceValidation.valid }">
