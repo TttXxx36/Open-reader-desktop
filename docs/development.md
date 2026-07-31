@@ -49,6 +49,13 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - 不执行 JavaScript，不自动携带 Cookie/Authorization，不绕过验证码或付费限制。
 - 书源协议与示例见 [docs/source-protocol.md](source-protocol.md)。
 
+## M4 单书源端到端
+
+- `run_source_pipeline` 接收书源 JSON 和搜索关键词，按“搜索 → 详情 → 目录 → 第一章正文”执行。
+- URL 模板支持 `{{keyword}}`、`{{bookId}}` 和 `{{chapterId}}` 等占位符；搜索结果中的相对链接会解析为绝对 URL。
+- 端到端测试使用本机临时 TCP 服务和合成 HTML，不连接真实版权站点。测试范围与后续授权要求见 [docs/source-pipeline.md](source-pipeline.md)。
+- Rust 协议层可使用 `cargo test --manifest-path src-tauri/Cargo.toml` 验证；完整 CI 还会执行前端类型检查、构建和 Rust 检查。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
