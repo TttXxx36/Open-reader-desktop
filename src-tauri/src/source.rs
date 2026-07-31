@@ -345,6 +345,12 @@ impl SourceEngine {
             }
         }
 
+        failures.sort_by(|left, right| {
+            left.source_name
+                .cmp(&right.source_name)
+                .then_with(|| left.source_id.cmp(&right.source_id))
+        });
+
         MultiSourceSearchResult {
             results: dedupe_search_results(results),
             failures,
