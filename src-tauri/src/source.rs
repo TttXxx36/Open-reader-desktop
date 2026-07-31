@@ -173,7 +173,9 @@ pub struct SourceEngine {
 impl SourceEngine {
     pub fn new(timeout_secs: u64, max_body_bytes: usize) -> Result<Self, SourceError> {
         if timeout_secs == 0 {
-            return Err(SourceError::InvalidConfig("timeout must be greater than zero".to_string()));
+            return Err(SourceError::InvalidConfig(
+                "timeout must be greater than zero".to_string(),
+            ));
         }
         if max_body_bytes == 0 {
             return Err(SourceError::InvalidConfig(
@@ -215,10 +217,7 @@ impl SourceEngine {
             body.extend_from_slice(&chunk);
         }
 
-        let preview = String::from_utf8_lossy(&body)
-            .chars()
-            .take(2_000)
-            .collect();
+        let preview = String::from_utf8_lossy(&body).chars().take(2_000).collect();
 
         Ok(SourcePreview {
             status,
@@ -227,7 +226,6 @@ impl SourceEngine {
             body_preview: preview,
         })
     }
-
 
     pub async fn run_pipeline(
         &self,
@@ -244,10 +242,9 @@ impl SourceEngine {
         }
 
         let first_result = search_results.first().ok_or(SourceError::NoMatch)?;
-        let book_url = first_result
-            .book_url
-            .clone()
-            .ok_or_else(|| SourceError::InvalidConfig("search result has no book URL".to_string()))?;
+        let book_url = first_result.book_url.clone().ok_or_else(|| {
+            SourceError::InvalidConfig("search result has no book URL".to_string())
+        })?;
         let book_info = self.fetch_book_info(source, &book_url).await?;
         let chapters = self.fetch_toc(source, &book_url).await?;
         let first_chapter = chapters.first().ok_or(SourceError::NoMatch)?;
@@ -371,24 +368,19 @@ impl SourceEngine {
         })
     }
 
-    pub fn extract_html_value(
-        &self,
-        html: &str,
-        rule: &SourceRule,
-    ) -> Result<String, SourceError> {
+    pub fn extract_html_value(&self, html: &str, rule: &SourceRule) -> Result<String, SourceError> {
         let document = Html::parse_document(html);
         let selector = parse_selector(rule.selector())?;
-        let element = document.select(&selector).next().ok_or(SourceError::NoMatch)?;
+        let element = document
+            .select(&selector)
+            .next()
+            .ok_or(SourceError::NoMatch)?;
         extract_selected_element(element, rule)
     }
 
-    pub fn extract_json_values(
-        &self,
-        json: &str,
-        path: &str,
-    ) -> Result<Vec<String>, SourceError> {
-        let value: Value =
-            serde_json::from_str(json).map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+    pub fn extract_json_values(&self, json: &str, path: &str) -> Result<Vec<String>, SourceError> {
+        let value: Value = serde_json::from_str(json)
+            .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
         extract_json_path(&value, path)
     }
 
@@ -436,7 +428,6 @@ impl SourceEngine {
         Ok(results)
     }
 }
-
 
 fn extract_document_rule(
     document: &Html,
@@ -571,7 +562,12 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         }
     }
 
-    validate_page_rules("ruleSearch", source.search.as_ref(), &mut errors, &mut warnings);
+    validate_page_rules(
+        "ruleSearch",
+        source.search.as_ref(),
+        &mut errors,
+        &mut warnings,
+    );
     validate_page_rules(
         "ruleBookInfo",
         source.book_info.as_ref(),
@@ -674,12 +670,12 @@ fn parse_selector(value: &str) -> Result<Selector, SourceError> {
     Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
 }
 
-fn extract_from_element(
-    element: ElementRef<'_>,
-    rule: &SourceRule,
-) -> Result<String, SourceError> {
+fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
     let selector = parse_selector(rule.selector())?;
-    let target = element.select(&selector).next().ok_or(SourceError::NoMatch)?;
+    let target = element
+        .select(&selector)
+        .next()
+        .ok_or(SourceError::NoMatch)?;
     extract_selected_element(target, rule)
 }
 
@@ -704,7 +700,8 @@ fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError
     let Some(pattern) = pattern else {
         return Ok(value.to_string());
     };
-    let regex = Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+    let regex =
+        Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
     let captures = regex.captures(value).ok_or(SourceError::NoMatch)?;
     Ok(captures
         .get(1)
