@@ -1,4 +1,3 @@
-use encoding_rs::{GB18030, UTF_16BE, UTF_16LE};
 use std::{
     collections::HashMap,
     io::{Cursor, Read, Seek},
@@ -238,7 +237,11 @@ fn read_zip_text<R: Read + Seek>(
 }
 
 fn join_zip_path(base: &str, href: &str) -> String {
-    let href = href.split('#').next().unwrap_or_default().replace("%20", " ");
+    let href = href
+        .split('#')
+        .next()
+        .unwrap_or_default()
+        .replace("%20", " ");
     let combined = if base.is_empty() {
         href
     } else {
@@ -268,10 +271,7 @@ fn find_tags(xml: &str, name: &str) -> Vec<String> {
     while let Some(relative_start) = xml[cursor..].find(&needle) {
         let start = cursor + relative_start;
         let boundary = bytes.get(start + needle.len()).copied();
-        if !matches!(
-            boundary,
-            Some(b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'>')
-        ) {
+        if !matches!(boundary, Some(b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'>')) {
             cursor = start + needle.len();
             continue;
         }
