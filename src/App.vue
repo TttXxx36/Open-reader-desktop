@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 
-type View = "library" | "reader";
+type View = "library" | "reader" | "sources";
 type ReaderTheme = "night" | "paper" | "sepia";
 
 interface BookSummary {
@@ -41,6 +41,13 @@ interface ReaderSettings {
   theme: ReaderTheme;
 }
 
+interface SourceValidation {
+  valid: boolean;
+  source: Record<string, unknown> | null;
+  errors: string[];
+  warnings: string[];
+}
+
 const SETTINGS_KEY = "open-reader.settings";
 const view = ref<View>("library");
 const books = ref<BookSummary[]>([]);
@@ -51,6 +58,21 @@ const status = ref("正在加载书架…");
 const errorMessage = ref("");
 const isImporting = ref(false);
 const settings = ref<ReaderSettings>(loadSettings());
+const sourceBusy = ref(false);
+const sourceValidation = ref<SourceValidation | null>(null);
+const sourceJson = ref(`{
+  "name": "Public HTML Fixture",
+  "searchUrl": "https://example.test/search?q={{keyword}}",
+  "search": {
+    "item": "article.book",
+    "title": { "selector": "h2 a" },
+    "author": { "selector": ".author" },
+    "url": { "selector": "h2 a", "attr": "href" }
+  },
+  "bookInfoUrl": "https://example.test/book/{{bookId}}",
+  "tocUrl": "https://example.test/book/{{bookId}}/toc",
+  "contentUrl": "https://example.test/chapter/{{chapterId}}"
+}`);
 
 const chapterParagraphs = computed(() =>
   chapter.value?.content.split(/\n{2,}/).filter(Boolean) ?? [],
@@ -91,6 +113,26 @@ async function loadBooks() {
   } catch (error) {
     status.value = "请在 Tauri 桌面模式中打开";
     errorMessage.value = String(error);
+  }
+}
+
+function openSources() {
+  view.value = "sources";
+  errorMessage.value = "";
+}
+
+async function validateSource() {
+  sourceBusy.value = true;
+  sourceValidation.value = null;
+  errorMessage.value = "";
+  try {
+    sourceValidation.value = await invoke<SourceValidation>("validate_book_source", {
+      configJson: sourceJson.value,
+    });
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceBusy.value = false;
   }
 }
 
@@ -246,7 +288,7 @@ function nextChapter() {
 
       <nav class="nav" aria-label="主导航">
         <button class="nav-item active" type="button" @click="closeReader">书架 <span>⌘1</span></button>
-        <button class="nav-item" type="button" disabled>书源 <span>M3</span></button>
+        <button class="nav-item" type="button" :class="{ active: view === 'sources' }" @click="openSources">书源 <span>M3</span></button>
         <button class="nav-item" type="button" disabled>设置 <span>M6</span></button>
       </nav>
 
@@ -310,6 +352,55 @@ function nextChapter() {
       </section>
     </section>
 
+
+    <section v-else-if="view === 'sources'" class="content source-content" id="sources">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">SOURCE PROTOCOL</span>
+          <h1>书源</h1>
+        </div>
+        <button class="import-button" type="button" :disabled="sourceBusy" @click="validateSource">
+          {{ sourceBusy ? "校验中…" : "校验 JSON" }}
+        </button>
+      </header>
+
+      <div class="source-grid">
+        <section class="source-editor">
+          <div class="source-section-heading">
+            <div>
+              <span class="eyebrow">LEGADO-INSPIRED</span>
+              <h2>粘贴书源配置</h2>
+            </div>
+            <span class="source-limit">仅校验结构，不访问真实站点</span>
+          </div>
+          <textarea v-model="sourceJson" spellcheck="false" aria-label="书源 JSON"></textarea>
+          <p class="source-hint">支持 searchUrl、bookInfoUrl、tocUrl、contentUrl，以及 search / bookInfo / toc / content 规则别名。</p>
+        </section>
+
+        <section class="source-result" aria-live="polite">
+          <span class="eyebrow">VALIDATION</span>
+          <div v-if="!sourceValidation" class="source-result-empty">
+            <div class="empty-icon">✓</div>
+            <h3>等待校验</h3>
+            <p>先检查 URL、CSS 选择器和正则表达式，再进入 M4 的真实测试站点流程。</p>
+          </div>
+          <template v-else>
+            <div class="validation-state" :class="{ valid: sourceValidation.valid }">
+              <span>{{ sourceValidation.valid ? "配置可用" : "配置需要修正" }}</span>
+            </div>
+            <div v-if="sourceValidation.errors.length" class="validation-list errors">
+              <strong>错误</strong>
+              <p v-for="error in sourceValidation.errors" :key="error">{{ error }}</p>
+            </div>
+            <div v-if="sourceValidation.warnings.length" class="validation-list warnings">
+              <strong>提示</strong>
+              <p v-for="warning in sourceValidation.warnings" :key="warning">{{ warning }}</p>
+            </div>
+          </template>
+        </section>
+      </div>
+    </section>
+
     <section
       v-else-if="detail && chapter"
       class="content reader-content"
@@ -371,6 +462,124 @@ function nextChapter() {
 </template>
 
 <style scoped>
+.source-content {
+  max-width: 1240px;
+}
+
+.source-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 18px;
+  margin-top: 28px;
+}
+
+.source-editor,
+.source-result {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background: rgba(19, 27, 42, 0.72);
+}
+
+.source-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.source-section-heading h2 {
+  margin: 9px 0 0;
+  font-size: 20px;
+}
+
+.source-limit {
+  color: #8391a6;
+  font-size: 11px;
+}
+
+.source-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 460px;
+  margin-top: 22px;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  color: #dce7f7;
+  background: #0c111b;
+  font: 13px/1.7 "Cascadia Code", Consolas, monospace;
+  resize: vertical;
+}
+
+.source-editor textarea:focus {
+  border-color: rgba(139, 183, 255, 0.75);
+  outline: none;
+}
+
+.source-hint {
+  margin: 13px 0 0;
+  color: #8391a6;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.source-result-empty {
+  display: grid;
+  justify-items: start;
+  padding: 58px 0 18px;
+}
+
+.source-result-empty h3 {
+  margin: 17px 0 7px;
+}
+
+.source-result-empty p {
+  color: #8391a6;
+  line-height: 1.7;
+}
+
+.validation-state {
+  display: inline-flex;
+  margin-top: 26px;
+  padding: 8px 11px;
+  border-radius: 999px;
+  color: #ffb0bc;
+  background: rgba(188, 59, 83, 0.16);
+  font-size: 12px;
+}
+
+.validation-state.valid {
+  color: #b9f6dd;
+  background: rgba(30, 101, 82, 0.24);
+}
+
+.validation-list {
+  margin-top: 22px;
+}
+
+.validation-list strong {
+  font-size: 12px;
+}
+
+.validation-list p {
+  margin: 9px 0 0;
+  color: #ffb0bc;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.validation-list.warnings p {
+  color: #e3c788;
+}
+
+@media (max-width: 900px) {
+  .source-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .file-input {
   display: none;
 }
