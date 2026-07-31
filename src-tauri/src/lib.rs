@@ -2,7 +2,7 @@ mod db;
 mod library;
 mod source;
 
-use db::{BookDetail, BookSummary, ChapterContent, Database};
+use db::{BookDetail, BookSummary, ChapterContent, Database, SourceSummary};
 use library::parse_book_bytes;
 use source::{SourceEngine, SourcePreview, SourceValidation};
 use tauri::Manager;
@@ -69,6 +69,52 @@ fn validate_book_source(config_json: String) -> SourceValidation {
 }
 
 #[tauri::command]
+fn list_sources(
+    database: tauri::State<'_, Database>,
+) -> Result<Vec<SourceSummary>, String> {
+    database.list_sources().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_source(
+    database: tauri::State<'_, Database>,
+    source_id: Option<String>,
+    config_json: String,
+) -> Result<SourceSummary, String> {
+    let validation = source::validate_source_json(&config_json);
+    let source = validation
+        .source
+        .ok_or_else(|| validation.errors.join("；"))?;
+    if !validation.valid {
+        return Err(validation.errors.join("；"));
+    }
+    database
+        .save_source(source_id.as_deref(), &source.name, &config_json)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn set_source_enabled(
+    database: tauri::State<'_, Database>,
+    source_id: String,
+    enabled: bool,
+) -> Result<SourceSummary, String> {
+    database
+        .set_source_enabled(&source_id, enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_source(
+    database: tauri::State<'_, Database>,
+    source_id: String,
+) -> Result<(), String> {
+    database
+        .delete_source(&source_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn fetch_source_preview(url: String) -> Result<SourcePreview, String> {
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
     engine.fetch(&url).await.map_err(|error| error.to_string())
@@ -106,6 +152,10 @@ pub fn run() {
             get_chapter_content,
             save_progress,
             validate_book_source,
+            list_sources,
+            save_source,
+            set_source_enabled,
+            delete_source,
             fetch_source_preview,
             run_source_pipeline
         ])
