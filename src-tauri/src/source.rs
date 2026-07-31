@@ -1061,10 +1061,7 @@ fn validate_permission(permission: &SourcePermission, errors: &mut Vec<String>) 
         status.as_str(),
         "unknown" | "authorized" | "public_domain" | "personal"
     ) {
-        errors.push(format!(
-            "permission.status 不支持：{}",
-            permission.status
-        ));
+        errors.push(format!("permission.status 不支持：{}", permission.status));
     }
     if permission
         .scope
@@ -1494,7 +1491,10 @@ mod tests {
         );
         assert!(!audit.pass);
         assert_eq!(audit.sensitive_headers, vec!["Cookie"]);
-        assert!(audit.errors.iter().any(|error| error.contains("敏感认证头")));
+        assert!(audit
+            .errors
+            .iter()
+            .any(|error| error.contains("敏感认证头")));
     }
 
     #[test]
