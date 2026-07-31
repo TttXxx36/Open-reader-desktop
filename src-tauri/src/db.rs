@@ -68,6 +68,14 @@ pub struct ChapterContent {
     pub total: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceCacheStats {
+    pub entries: usize,
+    pub bytes: usize,
+    pub expired_entries: usize,
+    pub oldest_fetched_at: Option<i64>,
+}
+
 impl Database {
     pub fn open(app_data_dir: &Path) -> Result<Self, DbError> {
         fs::create_dir_all(app_data_dir)?;
@@ -340,6 +348,28 @@ impl Database {
         Ok(remove.len())
     }
 
+    pub fn source_cache_stats(&self) -> Result<SourceCacheStats, DbError> {
+        let now = unix_timestamp();
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let (entries, bytes, expired_entries, oldest_fetched_at): (i64, i64, i64, Option<i64>) =
+            connection.query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(length(CAST(payload AS BLOB))), 0),
+                        COALESCE(SUM(CASE WHEN expires_at <= ?1 THEN 1 ELSE 0 END), 0),
+                        MIN(fetched_at)
+                 FROM source_cache",
+                params![now],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+
+        Ok(SourceCacheStats {
+            entries: usize::try_from(entries.max(0)).unwrap_or(usize::MAX),
+            bytes: usize::try_from(bytes.max(0)).unwrap_or(usize::MAX),
+            expired_entries: usize::try_from(expired_entries.max(0)).unwrap_or(usize::MAX),
+            oldest_fetched_at,
+        })
+    }
+
     pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let book = connection
@@ -550,6 +580,12 @@ mod tests {
         database
             .save_source_cache("cache-key", &saved.id, "book", r#"{"title":"Fixture"}"#, 60)
             .expect("cache should save");
+        let stats = database
+            .source_cache_stats()
+            .expect("cache stats should read");
+        assert_eq!(stats.entries, 1);
+        assert!(stats.bytes > 0);
+        assert_eq!(stats.expired_entries, 0);
         assert_eq!(
             database
                 .get_source_cache("cache-key")
