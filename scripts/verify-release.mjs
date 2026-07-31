@@ -60,6 +60,17 @@ if (packageJson && tauriConfig) {
     );
   }
 
+  const targets = Array.isArray(bundle.targets) ? bundle.targets : [];
+  const requiredTargets = ["nsis", "msi"];
+  if (requiredTargets.every((target) => targets.includes(target))) {
+    addCheck("bundle targets", requiredTargets.join(", "));
+  } else {
+    addBlocker(
+      "bundle targets",
+      "需要同时配置 nsis 和 msi，分别生成安装器与 MSI 包",
+    );
+  }
+
   const icons = Array.isArray(bundle.icon) ? bundle.icon : [];
   if (!icons.length) {
     addBlocker("bundle icons", "未配置图标路径");
