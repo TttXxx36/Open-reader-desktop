@@ -890,6 +890,4 @@ mod tests {
 
         (format!("http://{address}"), server)
     }
-
-    }
 }
