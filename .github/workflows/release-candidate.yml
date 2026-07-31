@@ -1,20 +1,27 @@
-name: Windows release candidate
+name: Windows release
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       upload_artifacts:
-        description: "Upload unsigned installer artifacts for maintainer review"
+        description: "Upload unsigned installer and portable artifacts for maintainer review"
         required: true
         default: true
         type: boolean
 
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  release-candidate:
-    name: Windows release candidate
+  release:
+    name: Windows release
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -28,6 +35,16 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Verify tag version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $package = Get-Content -LiteralPath "package.json" -Raw | ConvertFrom-Json
+          $expected = "v$($package.version)"
+          if ($expected -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match package version $expected"
+          }
+
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
@@ -40,19 +57,48 @@ jobs:
       - name: Strict release preflight
         run: npm run verify:release:strict
 
-      - name: Build Tauri bundle
+      - name: Build Tauri installers
         run: npm run tauri build
+
+      - name: Package portable version
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release"
+          $exe = Get-ChildItem -LiteralPath $releaseDir -Filter "*.exe" -File |
+            Where-Object { $_.FullName -notmatch "\\bundle\\" } |
+            Select-Object -First 1
+          if (-not $exe) {
+            throw "Portable executable not found under $releaseDir"
+          }
+
+          $portableDir = Join-Path $env:RUNNER_TEMP "Open-Reader-Desktop-portable"
+          if (Test-Path -LiteralPath $portableDir) {
+            Remove-Item -LiteralPath $portableDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $portableDir -Force | Out-Null
+          Copy-Item -LiteralPath $exe.FullName -Destination (Join-Path $portableDir "Open-Reader-Desktop.exe")
+          Copy-Item -LiteralPath "LICENSE" -Destination (Join-Path $portableDir "LICENSE")
+          Copy-Item -LiteralPath "README.md" -Destination (Join-Path $portableDir "README.md")
+
+          $package = Get-Content -LiteralPath "package.json" -Raw | ConvertFrom-Json
+          $portableZip = Join-Path $env:GITHUB_WORKSPACE "Open-Reader-Desktop-v$($package.version)-portable.zip"
+          if (Test-Path -LiteralPath $portableZip) {
+            Remove-Item -LiteralPath $portableZip -Force
+          }
+          Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $portableZip -Force
 
       - name: Generate SHA-256 manifest
         shell: pwsh
         run: |
           $bundle = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\bundle"
-          if (-not (Test-Path -LiteralPath $bundle)) {
-            throw "Tauri bundle directory not found: $bundle"
+          $portable = Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Filter "*-portable.zip" -File
+          $assets = @(Get-ChildItem -LiteralPath $bundle -File -Recurse) + @($portable)
+          if (-not $assets) {
+            throw "No Windows release assets found"
           }
 
           $manifest = Join-Path $env:GITHUB_WORKSPACE "release-sha256.txt"
-          Get-ChildItem -LiteralPath $bundle -File -Recurse |
+          $assets |
             Sort-Object FullName |
             ForEach-Object {
               $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
@@ -60,12 +106,28 @@ jobs:
               "$($hash.Hash.ToLowerInvariant())  $relative"
             } | Set-Content -LiteralPath $manifest -Encoding utf8
 
-      - name: Upload unsigned candidate
-        if: ${{ inputs.upload_artifacts }}
+      - name: Upload workflow artifacts
+        if: ${{ inputs.upload_artifacts || startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
-          name: open-reader-windows-candidate-${{ github.sha }}
+          name: open-reader-windows-${{ github.ref_name }}-${{ github.sha }}
           if-no-files-found: error
           path: |
             src-tauri/target/release/bundle
+            *-portable.zip
             release-sha256.txt
+
+      - name: Publish unsigned GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $bundle = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\bundle"
+          $portable = Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Filter "*-portable.zip" -File
+          $manifest = Join-Path $env:GITHUB_WORKSPACE "release-sha256.txt"
+          $assets = @(Get-ChildItem -LiteralPath $bundle -File -Recurse | ForEach-Object FullName)
+          $assets += $portable.FullName
+          $assets += $manifest
+
+          gh release create "${{ github.ref_name }}" @assets --repo $env:GITHUB_REPOSITORY --title "Open Reader Desktop ${{ github.ref_name }} (unsigned)" --notes "Automated Windows release. Includes Tauri installers and a portable ZIP. Artifacts are currently unsigned; Windows SmartScreen may show a warning. WebView2 Runtime is required."
