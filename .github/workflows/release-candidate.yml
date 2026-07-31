@@ -1,0 +1,71 @@
+name: Windows release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_artifacts:
+        description: "Upload unsigned installer artifacts for maintainer review"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  release-candidate:
+    name: Windows release candidate
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Strict release preflight
+        run: npm run verify:release:strict
+
+      - name: Build Tauri bundle
+        run: npm run tauri build
+
+      - name: Generate SHA-256 manifest
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\release\bundle"
+          if (-not (Test-Path -LiteralPath $bundle)) {
+            throw "Tauri bundle directory not found: $bundle"
+          }
+
+          $manifest = Join-Path $env:GITHUB_WORKSPACE "release-sha256.txt"
+          Get-ChildItem -LiteralPath $bundle -File -Recurse |
+            Sort-Object FullName |
+            ForEach-Object {
+              $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
+              $relative = $_.FullName.Substring($env:GITHUB_WORKSPACE.Length + 1)
+              "$($hash.Hash.ToLowerInvariant())  $relative"
+            } | Set-Content -LiteralPath $manifest -Encoding utf8
+
+      - name: Upload unsigned candidate
+        if: ${{ inputs.upload_artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: open-reader-windows-candidate-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle
+            release-sha256.txt
