@@ -48,6 +48,31 @@ interface SourceValidation {
   warnings: string[];
 }
 
+interface SourceSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+  config_json: string;
+  updated_at: string;
+}
+
+interface SourceDebugStep {
+  stage: string;
+  url: string;
+  duration_ms: number;
+  status: number | null;
+  bytes: number | null;
+  error: string | null;
+}
+
+interface SourcePipelineResult {
+  search_results: Array<{ title: string; author: string | null; book_url: string | null; source_name: string }>;
+  book_info: { title: string; author: string | null; intro: string | null; cover_url: string | null; book_url: string };
+  chapters: Array<{ title: string; url: string; index: number }>;
+  first_chapter: { title: string; content: string; next_url: string | null };
+  debug_steps: SourceDebugStep[];
+}
+
 const SETTINGS_KEY = "open-reader.settings";
 const view = ref<View>("library");
 const books = ref<BookSummary[]>([]);
@@ -60,6 +85,12 @@ const isImporting = ref(false);
 const settings = ref<ReaderSettings>(loadSettings());
 const sourceBusy = ref(false);
 const sourceValidation = ref<SourceValidation | null>(null);
+const sources = ref<SourceSummary[]>([]);
+const sourceId = ref<string | null>(null);
+const sourceListBusy = ref(false);
+const sourcePipelineBusy = ref(false);
+const sourceKeyword = ref("demo");
+const sourcePipeline = ref<SourcePipelineResult | null>(null);
 const sourceJson = ref(`{
   "name": "Public HTML Fixture",
   "searchUrl": "https://example.test/search?q={{keyword}}",
@@ -116,9 +147,99 @@ async function loadBooks() {
   }
 }
 
-function openSources() {
+async function openSources() {
   view.value = "sources";
   errorMessage.value = "";
+  await loadSources();
+}
+
+async function loadSources() {
+  sourceListBusy.value = true;
+  try {
+    sources.value = await invoke<SourceSummary[]>("list_sources");
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceListBusy.value = false;
+  }
+}
+
+function selectSource(source: SourceSummary) {
+  sourceId.value = source.id;
+  sourceJson.value = source.config_json;
+  sourceValidation.value = null;
+  sourcePipeline.value = null;
+  errorMessage.value = "";
+}
+
+function newSourceDraft() {
+  sourceId.value = null;
+  sourceValidation.value = null;
+  sourcePipeline.value = null;
+  errorMessage.value = "";
+}
+
+async function saveSource() {
+  sourceBusy.value = true;
+  errorMessage.value = "";
+  try {
+    const saved = await invoke<SourceSummary>("save_source", {
+      sourceId: sourceId.value,
+      configJson: sourceJson.value,
+    });
+    sourceId.value = saved.id;
+    await loadSources();
+    selectSource(saved);
+    sourceValidation.value = {
+      valid: true,
+      source: null,
+      errors: [],
+      warnings: [],
+    };
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceBusy.value = false;
+  }
+}
+
+async function toggleSource(source: SourceSummary) {
+  try {
+    await invoke("set_source_enabled", {
+      sourceId: source.id,
+      enabled: !source.enabled,
+    });
+    await loadSources();
+  } catch (error) {
+    errorMessage.value = String(error);
+  }
+}
+
+async function deleteSource(source: SourceSummary) {
+  if (!window.confirm(`确定删除书源“${source.name}”吗？`)) return;
+  try {
+    await invoke("delete_source", { sourceId: source.id });
+    if (sourceId.value === source.id) newSourceDraft();
+    await loadSources();
+  } catch (error) {
+    errorMessage.value = String(error);
+  }
+}
+
+async function runSourcePipeline() {
+  sourcePipelineBusy.value = true;
+  sourcePipeline.value = null;
+  errorMessage.value = "";
+  try {
+    sourcePipeline.value = await invoke<SourcePipelineResult>("run_source_pipeline", {
+      configJson: sourceJson.value,
+      keyword: sourceKeyword.value.trim(),
+    });
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourcePipelineBusy.value = false;
+  }
 }
 
 async function validateSource() {
@@ -359,12 +480,50 @@ function nextChapter() {
           <span class="eyebrow">SOURCE PROTOCOL</span>
           <h1>书源</h1>
         </div>
-        <button class="import-button" type="button" :disabled="sourceBusy" @click="validateSource">
-          {{ sourceBusy ? "校验中…" : "校验 JSON" }}
-        </button>
+        <div class="source-toolbar-actions">
+          <button class="secondary-button" type="button" :disabled="sourceBusy" @click="saveSource">
+            {{ sourceBusy ? "保存中…" : "保存书源" }}
+          </button>
+          <button class="import-button" type="button" :disabled="sourceBusy" @click="validateSource">
+            {{ sourceBusy ? "校验中…" : "校验 JSON" }}
+          </button>
+        </div>
       </header>
 
       <div class="source-grid">
+        <section class="source-library">
+          <div class="source-section-heading">
+            <div>
+              <span class="eyebrow">SOURCE LIBRARY</span>
+              <h2>已保存书源</h2>
+            </div>
+            <button class="source-link-button" type="button" @click="newSourceDraft">新建</button>
+          </div>
+          <p v-if="errorMessage" class="source-inline-error">{{ errorMessage }}</p>
+          <p v-if="sourceListBusy" class="source-list-empty">正在读取…</p>
+          <p v-else-if="!sources.length" class="source-list-empty">还没有保存书源。</p>
+          <div v-else class="source-list">
+            <article
+              v-for="source in sources"
+              :key="source.id"
+              class="source-row"
+              :class="{ selected: source.id === sourceId }"
+              @click="selectSource(source)"
+            >
+              <div class="source-row-heading">
+                <strong>{{ source.name }}</strong>
+                <span :class="{ enabled: source.enabled }">{{ source.enabled ? "启用" : "停用" }}</span>
+              </div>
+              <div class="source-row-actions">
+                <button class="source-link-button" type="button" @click.stop="toggleSource(source)">
+                  {{ source.enabled ? "停用" : "启用" }}
+                </button>
+                <button class="source-link-button danger" type="button" @click.stop="deleteSource(source)">删除</button>
+              </div>
+            </article>
+          </div>
+        </section>
+
         <section class="source-editor">
           <div class="source-section-heading">
             <div>
@@ -382,7 +541,7 @@ function nextChapter() {
           <div v-if="!sourceValidation" class="source-result-empty">
             <div class="empty-icon">✓</div>
             <h3>等待校验</h3>
-            <p>先检查 URL、CSS 选择器和正则表达式，再进入 M4 的本地授权夹具流程。</p>
+            <p>先检查 URL、CSS 选择器和正则表达式，再保存配置或运行端到端调试。</p>
           </div>
           <template v-else>
             <div class="validation-state" :class="{ valid: sourceValidation.valid }">
@@ -399,6 +558,46 @@ function nextChapter() {
           </template>
         </section>
       </div>
+
+      <section class="source-debug">
+        <div class="source-debug-heading">
+          <div>
+            <span class="eyebrow">DEBUG RUN</span>
+            <h2>端到端调试</h2>
+          </div>
+          <div class="source-debug-controls">
+            <input v-model="sourceKeyword" aria-label="搜索关键词" placeholder="搜索关键词" />
+            <button
+              class="import-button"
+              type="button"
+              :disabled="sourcePipelineBusy || !sourceKeyword.trim()"
+              @click="runSourcePipeline"
+            >
+              {{ sourcePipelineBusy ? "执行中…" : "运行测试" }}
+            </button>
+          </div>
+        </div>
+        <p v-if="errorMessage" class="source-inline-error">{{ errorMessage }}</p>
+        <p v-if="!sourcePipeline && !sourcePipelineBusy" class="source-debug-empty">
+          运行后会显示请求阶段、响应状态、耗时和脱敏 URL。
+        </p>
+        <template v-if="sourcePipeline">
+          <div class="source-debug-summary">
+            <strong>{{ sourcePipeline.book_info.title }}</strong>
+            <span>{{ sourcePipeline.search_results.length }} 个搜索结果 · {{ sourcePipeline.chapters.length }} 个章节</span>
+          </div>
+          <ol class="source-debug-steps">
+            <li v-for="step in sourcePipeline.debug_steps" :key="step.stage">
+              <div>
+                <strong>{{ step.stage }}</strong>
+                <span>{{ step.status ?? "失败" }} · {{ step.duration_ms }} ms · {{ step.bytes ?? 0 }} bytes</span>
+              </div>
+              <code>{{ step.url }}</code>
+              <p v-if="step.error">{{ step.error }}</p>
+            </li>
+          </ol>
+        </template>
+      </section>
     </section>
 
     <section
