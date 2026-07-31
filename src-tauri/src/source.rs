@@ -16,6 +16,9 @@ const MAX_SEARCH_RESULTS: usize = 100;
 const MAX_REPLACE_RULES: usize = 32;
 const MAX_REPLACE_PATTERN_BYTES: usize = 512;
 const MAX_REPLACE_REPLACEMENT_BYTES: usize = 4 * 1024;
+const MAX_PERMISSION_SCOPE_BYTES: usize = 512;
+const MAX_PERMISSION_REVIEWED_AT_BYTES: usize = 64;
+const MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -62,6 +65,8 @@ pub struct BookSource {
     pub toc: Option<PageRules>,
     #[serde(default, alias = "ruleContent", alias = "content")]
     pub content: Option<PageRules>,
+    #[serde(default, alias = "permissions")]
+    pub permission: SourcePermission,
     #[serde(default)]
     pub headers: HashMap<String, String>,
     #[serde(default, alias = "replaceRules", alias = "replacements")]
@@ -79,6 +84,30 @@ pub struct ReplaceRule {
 
 fn default_replace_enabled() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourcePermission {
+    #[serde(default = "default_permission_status", alias = "permissionStatus")]
+    pub status: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default, alias = "reviewedAt")]
+    pub reviewed_at: Option<String>,
+}
+
+impl Default for SourcePermission {
+    fn default() -> Self {
+        Self {
+            status: default_permission_status(),
+            scope: None,
+            reviewed_at: None,
+        }
+    }
+}
+
+fn default_permission_status() -> String {
+    "unknown".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -139,6 +168,18 @@ pub struct SourceValidation {
     pub source: Option<BookSource>,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceSecurityAudit {
+    pub permission_status: String,
+    pub permission_scope: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub hosts: Vec<String>,
+    pub sensitive_headers: Vec<String>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub pass: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,6 +314,7 @@ impl SourceEngine {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .user_agent("OpenReaderDesktop/0.1")
+            .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()?;
 
         Ok(Self {
@@ -906,6 +948,7 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
     if source.name.trim().is_empty() {
         errors.push("name 不能为空".to_string());
     }
+    validate_permission(&source.permission, &mut errors);
     validate_endpoint("searchUrl", &source.search_url, &mut errors);
     for (name, value) in [
         ("bookInfoUrl", source.book_info_url.as_deref()),
@@ -963,6 +1006,124 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         errors,
         warnings,
     }
+}
+
+pub fn audit_source_json(input: &str) -> SourceSecurityAudit {
+    let validation = validate_source_json(input);
+    let Some(source) = validation.source else {
+        return SourceSecurityAudit {
+            permission_status: "unknown".to_string(),
+            permission_scope: None,
+            reviewed_at: None,
+            hosts: Vec::new(),
+            sensitive_headers: Vec::new(),
+            errors: validation.errors,
+            warnings: validation.warnings,
+            pass: false,
+        };
+    };
+
+    let mut warnings = validation.warnings;
+    let errors = validation.errors;
+    let status = source.permission.status.trim().to_ascii_lowercase();
+    let scope = source
+        .permission
+        .scope
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if status == "unknown" {
+        warnings.push("permission.status 尚未确认，发布前请补充授权范围".to_string());
+    }
+    if scope.is_none() {
+        warnings.push("permission.scope 未填写，无法追踪来源授权范围".to_string());
+    }
+    if source.permission.reviewed_at.is_none() {
+        warnings.push("permission.reviewedAt 未填写，建议记录最近审核日期".to_string());
+    }
+
+    let sensitive_headers = sensitive_header_names(&source);
+    SourceSecurityAudit {
+        permission_status: status,
+        permission_scope: scope,
+        reviewed_at: source.permission.reviewed_at.clone(),
+        hosts: source_endpoint_hosts(&source),
+        sensitive_headers,
+        pass: errors.is_empty(),
+        errors,
+        warnings,
+    }
+}
+
+fn validate_permission(permission: &SourcePermission, errors: &mut Vec<String>) {
+    let status = permission.status.trim().to_ascii_lowercase();
+    if !matches!(
+        status.as_str(),
+        "unknown" | "authorized" | "public_domain" | "personal"
+    ) {
+        errors.push(format!(
+            "permission.status 不支持：{}",
+            permission.status
+        ));
+    }
+    if permission
+        .scope
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_PERMISSION_SCOPE_BYTES)
+    {
+        errors.push(format!(
+            "permission.scope 不能超过 {} 字节",
+            MAX_PERMISSION_SCOPE_BYTES
+        ));
+    }
+    if permission
+        .reviewed_at
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_PERMISSION_REVIEWED_AT_BYTES)
+    {
+        errors.push(format!(
+            "permission.reviewedAt 不能超过 {} 字节",
+            MAX_PERMISSION_REVIEWED_AT_BYTES
+        ));
+    }
+}
+
+fn source_endpoint_hosts(source: &BookSource) -> Vec<String> {
+    let mut hosts = HashSet::new();
+    for endpoint in [
+        Some(source.search_url.as_str()),
+        source.book_info_url.as_deref(),
+        source.toc_url.as_deref(),
+        source.content_url.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Ok(parsed) = Url::parse(&expand_url_template(endpoint)) {
+            if let Some(host) = parsed.host_str() {
+                hosts.insert(host.to_string());
+            }
+        }
+    }
+    let mut hosts = hosts.into_iter().collect::<Vec<_>>();
+    hosts.sort();
+    hosts
+}
+
+fn sensitive_header_names(source: &BookSource) -> Vec<String> {
+    let mut headers = source
+        .headers
+        .keys()
+        .filter(|name| {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "authorization" | "cookie" | "proxy-authorization"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    headers.sort();
+    headers
 }
 
 fn validate_replace_rules(
@@ -1301,6 +1462,39 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("replaceRules[0]")));
+    }
+
+    #[test]
+    fn audits_permission_and_hosts() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Owned fixture",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "permission": {
+                "status": "authorized",
+                "scope": "internal fixture",
+                "reviewedAt": "2026-08-01"
+              }
+            }"#,
+        );
+        assert!(audit.pass, "{:?}", audit.errors);
+        assert_eq!(audit.permission_status, "authorized");
+        assert_eq!(audit.hosts, vec!["example.test"]);
+        assert!(audit.warnings.is_empty());
+    }
+
+    #[test]
+    fn audits_sensitive_headers() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Unsafe fixture",
+              "searchUrl": "https://example.test/search",
+              "headers": { "Cookie": "session=secret" }
+            }"#,
+        );
+        assert!(!audit.pass);
+        assert_eq!(audit.sensitive_headers, vec!["Cookie"]);
+        assert!(audit.errors.iter().any(|error| error.contains("敏感认证头")));
     }
 
     #[test]
