@@ -73,6 +73,22 @@ interface SourcePipelineResult {
   debug_steps: SourceDebugStep[];
 }
 
+interface MultiSourceSearchResult {
+  results: Array<{
+    source_id: string;
+    source_name: string;
+    title: string;
+    author: string | null;
+    book_url: string | null;
+  }>;
+  failures: Array<{
+    source_id: string;
+    source_name: string;
+    message: string;
+  }>;
+  enabled_sources: number;
+}
+
 const SETTINGS_KEY = "open-reader.settings";
 const view = ref<View>("library");
 const books = ref<BookSummary[]>([]);
@@ -91,6 +107,9 @@ const sourceListBusy = ref(false);
 const sourcePipelineBusy = ref(false);
 const sourceKeyword = ref("demo");
 const sourcePipeline = ref<SourcePipelineResult | null>(null);
+const searchKeyword = ref("");
+const searchBusy = ref(false);
+const searchResult = ref<MultiSourceSearchResult | null>(null);
 const sourceJson = ref(`{
   "name": "Public HTML Fixture",
   "searchUrl": "https://example.test/search?q={{keyword}}",
@@ -224,6 +243,27 @@ async function deleteSource(source: SourceSummary) {
   } catch (error) {
     errorMessage.value = String(error);
   }
+}
+
+async function searchSources() {
+  const keyword = searchKeyword.value.trim();
+  if (!keyword) return;
+
+  searchBusy.value = true;
+  searchResult.value = null;
+  errorMessage.value = "";
+  try {
+    searchResult.value = await invoke<MultiSourceSearchResult>("search_sources", { keyword });
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    searchBusy.value = false;
+  }
+}
+
+function clearSearch() {
+  searchResult.value = null;
+  searchKeyword.value = "";
 }
 
 async function runSourcePipeline() {
@@ -433,9 +473,21 @@ function nextChapter() {
           <span class="eyebrow">YOUR LIBRARY</span>
           <h1>书架</h1>
         </div>
-        <button class="import-button" type="button" :disabled="isImporting" @click="openFilePicker">
-          {{ isImporting ? "解析中…" : "导入 TXT / EPUB" }}
-        </button>
+        <div class="library-actions">
+          <input
+            v-model="searchKeyword"
+            class="library-search-input"
+            aria-label="搜索书源中的书"
+            placeholder="搜索书源中的书"
+            @keyup.enter="searchSources"
+          />
+          <button class="secondary-button" type="button" :disabled="searchBusy || !searchKeyword.trim()" @click="searchSources">
+            {{ searchBusy ? "搜索中…" : "搜索书源" }}
+          </button>
+          <button class="import-button" type="button" :disabled="isImporting" @click="openFilePicker">
+            {{ isImporting ? "解析中…" : "导入 TXT / EPUB" }}
+          </button>
+        </div>
       </header>
 
       <div class="status-banner" role="status">
@@ -443,6 +495,36 @@ function nextChapter() {
         <span>{{ status }}</span>
         <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
       </div>
+
+      <section v-if="searchResult" class="search-results-panel" aria-live="polite">
+        <div class="search-results-heading">
+          <div>
+            <span class="eyebrow">MULTI-SOURCE SEARCH</span>
+            <h2>搜索结果</h2>
+          </div>
+          <button class="source-link-button" type="button" @click="clearSearch">清除</button>
+        </div>
+        <p class="search-results-summary">
+          已查询 {{ searchResult.enabled_sources }} 个启用书源，去重后 {{ searchResult.results.length }} 条结果。
+        </p>
+        <p v-if="!searchResult.results.length" class="search-results-empty">没有找到匹配书籍。</p>
+        <div v-else class="search-results-list">
+          <article v-for="item in searchResult.results" :key="item.source_id + '-' + item.title + '-' + (item.author || '')" class="search-result-row">
+            <div>
+              <h3>{{ item.title || "未命名书籍" }}</h3>
+              <p>{{ item.author || "作者未知" }}</p>
+            </div>
+            <span class="search-source-badge">{{ item.source_name }}</span>
+          </article>
+        </div>
+        <div v-if="searchResult.failures.length" class="search-failures">
+          <strong>{{ searchResult.failures.length }} 个书源失败，已隔离</strong>
+          <p v-for="failure in searchResult.failures" :key="failure.source_id + '-' + failure.message">
+            {{ failure.source_name }}：{{ failure.message }}
+          </p>
+        </div>
+        <p class="search-results-note">当前版本只展示统一搜索结果，详情与阅读接入将在后续里程碑完成。</p>
+      </section>
 
       <section v-if="books.length" class="library-grid" aria-label="本地书架">
         <article
@@ -661,6 +743,122 @@ function nextChapter() {
 </template>
 
 <style scoped>
+.library-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.library-search-input {
+  width: 210px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 9px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.library-search-input:focus {
+  border-color: rgba(139, 183, 255, 0.75);
+  outline: none;
+}
+
+.search-results-panel {
+  margin-top: 22px;
+  padding: 22px;
+  border: 1px solid rgba(121, 201, 255, 0.22);
+  border-radius: 16px;
+  background: rgba(17, 34, 52, 0.72);
+}
+
+.search-results-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.search-results-heading h2 {
+  margin: 9px 0 0;
+  font-size: 20px;
+}
+
+.search-results-summary,
+.search-results-empty,
+.search-results-note {
+  color: #8391a6;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.search-results-summary {
+  margin: 16px 0 0;
+}
+
+.search-results-empty {
+  margin: 22px 0 0;
+}
+
+.search-results-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.search-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  background: rgba(12, 17, 27, 0.52);
+}
+
+.search-result-row h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.search-result-row p {
+  margin: 5px 0 0;
+  color: #8391a6;
+  font-size: 12px;
+}
+
+.search-source-badge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #b9f6dd;
+  background: rgba(30, 101, 82, 0.24);
+  font-size: 10px;
+}
+
+.search-failures {
+  margin-top: 18px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 176, 188, 0.14);
+}
+
+.search-failures strong {
+  color: #ffcf9b;
+  font-size: 12px;
+}
+
+.search-failures p {
+  margin: 8px 0 0;
+  color: #ffb0bc;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.search-results-note {
+  margin: 17px 0 0;
+}
 .nav-item {
   border: 0;
   text-align: left;
@@ -975,6 +1173,10 @@ function nextChapter() {
 }
 
 @media (max-width: 1100px) {
+  .library-actions {
+    justify-content: flex-start;
+  }
+
   .source-grid {
     grid-template-columns: minmax(180px, 0.6fr) minmax(0, 1.4fr);
   }
