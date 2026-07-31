@@ -13,6 +13,8 @@ pub enum ImportError {
     UnsupportedFormat(String),
     #[error("unable to decode text file")]
     TextDecode,
+    #[error("file I/O error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("invalid EPUB: {0}")]
     InvalidEpub(String),
     #[error("EPUB archive error: {0}")]
@@ -126,7 +128,10 @@ fn looks_like_chapter(line: &str) -> bool {
         return false;
     }
 
-    if ["序章", "楔子", "番外", "正文"].iter().any(|prefix| line.starts_with(prefix)) {
+    if ["序章", "楔子", "番外", "正文"]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+    {
         return true;
     }
 
@@ -165,8 +170,8 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
     let title = extract_element_text(&opf, "dc:title")
         .or_else(|| extract_element_text(&opf, "title"))
         .unwrap_or_else(|| title_from_file_name(file_name));
-    let author = extract_element_text(&opf, "dc:creator")
-        .or_else(|| extract_element_text(&opf, "creator"));
+    let author =
+        extract_element_text(&opf, "dc:creator").or_else(|| extract_element_text(&opf, "creator"));
 
     let mut manifest = HashMap::new();
     for tag in find_tags(&opf, "item") {
@@ -285,7 +290,10 @@ fn find_tags(xml: &str, name: &str) -> Vec<String> {
 fn extract_attribute(tag: &str, name: &str) -> Option<String> {
     for quote in ['"', '\''] {
         let needle = format!("{name}={quote}");
-        let start = tag.find(&needle)? + needle.len();
+        let Some(start) = tag.find(&needle) else {
+            continue;
+        };
+        let start = start + needle.len();
         let end = tag[start..].find(quote)?;
         return Some(tag[start..start + end].to_string());
     }
@@ -378,6 +386,9 @@ mod tests {
 
     #[test]
     fn strips_html_blocks() {
-        assert_eq!(strip_html("<h1>标题</h1><p>第一段</p><p>第二段</p>"), "标题\n\n第一段\n\n第二段");
+        assert_eq!(
+            strip_html("<h1>标题</h1><p>第一段</p><p>第二段</p>"),
+            "标题\n\n第一段\n\n第二段"
+        );
     }
 }
