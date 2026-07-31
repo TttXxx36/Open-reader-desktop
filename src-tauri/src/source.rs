@@ -826,6 +826,8 @@ mod tests {
             )
             .expect("json should parse");
         assert_eq!(values, vec!["第一本", "第二本"]);
+    }
+
     #[tokio::test]
     async fn runs_authorized_fixture_pipeline() {
         let (base_url, server) = spawn_fixture_server();
