@@ -53,3 +53,15 @@ npm run verify:release:strict
 - `verify:release:strict` 是真正的发布门禁，要求 `bundle.active=true`、所有图标存在且不是占位文件，并且 `dist/index.html` 已生成；任一条件不满足都会退出 1。
 - CI 会运行非严格预检；它不会绕过图标、签名或安装回归阻塞。
 
+
+
+## 手动 Windows 发布候选工作流
+
+GitHub Actions 的 `Windows release candidate` 仅支持 `workflow_dispatch` 手动触发：
+
+1. 先确认 `npm run verify:release:strict` 在目标提交上通过。
+2. 手动触发工作流，默认上传未签名候选产物供维护者检查。
+3. 工作流会执行前端检查、Tauri 打包，并生成 `release-sha256.txt`。
+4. 签名证书接入前，候选产物只能用于内部回归，不得作为公开发行版。
+5. 公开发布前还需完成安装、覆盖升级、卸载、数据保留和 WebView2 回归。
+
