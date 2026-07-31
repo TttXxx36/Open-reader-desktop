@@ -113,6 +113,82 @@ fn delete_source(database: tauri::State<'_, Database>, source_id: String) -> Res
         .map_err(|error| error.to_string())
 }
 
+const MAX_SOURCE_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
+
+#[tauri::command]
+fn export_sources(database: tauri::State<'_, Database>) -> Result<String, String> {
+    let sources = database.list_sources().map_err(|error| error.to_string())?;
+    let bundle = SourceBundle {
+        version: 1,
+        sources: sources
+            .into_iter()
+            .map(|source| SourceBundleItem {
+                id: Some(source.id),
+                enabled: source.enabled,
+                config_json: source.config_json,
+            })
+            .collect(),
+    };
+    serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_sources(
+    database: tauri::State<'_, Database>,
+    bundle_json: String,
+) -> Result<Vec<SourceSummary>, String> {
+    if bundle_json.len() > MAX_SOURCE_BUNDLE_BYTES {
+        return Err("书源文件超过 2 MB 限制".to_string());
+    }
+
+    let bundle: SourceBundle =
+        serde_json::from_str(&bundle_json).map_err(|error| format!("书源文件 JSON 无效：{error}"))?;
+    if bundle.version != 1 {
+        return Err(format!("不支持的书源文件版本：{}", bundle.version));
+    }
+    if bundle.sources.is_empty() {
+        return Err("书源文件没有可导入的配置".to_string());
+    }
+
+    let mut imported = Vec::with_capacity(bundle.sources.len());
+    for (index, item) in bundle.sources.into_iter().enumerate() {
+        let validation = source::validate_source_json(&item.config_json);
+        let source = validation
+            .source
+            .ok_or_else(|| format!("第 {} 个书源无法解析：{}", index + 1, validation.errors.join("；")))?;
+        if !validation.valid {
+            return Err(format!(
+                "第 {} 个书源校验失败：{}",
+                index + 1,
+                validation.errors.join("；")
+            ));
+        }
+
+        let saved = database
+            .save_source(item.id.as_deref(), &source.name, &item.config_json)
+            .map_err(|error| error.to_string())?;
+        let saved = database
+            .set_source_enabled(&saved.id, item.enabled)
+            .map_err(|error| error.to_string())?;
+        imported.push(saved);
+    }
+
+    Ok(imported)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SourceBundle {
+    version: u32,
+    sources: Vec<SourceBundleItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SourceBundleItem {
+    id: Option<String>,
+    enabled: bool,
+    config_json: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RemoteBookDetail {
     source_id: String,
@@ -160,6 +236,7 @@ async fn fetch_source_book(
     database: tauri::State<'_, Database>,
     source_id: String,
     book_url: String,
+    force_refresh: bool,
 ) -> Result<RemoteBookDetail, String> {
     if book_url.trim().is_empty() {
         return Err("书籍链接不能为空".to_string());
@@ -167,12 +244,14 @@ async fn fetch_source_book(
 
     let (summary, source) = load_enabled_source(&database, &source_id)?;
     let cache_key = source_cache_key("book", &summary, &book_url);
-    if let Some(payload) = database
-        .get_source_cache(&cache_key)
-        .map_err(|error| error.to_string())?
-    {
+    if !force_refresh {
+        if let Some(payload) = database
+            .get_source_cache(&cache_key)
+            .map_err(|error| error.to_string())?
+        {
         if let Ok(cached) = serde_json::from_str::<RemoteBookDetail>(&payload) {
-            return Ok(cached);
+                return Ok(cached);
+            }
         }
     }
 
@@ -206,6 +285,7 @@ async fn fetch_source_chapter(
     database: tauri::State<'_, Database>,
     source_id: String,
     chapter: source::SourceChapter,
+    force_refresh: bool,
 ) -> Result<source::SourceChapterContent, String> {
     if chapter.url.trim().is_empty() {
         return Err("章节链接不能为空".to_string());
@@ -213,12 +293,14 @@ async fn fetch_source_chapter(
 
     let (summary, source) = load_enabled_source(&database, &source_id)?;
     let cache_key = source_cache_key("chapter", &summary, &chapter.url);
-    if let Some(payload) = database
-        .get_source_cache(&cache_key)
-        .map_err(|error| error.to_string())?
-    {
+    if !force_refresh {
+        if let Some(payload) = database
+            .get_source_cache(&cache_key)
+            .map_err(|error| error.to_string())?
+        {
         if let Ok(cached) = serde_json::from_str::<source::SourceChapterContent>(&payload) {
-            return Ok(cached);
+                return Ok(cached);
+            }
         }
     }
 
@@ -320,6 +402,8 @@ pub fn run() {
             save_source,
             set_source_enabled,
             delete_source,
+            export_sources,
+            import_sources,
             fetch_source_preview,
             search_sources,
             fetch_source_book,
