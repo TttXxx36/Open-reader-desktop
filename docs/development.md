@@ -64,6 +64,13 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - 配置中的 `Authorization`、`Cookie` 和 `Proxy-Authorization` 请求头会被拒绝；不要把私人账号或令牌提交到仓库。
 - 前端检查命令为 `npm run typecheck` 和 `npm run build`。
 
+## M5 多源搜索
+
+- 书架顶部的“搜索书源”会调用 search_sources，只查询 SQLite 中已启用的书源。
+- 每个书源在独立异步任务中执行；请求、规则缺失或解析错误只会记录为该书源失败，不会阻断其他结果。
+- 统一结果按“标题 + 作者”归一化去重（折叠空白并转小写）；无标题且无作者时退回使用书籍链接作为去重键。
+- 当前前端只展示来源、书名和作者，详情/目录/正文接入留给后续迭代。测试仍只使用本机合成夹具，不连接真实版权站点。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
