@@ -141,8 +141,8 @@ fn import_sources(
         return Err("书源文件超过 2 MB 限制".to_string());
     }
 
-    let bundle: SourceBundle =
-        serde_json::from_str(&bundle_json).map_err(|error| format!("书源文件 JSON 无效：{error}"))?;
+    let bundle: SourceBundle = serde_json::from_str(&bundle_json)
+        .map_err(|error| format!("书源文件 JSON 无效：{error}"))?;
     if bundle.version != 1 {
         return Err(format!("不支持的书源文件版本：{}", bundle.version));
     }
@@ -153,9 +153,13 @@ fn import_sources(
     let mut imported = Vec::with_capacity(bundle.sources.len());
     for (index, item) in bundle.sources.into_iter().enumerate() {
         let validation = source::validate_source_json(&item.config_json);
-        let source = validation
-            .source
-            .ok_or_else(|| format!("第 {} 个书源无法解析：{}", index + 1, validation.errors.join("；")))?;
+        let source = validation.source.ok_or_else(|| {
+            format!(
+                "第 {} 个书源无法解析：{}",
+                index + 1,
+                validation.errors.join("；")
+            )
+        })?;
         if !validation.valid {
             return Err(format!(
                 "第 {} 个书源校验失败：{}",
@@ -249,7 +253,7 @@ async fn fetch_source_book(
             .get_source_cache(&cache_key)
             .map_err(|error| error.to_string())?
         {
-        if let Ok(cached) = serde_json::from_str::<RemoteBookDetail>(&payload) {
+            if let Ok(cached) = serde_json::from_str::<RemoteBookDetail>(&payload) {
                 return Ok(cached);
             }
         }
@@ -298,7 +302,7 @@ async fn fetch_source_chapter(
             .get_source_cache(&cache_key)
             .map_err(|error| error.to_string())?
         {
-        if let Ok(cached) = serde_json::from_str::<source::SourceChapterContent>(&payload) {
+            if let Ok(cached) = serde_json::from_str::<source::SourceChapterContent>(&payload) {
                 return Ok(cached);
             }
         }
