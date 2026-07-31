@@ -54,12 +54,29 @@ replaceRules 是可选数组，应用在正文提取完成后，按照数组顺�
 
 pattern 使用 Rust regex 语法，replacement 支持 $1 等捕获组引用。单个书源最多 32 条规则，pattern 最多 512 字节，replacement 最多 4 KiB；停用规则会在校验结果中给出提示。替换只作用于章节正文，不改变搜索、详情或目录字段。
 
+## permission 权限记录
+
+书源可以声明来源权限与人工复核信息：
+
+```json
+{
+  "permission": {
+    "status": "authorized",
+    "scope": "自有测试站点/公版内容",
+    "reviewedAt": "2026-08-01"
+  }
+}
+```
+
+`status` 允许 `unknown`、`authorized`、`public_domain` 和 `personal`。这些字段是维护记录，不是平台对授权真实性的证明；安全审计会对 `unknown`、缺少 `scope` 或缺少 `reviewedAt` 给出提示。即使权限记录完整，敏感请求头仍会被拒绝。
+
 ## HTTP 安全边界
 
-- 只允许 http 和 https。
+- 只允许 http 和 https，最多跟随 5 次重定向。
 - 默认超时 15 秒。
 - 默认响应体上限 2 MiB。
 - 预览命令最多返回 2,000 个字符。
+- 前端 WebView CSP 不开放任意 HTTPS 连接；远程来源请求统一由 Rust 受限客户端发起。
 - M3 不执行 JavaScript，不自动携带 Cookie/Authorization，不绕过验证码或付费限制。
 - 测试夹具使用 example.test，不依赖真实站点。
 
