@@ -204,6 +204,8 @@ struct RemoteBookDetail {
 
 const SOURCE_BOOK_CACHE_TTL_SECS: u64 = 5 * 60;
 const SOURCE_CHAPTER_CACHE_TTL_SECS: u64 = 10 * 60;
+const SOURCE_CACHE_MAX_ENTRIES: usize = 256;
+const SOURCE_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 fn load_enabled_source(
     database: &Database,
@@ -281,6 +283,9 @@ async fn fetch_source_book(
             SOURCE_BOOK_CACHE_TTL_SECS,
         )
         .map_err(|error| error.to_string())?;
+    database
+        .prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
+        .map_err(|error| error.to_string())?;
     Ok(result)
 }
 
@@ -323,6 +328,9 @@ async fn fetch_source_chapter(
             &payload,
             SOURCE_CHAPTER_CACHE_TTL_SECS,
         )
+        .map_err(|error| error.to_string())?;
+    database
+        .prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
         .map_err(|error| error.to_string())?;
     Ok(result)
 }
@@ -391,6 +399,11 @@ pub fn run() {
             let database = Database::open(&app_data_dir).expect("unable to initialize SQLite");
             if let Err(error) = database.clear_expired_source_cache() {
                 eprintln!("unable to clear expired source cache: {error}");
+            }
+            if let Err(error) =
+                database.prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
+            {
+                eprintln!("unable to prune source cache: {error}");
             }
             app.manage(database);
             Ok(())
