@@ -678,11 +678,12 @@ function nextChapter() {
 
 .source-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  grid-template-columns: minmax(205px, 0.65fr) minmax(0, 1.35fr) minmax(280px, 0.8fr);
   gap: 18px;
   margin-top: 28px;
 }
 
+.source-library,
 .source-editor,
 .source-result {
   min-width: 0;
@@ -690,6 +691,195 @@ function nextChapter() {
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 16px;
   background: rgba(19, 27, 42, 0.72);
+}
+
+.source-toolbar-actions,
+.source-debug-controls,
+.source-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.secondary-button {
+  padding: 10px 14px;
+  border: 1px solid rgba(155, 231, 216, 0.45);
+  border-radius: 10px;
+  color: #b9f6dd;
+  background: rgba(19, 48, 53, 0.82);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.source-library {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background: rgba(19, 27, 42, 0.72);
+}
+
+.source-link-button {
+  padding: 3px 0;
+  border: 0;
+  color: #8fcfff;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.source-link-button.danger {
+  color: #ffb0bc;
+}
+
+.source-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 20px;
+}
+
+.source-list-empty,
+.source-inline-error {
+  color: #8391a6;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.source-list-empty {
+  margin-top: 28px;
+}
+
+.source-inline-error {
+  color: #ffb0bc;
+}
+
+.source-row {
+  padding: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  background: rgba(12, 17, 27, 0.52);
+  cursor: pointer;
+}
+
+.source-row.selected {
+  border-color: rgba(121, 201, 255, 0.72);
+  background: rgba(20, 44, 63, 0.72);
+}
+
+.source-row-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.source-row-heading strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.source-row-heading span {
+  color: #ffcf9b;
+  font-size: 10px;
+}
+
+.source-row-heading span.enabled {
+  color: #b9f6dd;
+}
+
+.source-row-actions {
+  justify-content: flex-end;
+  margin-top: 11px;
+}
+
+.source-debug {
+  margin-top: 18px;
+  padding: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background: rgba(19, 27, 42, 0.72);
+}
+
+.source-debug-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.source-debug-controls input {
+  width: 180px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 9px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.source-debug-empty {
+  margin: 22px 0 0;
+  color: #8391a6;
+  font-size: 12px;
+}
+
+.source-debug-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.source-debug-summary span {
+  color: #8391a6;
+  font-size: 12px;
+}
+
+.source-debug-steps {
+  display: grid;
+  gap: 9px;
+  margin: 17px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source-debug-steps li {
+  padding: 11px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 9px;
+  background: rgba(12, 17, 27, 0.5);
+}
+
+.source-debug-steps li > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.source-debug-steps li span,
+.source-debug-steps code {
+  color: #8391a6;
+  font-size: 11px;
+}
+
+.source-debug-steps code {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-debug-steps p {
+  margin: 7px 0 0;
+  color: #ffb0bc;
+  font-size: 11px;
 }
 
 .source-section-heading {
@@ -784,9 +974,28 @@ function nextChapter() {
   color: #e3c788;
 }
 
+@media (max-width: 1100px) {
+  .source-grid {
+    grid-template-columns: minmax(180px, 0.6fr) minmax(0, 1.4fr);
+  }
+
+  .source-result {
+    grid-column: 1 / -1;
+  }
+}
+
 @media (max-width: 900px) {
   .source-grid {
     grid-template-columns: 1fr;
+  }
+
+  .source-result {
+    grid-column: auto;
+  }
+
+  .source-debug-heading {
+    align-items: start;
+    flex-direction: column;
   }
 }
 
