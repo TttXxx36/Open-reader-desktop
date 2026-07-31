@@ -1,3 +1,4 @@
+use crate::library::ParsedBook;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::{
