@@ -282,6 +282,52 @@ impl Database {
         Ok(changed)
     }
 
+    pub fn prune_source_cache(
+        &self,
+        max_entries: usize,
+        max_bytes: usize,
+    ) -> Result<usize, DbError> {
+        let max_entries = max_entries.max(1);
+        let max_bytes = max_bytes.max(1);
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let mut remove = Vec::new();
+        let mut kept_entries = 0usize;
+        let mut kept_bytes = 0usize;
+
+        {
+            let mut statement = connection.prepare(
+                "SELECT cache_key, length(payload)
+                 FROM source_cache
+                 ORDER BY fetched_at DESC, cache_key DESC",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+
+            for row in rows {
+                let (key, length) = row?;
+                let bytes = usize::try_from(length.max(0)).unwrap_or(usize::MAX);
+                if kept_entries < max_entries
+                    && kept_bytes.saturating_add(bytes) <= max_bytes
+                {
+                    kept_entries += 1;
+                    kept_bytes = kept_bytes.saturating_add(bytes);
+                } else {
+                    remove.push(key);
+                }
+            }
+        }
+
+        for key in &remove {
+            connection.execute(
+                "DELETE FROM source_cache WHERE cache_key = ?1",
+                params![key],
+            )?;
+        }
+
+        Ok(remove.len())
+    }
+
     pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let book = connection
@@ -516,6 +562,53 @@ mod tests {
                 .expect("expired cache should miss"),
             None
         );
+
+        for (key, payload) in [("a", "1111"), ("b", "2222"), ("c", "3333")] {
+            database
+                .save_source_cache(key, &saved.id, "book", payload, 60)
+                .expect("cache should save");
+        }
+        assert_eq!(
+            database
+                .prune_source_cache(2, 1024)
+                .expect("entry pruning should work"),
+            2
+        );
+        {
+            let connection = database.connection.lock().expect("database lock");
+            let remaining: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM source_cache WHERE cache_key != 'cache-key'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("remaining cache count");
+            assert_eq!(remaining, 2);
+        }
+
+        database
+            .save_source_cache("bytes-a", &saved.id, "book", "1234", 60)
+            .expect("cache should save");
+        database
+            .save_source_cache("bytes-b", &saved.id, "book", "123", 60)
+            .expect("cache should save");
+        assert_eq!(
+            database
+                .prune_source_cache(100, 5)
+                .expect("byte pruning should work"),
+            3
+        );
+        {
+            let connection = database.connection.lock().expect("database lock");
+            let bytes: i64 = connection
+                .query_row(
+                    "SELECT COALESCE(SUM(length(payload)), 0) FROM source_cache",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("remaining cache bytes");
+            assert!(bytes <= 5);
+        }
 
         let disabled = database
             .set_source_enabled(&saved.id, false)
