@@ -9,7 +9,9 @@
     "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "verify:release": "node scripts/verify-release.mjs",
+    "verify:release:strict": "node scripts/verify-release.mjs --strict --dist"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
