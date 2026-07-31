@@ -572,7 +572,7 @@ mod tests {
             database
                 .prune_source_cache(2, 1024)
                 .expect("entry pruning should work"),
-            2
+            1
         );
         {
             let connection = database.connection.lock().expect("database lock");
