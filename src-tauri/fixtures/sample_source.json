@@ -1,0 +1,26 @@
+{
+  "name": "Public HTML Fixture",
+  "searchUrl": "https://example.test/search?q={{keyword}}",
+  "bookInfoUrl": "https://example.test/book/{{bookId}}",
+  "tocUrl": "https://example.test/book/{{bookId}}/toc",
+  "contentUrl": "https://example.test/chapter/{{chapterId}}",
+  "search": {
+    "item": "article.book",
+    "title": { "selector": "h2 a" },
+    "author": { "selector": ".author" },
+    "url": { "selector": "h2 a", "attr": "href" }
+  },
+  "bookInfo": {
+    "title": { "selector": "h1" },
+    "author": { "selector": ".author" },
+    "intro": { "selector": ".intro" }
+  },
+  "toc": {
+    "item": "ol.chapters li",
+    "title": { "selector": "a" },
+    "url": { "selector": "a", "attr": "href" }
+  },
+  "content": {
+    "content": { "selector": "article.content" }
+  }
+}
