@@ -4,7 +4,7 @@ use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -131,6 +131,36 @@ pub struct SearchResult {
     pub source_name: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SourceDefinition {
+    pub id: String,
+    pub name: String,
+    pub source: BookSource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnifiedSearchResult {
+    pub source_id: String,
+    pub source_name: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub book_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceSearchFailure {
+    pub source_id: String,
+    pub source_name: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MultiSourceSearchResult {
+    pub results: Vec<UnifiedSearchResult>,
+    pub failures: Vec<SourceSearchFailure>,
+    pub enabled_sources: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BookInfo {
     pub title: String,
@@ -187,6 +217,7 @@ struct FetchedText {
     bytes: usize,
 }
 
+#[derive(Clone)]
 pub struct SourceEngine {
     client: reqwest::Client,
     max_body_bytes: usize,
@@ -247,6 +278,78 @@ impl SourceEngine {
             bytes: body.len(),
             body_preview: preview,
         })
+    }
+
+    pub async fn search(
+        &self,
+        source: &BookSource,
+        keyword: &str,
+    ) -> Result<Vec<SearchResult>, SourceError> {
+        let search_url = render_url(&source.search_url, Some(keyword), None, None, None);
+        let fetched = self
+            .fetch_text(&search_url, &source.headers)
+            .await
+            .map_err(|error| pipeline_error("search_fetch", error))?;
+        let mut results = self
+            .parse_search_html(source, &fetched.body)
+            .map_err(|error| pipeline_error("search_parse", error))?;
+        for result in &mut results {
+            if let Some(url) = &result.book_url {
+                result.book_url = Some(absolutize_url(&search_url, url));
+            }
+        }
+        Ok(results)
+    }
+
+    pub async fn search_many(
+        &self,
+        sources: Vec<SourceDefinition>,
+        keyword: &str,
+    ) -> MultiSourceSearchResult {
+        let enabled_sources = sources.len();
+        let mut tasks = tokio::task::JoinSet::new();
+
+        for definition in sources {
+            let engine = self.clone();
+            let keyword = keyword.to_string();
+            tasks.spawn(async move {
+                let result = engine.search(&definition.source, &keyword).await;
+                (definition, result)
+            });
+        }
+
+        let mut results = Vec::new();
+        let mut failures = Vec::new();
+
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok((definition, Ok(items))) => {
+                    results.extend(items.into_iter().map(|item| UnifiedSearchResult {
+                        source_id: definition.id.clone(),
+                        source_name: definition.name.clone(),
+                        title: item.title,
+                        author: item.author,
+                        book_url: item.book_url,
+                    }));
+                }
+                Ok((definition, Err(error))) => failures.push(SourceSearchFailure {
+                    source_id: definition.id,
+                    source_name: definition.name,
+                    message: error.to_string(),
+                }),
+                Err(error) => failures.push(SourceSearchFailure {
+                    source_id: "unknown".to_string(),
+                    source_name: "未知书源".to_string(),
+                    message: format!("搜索任务异常：{}", error),
+                }),
+            }
+        }
+
+        MultiSourceSearchResult {
+            results: dedupe_search_results(results),
+            failures,
+            enabled_sources,
+        }
     }
 
     pub async fn run_pipeline(
@@ -518,6 +621,46 @@ impl SourceEngine {
 
         Ok(results)
     }
+}
+
+fn dedupe_search_results(mut results: Vec<UnifiedSearchResult>) -> Vec<UnifiedSearchResult> {
+    results.sort_by(|left, right| {
+        (
+            normalize_search_text(&left.title),
+            normalize_search_text(left.author.as_deref().unwrap_or_default()),
+            normalize_search_text(&left.source_name),
+            left.source_id.clone(),
+        )
+            .cmp(&(
+                normalize_search_text(&right.title),
+                normalize_search_text(right.author.as_deref().unwrap_or_default()),
+                normalize_search_text(&right.source_name),
+                right.source_id.clone(),
+            ))
+    });
+
+    let mut seen = HashSet::new();
+    results
+        .into_iter()
+        .filter(|item| seen.insert(search_result_key(item)))
+        .collect()
+}
+
+fn search_result_key(item: &UnifiedSearchResult) -> String {
+    let title = normalize_search_text(&item.title);
+    let author = normalize_search_text(item.author.as_deref().unwrap_or_default());
+    if title.is_empty() && author.is_empty() {
+        return format!("url:{}", normalize_search_text(item.book_url.as_deref().unwrap_or_default()));
+    }
+    format!("{}\u{{1f}}{}", title, author)
+}
+
+fn normalize_search_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn pipeline_error(stage: &str, error: SourceError) -> SourceError {
@@ -933,6 +1076,37 @@ mod tests {
     }
 
     #[test]
+    fn deduplicates_search_results_by_title_and_author() {
+        let results = dedupe_search_results(vec![
+            UnifiedSearchResult {
+                source_id: "source-b".to_string(),
+                source_name: "书源 B".to_string(),
+                title: " 测试 书 ".to_string(),
+                author: Some(" 作者甲 ".to_string()),
+                book_url: Some("https://b.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "测试书".to_string(),
+                author: Some("作者甲".to_string()),
+                book_url: Some("https://a.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "另一本".to_string(),
+                author: None,
+                book_url: None,
+            },
+        ]);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "另一本");
+        assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
     fn extracts_json_wildcard_values() {
         let engine = SourceEngine::new(1, 1024).expect("engine should build");
         let values = engine
@@ -942,6 +1116,62 @@ mod tests {
             )
             .expect("json should parse");
         assert_eq!(values, vec!["第一本", "第二本"]);
+    }
+
+    #[tokio::test]
+    async fn searches_multiple_sources_with_failure_isolation() {
+        let (base_url, server) = spawn_search_fixture_server();
+        let mut valid_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        valid_source.search_url = format!("{}/search?q={{{{keyword}}}}", base_url);
+
+        let broken_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "http://127.0.0.1:1/search?q={{keyword}}",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+
+        let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .search_many(
+                vec![
+                    SourceDefinition {
+                        id: "fixture".to_string(),
+                        name: "Fixture".to_string(),
+                        source: valid_source,
+                    },
+                    SourceDefinition {
+                        id: "broken".to_string(),
+                        name: "Broken".to_string(),
+                        source: broken_source,
+                    },
+                ],
+                "demo",
+            )
+            .await;
+
+        assert_eq!(result.enabled_sources, 2);
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.results[0].title, "测试书");
+        server.join().expect("fixture server should stop");
     }
 
     #[tokio::test]
@@ -968,6 +1198,41 @@ mod tests {
         assert_eq!(result.debug_steps.len(), 4);
         assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
         server.join().expect("fixture server should stop");
+    }
+
+    fn spawn_search_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else {
+                    r#"<article class="book"><h2><a href="/book/2">意外</a></h2></article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{}", address), server)
     }
 
     fn spawn_fixture_server() -> (String, std::thread::JoinHandle<()>) {
