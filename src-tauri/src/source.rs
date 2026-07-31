@@ -48,11 +48,11 @@ pub struct BookSource {
     pub content_url: Option<String>,
     #[serde(default, alias = "ruleSearch")]
     pub search: Option<PageRules>,
-    #[serde(default, alias = "ruleBookInfo")]
+    #[serde(default, alias = "ruleBookInfo", alias = "bookInfo")]
     pub book_info: Option<PageRules>,
-    #[serde(default, alias = "ruleToc")]
+    #[serde(default, alias = "ruleToc", alias = "toc")]
     pub toc: Option<PageRules>,
-    #[serde(default, alias = "ruleContent")]
+    #[serde(default, alias = "ruleContent", alias = "content")]
     pub content: Option<PageRules>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
