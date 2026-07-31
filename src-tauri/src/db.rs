@@ -399,6 +399,7 @@ fn generated_id(prefix: &str) -> String {
             .as_nanos()
     )
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,7 +418,10 @@ mod tests {
             .save_source(None, "Fixture", r#"{"name":"Fixture"}"#)
             .expect("source should save");
         assert!(saved.enabled);
-        assert_eq!(database.list_sources().expect("sources should list").len(), 1);
+        assert_eq!(
+            database.list_sources().expect("sources should list").len(),
+            1
+        );
 
         let disabled = database
             .set_source_enabled(&saved.id, false)
@@ -427,7 +431,10 @@ mod tests {
         database
             .delete_source(&saved.id)
             .expect("source should delete");
-        assert!(database.list_sources().expect("sources should list").is_empty());
+        assert!(database
+            .list_sources()
+            .expect("sources should list")
+            .is_empty());
 
         drop(database);
         let _ = fs::remove_dir_all(directory);
