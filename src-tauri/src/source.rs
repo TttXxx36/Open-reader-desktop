@@ -659,10 +659,7 @@ fn search_result_key(item: &UnifiedSearchResult) -> String {
 }
 
 fn normalize_search_text(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<String>()
-        .to_lowercase()
+    value.split_whitespace().collect::<String>().to_lowercase()
 }
 
 fn pipeline_error(stage: &str, error: SourceError) -> SourceError {
