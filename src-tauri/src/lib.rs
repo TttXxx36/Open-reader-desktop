@@ -4,7 +4,7 @@ mod source;
 
 use db::{BookDetail, BookSummary, ChapterContent, Database};
 use library::parse_book_bytes;
-use source::{BookSource, SourceEngine, SourceValidation, SourcePreview};
+use source::{SourceEngine, SourcePreview, SourceValidation};
 use tauri::Manager;
 
 #[tauri::command]
