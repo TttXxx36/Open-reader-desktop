@@ -33,7 +33,8 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [x] 完成本地授权夹具的单书源端到端流程
 - [x] 完成书源保存、启用/停用与端到端调试面板
 - [x] 完成多源搜索、去重与失败隔离
-- [ ] 完成详情阅读接入、缓存、替换规则和发布流程
+- [x] 完成远程详情、目录、章节阅读与 TTL 缓存
+- [ ] 完成替换规则、章节更新、配置导入/导出和发布流程
 
 ## 本地开发
 
@@ -42,7 +43,7 @@ npm install
 npm run tauri dev
 ```
 
-M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4/M4.1 将搜索、详情、目录和首章正文串成可测试链路，并加入书源持久化、启停和调试诊断；M5 首步已支持启用书源并发搜索、标题/作者去重和单源失败隔离。当前搜索结果只做统一展示，详情与阅读接入仍在后续迭代。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)。
+M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4/M4.1 将搜索、详情、目录和首章正文串成可测试链路，并加入书源持久化、启停和调试诊断；M5 已支持启用书源并发搜索、标题/作者去重、单源失败隔离，以及搜索结果进入远程详情、目录和章节阅读。远程详情与章节正文使用 SQLite TTL 缓存，应用启动时会清理过期缓存。替换规则、章节更新和配置导入/导出仍在后续迭代。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)。
 
 ## 参与开发
 
