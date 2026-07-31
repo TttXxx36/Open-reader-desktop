@@ -283,9 +283,11 @@ async fn fetch_source_book(
             SOURCE_BOOK_CACHE_TTL_SECS,
         )
         .map_err(|error| error.to_string())?;
-    database
-        .prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
-        .map_err(|error| error.to_string())?;
+    if let Err(error) =
+        database.prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
+    {
+        eprintln!("unable to prune source cache after write: {error}");
+    }
     Ok(result)
 }
 
@@ -329,9 +331,11 @@ async fn fetch_source_chapter(
             SOURCE_CHAPTER_CACHE_TTL_SECS,
         )
         .map_err(|error| error.to_string())?;
-    database
-        .prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
-        .map_err(|error| error.to_string())?;
+    if let Err(error) =
+        database.prune_source_cache(SOURCE_CACHE_MAX_ENTRIES, SOURCE_CACHE_MAX_BYTES)
+    {
+        eprintln!("unable to prune source cache after write: {error}");
+    }
     Ok(result)
 }
 
