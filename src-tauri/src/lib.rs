@@ -4,7 +4,10 @@ mod source;
 
 use db::{BookDetail, BookSummary, ChapterContent, Database, SourceSummary};
 use library::parse_book_bytes;
-use source::{SourceEngine, SourcePreview, SourceValidation};
+use source::{
+    MultiSourceSearchResult, SourceDefinition, SourceEngine, SourcePreview, SourceSearchFailure,
+    SourceValidation,
+};
 use tauri::Manager;
 
 #[tauri::command]
@@ -116,6 +119,46 @@ async fn fetch_source_preview(url: String) -> Result<SourcePreview, String> {
 }
 
 #[tauri::command]
+async fn search_sources(
+    database: tauri::State<'_, Database>,
+    keyword: String,
+) -> Result<MultiSourceSearchResult, String> {
+    let keyword = keyword.trim();
+    if keyword.is_empty() {
+        return Err("搜索关键词不能为空".to_string());
+    }
+    if keyword.chars().count() > 128 {
+        return Err("搜索关键词不能超过 128 个字符".to_string());
+    }
+
+    let saved = database.list_sources().map_err(|error| error.to_string())?;
+    let enabled_sources = saved.iter().filter(|source| source.enabled).count();
+    let mut definitions = Vec::new();
+    let mut failures = Vec::new();
+
+    for summary in saved.into_iter().filter(|source| source.enabled) {
+        match serde_json::from_str::<source::BookSource>(&summary.config_json) {
+            Ok(source) => definitions.push(SourceDefinition {
+                id: summary.id,
+                name: summary.name,
+                source,
+            }),
+            Err(error) => failures.push(SourceSearchFailure {
+                source_id: summary.id,
+                source_name: summary.name,
+                message: format!("配置解析失败：{}", error),
+            }),
+        }
+    }
+
+    let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    let mut result = engine.search_many(definitions, keyword).await;
+    result.enabled_sources = enabled_sources;
+    result.failures.splice(0..0, failures);
+    Ok(result)
+}
+
+#[tauri::command]
 async fn run_source_pipeline(
     config_json: String,
     keyword: String,
@@ -152,6 +195,7 @@ pub fn run() {
             set_source_enabled,
             delete_source,
             fetch_source_preview,
+            search_sources,
             run_source_pipeline
         ])
         .run(tauri::generate_context!())
