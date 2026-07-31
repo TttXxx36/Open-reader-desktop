@@ -379,7 +379,7 @@ impl SourceEngine {
         let document = Html::parse_document(html);
         let selector = parse_selector(rule.selector())?;
         let element = document.select(&selector).next().ok_or(SourceError::NoMatch)?;
-        extract_from_element(element, rule)
+        extract_selected_element(element, rule)
     }
 
     pub fn extract_json_values(
@@ -449,7 +449,7 @@ fn extract_document_rule(
     let Some(element) = document.select(&selector).next() else {
         return Ok(None);
     };
-    Ok(Some(extract_from_element(element, rule)?))
+    Ok(Some(extract_selected_element(element, rule)?))
 }
 
 fn parse_chapter_list(
@@ -679,19 +679,22 @@ fn extract_from_element(
     rule: &SourceRule,
 ) -> Result<String, SourceError> {
     let selector = parse_selector(rule.selector())?;
+    let target = element.select(&selector).next().ok_or(SourceError::NoMatch)?;
+    extract_selected_element(target, rule)
+}
+
+fn extract_selected_element(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<String, SourceError> {
     let value = if let Some(attribute) = rule.attr() {
         element
-            .select(&selector)
-            .next()
-            .and_then(|item| item.value().attr(attribute))
+            .value()
+            .attr(attribute)
             .unwrap_or_default()
             .to_string()
     } else {
-        element
-            .select(&selector)
-            .next()
-            .map(|item| item.text().collect::<Vec<_>>().join(" "))
-            .unwrap_or_default()
+        element.text().collect::<Vec<_>>().join(" ")
     };
 
     apply_regex(value.trim(), rule.regex())
