@@ -73,14 +73,42 @@ interface SourcePipelineResult {
   debug_steps: SourceDebugStep[];
 }
 
-interface MultiSourceSearchResult {
-  results: Array<{
-    source_id: string;
-    source_name: string;
+interface UnifiedSearchItem {
+  source_id: string;
+  source_name: string;
+  title: string;
+  author: string | null;
+  book_url: string | null;
+}
+
+interface RemoteChapter {
+  title: string;
+  url: string;
+  index: number;
+}
+
+interface RemoteBookDetail {
+  source_id: string;
+  source_name: string;
+  book_info: {
     title: string;
     author: string | null;
-    book_url: string | null;
-  }>;
+    intro: string | null;
+    cover_url: string | null;
+    book_url: string;
+  };
+  chapters: RemoteChapter[];
+  debug_steps: SourceDebugStep[];
+}
+
+interface RemoteChapterContent {
+  title: string;
+  content: string;
+  next_url: string | null;
+}
+
+interface MultiSourceSearchResult {
+  results: UnifiedSearchItem[];
   failures: Array<{
     source_id: string;
     source_name: string;
@@ -110,6 +138,10 @@ const sourcePipeline = ref<SourcePipelineResult | null>(null);
 const searchKeyword = ref("");
 const searchBusy = ref(false);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
+const remoteBusy = ref(false);
+const remoteBook = ref<RemoteBookDetail | null>(null);
+const remoteChapter = ref<RemoteChapterContent | null>(null);
+const remoteChapterRef = ref<RemoteChapter | null>(null);
 const sourceJson = ref(`{
   "name": "Public HTML Fixture",
   "searchUrl": "https://example.test/search?q={{keyword}}",
@@ -126,6 +158,9 @@ const sourceJson = ref(`{
 
 const chapterParagraphs = computed(() =>
   chapter.value?.content.split(/\n{2,}/).filter(Boolean) ?? [],
+);
+const remoteChapterParagraphs = computed(() =>
+  remoteChapter.value?.content.split(/\n{2,}/).filter(Boolean) ?? [],
 );
 const readerStyle = computed(() => ({
   "--reader-font-size": `${settings.value.fontSize}px`,
@@ -266,6 +301,83 @@ function clearSearch() {
   searchKeyword.value = "";
 }
 
+async function openRemoteBook(item: UnifiedSearchItem) {
+  if (!item.book_url || remoteBusy.value) return;
+
+  remoteBusy.value = true;
+  errorMessage.value = "";
+  remoteBook.value = null;
+  remoteChapter.value = null;
+  remoteChapterRef.value = null;
+
+  try {
+    const loaded = await invoke<RemoteBookDetail>("fetch_source_book", {
+      sourceId: item.source_id,
+      bookUrl: item.book_url,
+    });
+    const firstChapter = loaded.chapters[0];
+    if (!firstChapter) {
+      throw new Error("书源未返回可阅读章节");
+    }
+
+    const firstContent = await invoke<RemoteChapterContent>("fetch_source_chapter", {
+      sourceId: loaded.source_id,
+      chapter: firstChapter,
+    });
+    remoteBook.value = loaded;
+    remoteChapterRef.value = firstChapter;
+    remoteChapter.value = firstContent;
+    searchResult.value = null;
+    view.value = "reader";
+  } catch (error) {
+    errorMessage.value = String(error);
+    remoteBook.value = null;
+    remoteChapter.value = null;
+    remoteChapterRef.value = null;
+  } finally {
+    remoteBusy.value = false;
+  }
+}
+
+async function loadRemoteChapter(chapterItem: RemoteChapter) {
+  if (!remoteBook.value || remoteBusy.value) return;
+
+  remoteBusy.value = true;
+  errorMessage.value = "";
+  try {
+    remoteChapter.value = await invoke<RemoteChapterContent>("fetch_source_chapter", {
+      sourceId: remoteBook.value.source_id,
+      chapter: chapterItem,
+    });
+    remoteChapterRef.value = chapterItem;
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    remoteBusy.value = false;
+  }
+}
+
+function remoteChapterIndex() {
+  if (!remoteBook.value || !remoteChapterRef.value) return -1;
+  return remoteBook.value.chapters.findIndex((item) => item.url === remoteChapterRef.value?.url);
+}
+
+function goToRemoteChapter(chapterItem: RemoteChapter) {
+  void loadRemoteChapter(chapterItem);
+}
+
+function previousRemoteChapter() {
+  if (!remoteBook.value) return;
+  const previous = remoteBook.value.chapters[remoteChapterIndex() - 1];
+  if (previous) void loadRemoteChapter(previous);
+}
+
+function nextRemoteChapter() {
+  if (!remoteBook.value) return;
+  const next = remoteBook.value.chapters[remoteChapterIndex() + 1];
+  if (next) void loadRemoteChapter(next);
+}
+
 async function runSourcePipeline() {
   sourcePipelineBusy.value = true;
   sourcePipeline.value = null;
@@ -397,6 +509,9 @@ function closeReader() {
   view.value = "library";
   detail.value = null;
   chapter.value = null;
+  remoteBook.value = null;
+  remoteChapter.value = null;
+  remoteChapterRef.value = null;
   void loadBooks();
 }
 
@@ -509,12 +624,23 @@ function nextChapter() {
         </p>
         <p v-if="!searchResult.results.length" class="search-results-empty">没有找到匹配书籍。</p>
         <div v-else class="search-results-list">
-          <article v-for="item in searchResult.results" :key="item.source_id + '-' + item.title + '-' + (item.author || '')" class="search-result-row">
+          <article
+            v-for="item in searchResult.results"
+            :key="item.source_id + '-' + item.title + '-' + (item.author || '')"
+            class="search-result-row"
+            :class="{ clickable: Boolean(item.book_url) }"
+            :tabindex="item.book_url ? 0 : undefined"
+            @click="openRemoteBook(item)"
+            @keydown.enter="openRemoteBook(item)"
+          >
             <div>
               <h3>{{ item.title || "未命名书籍" }}</h3>
               <p>{{ item.author || "作者未知" }}</p>
             </div>
-            <span class="search-source-badge">{{ item.source_name }}</span>
+            <div class="search-result-actions">
+              <span class="search-source-badge">{{ item.source_name }}</span>
+              <span class="search-open-label">{{ item.book_url ? (remoteBusy ? "加载中…" : "打开") : "无链接" }}</span>
+            </div>
           </article>
         </div>
         <div v-if="searchResult.failures.length" class="search-failures">
@@ -683,6 +809,64 @@ function nextChapter() {
     </section>
 
     <section
+      v-else-if="remoteBook && remoteChapter"
+      class="content reader-content"
+      :class="'theme-' + settings.theme"
+      :style="readerStyle"
+    >
+      <header class="reader-toolbar">
+        <button class="toolbar-button" type="button" @click="closeReader">← 搜索</button>
+        <div class="reader-heading">
+          <strong>{{ remoteBook.book_info.title }}</strong>
+          <span>{{ remoteBook.book_info.author || remoteBook.source_name }}</span>
+        </div>
+        <div class="reader-controls">
+          <label>字号 <input v-model.number="settings.fontSize" type="range" min="15" max="30" step="1" /></label>
+          <label>行距 <input v-model.number="settings.lineHeight" type="range" min="1.4" max="2.4" step="0.1" /></label>
+          <button class="toolbar-button" type="button" @click="cycleTheme">{{ themeLabels[settings.theme] }}</button>
+        </div>
+      </header>
+
+      <div class="reader-layout">
+        <aside class="chapter-panel">
+          <span class="eyebrow">CONTENTS · {{ remoteBook.chapters.length }} · {{ remoteBook.source_name }}</span>
+          <button
+            v-for="chapterItem in remoteBook.chapters"
+            :key="chapterItem.url"
+            class="chapter-item"
+            :class="{ selected: chapterItem.url === remoteChapterRef?.url }"
+            type="button"
+            @click="goToRemoteChapter(chapterItem)"
+          >
+            <span>{{ chapterItem.index + 1 }}</span>
+            <strong>{{ chapterItem.title }}</strong>
+          </button>
+        </aside>
+
+        <article class="reader-page">
+          <div class="reader-meta">{{ remoteChapterIndex() + 1 }} / {{ remoteBook.chapters.length }} · {{ remoteBook.source_name }}</div>
+          <h2>{{ remoteChapter.title }}</h2>
+          <p v-for="(paragraph, index) in remoteChapterParagraphs" :key="index">{{ paragraph }}</p>
+
+          <footer class="chapter-navigation">
+            <button class="toolbar-button" type="button" :disabled="remoteChapterIndex() <= 0 || remoteBusy" @click="previousRemoteChapter">
+              ← 上一章
+            </button>
+            <span>{{ remoteChapterIndex() + 1 }} / {{ remoteBook.chapters.length }}</span>
+            <button
+              class="toolbar-button"
+              type="button"
+              :disabled="remoteChapterIndex() >= remoteBook.chapters.length - 1 || remoteBusy"
+              @click="nextRemoteChapter"
+            >
+              下一章 →
+            </button>
+          </footer>
+        </article>
+      </div>
+    </section>
+
+    <section
       v-else-if="detail && chapter"
       class="content reader-content"
       :class="`theme-${settings.theme}`"
@@ -807,7 +991,7 @@ function nextChapter() {
   margin-top: 18px;
 }
 
-.search-result-row {
+ .search-result-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -816,6 +1000,28 @@ function nextChapter() {
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 10px;
   background: rgba(12, 17, 27, 0.52);
+}
+
+.search-result-row.clickable {
+  cursor: pointer;
+}
+
+.search-result-row.clickable:hover,
+.search-result-row.clickable:focus-visible {
+  border-color: rgba(139, 183, 255, 0.7);
+  outline: none;
+}
+
+.search-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+}
+
+.search-open-label {
+  color: #8fcfff;
+  font-size: 11px;
 }
 
 .search-result-row h3 {
