@@ -41,6 +41,14 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - 书籍、章节正文和阅读进度写入本机 SQLite；阅读设置保存在应用本地存储。
 - 当前不会联网上传导入文件，也不会内置版权书源。
 
+## M3 书源协议
+
+- 在“书源”页粘贴 JSON，点击“校验 JSON”。
+- 校验包括 URL scheme、CSS 选择器、正则表达式、字段别名和缺失阶段提示。
+- fetch_source_preview 只允许 HTTP/HTTPS，默认超时 15 秒、响应上限 2 MiB，且只返回前 2,000 个字符。
+- 不执行 JavaScript，不自动携带 Cookie/Authorization，不绕过验证码或付费限制。
+- 书源协议与示例见 [docs/source-protocol.md](source-protocol.md)。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
@@ -49,5 +57,5 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 - WebView2 缺失：安装 Microsoft Edge WebView2 Runtime 后重启应用。
 - Vite 端口被占用：释放 1420 端口，或调整 `vite.config.ts` 与 `tauri.conf.json` 中的端口配置。
-- 浏览器预览模式下，SQLite 命令不可用是正常现象；请使用 `npm run tauri dev` 验证桌面桥接。
+- 浏览器预览模式下，SQLite 和 Tauri 命令不可用是正常现象；请使用 `npm run tauri dev` 验证桌面桥接。
 - 如果导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB。
