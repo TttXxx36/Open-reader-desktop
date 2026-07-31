@@ -79,8 +79,8 @@ async fn run_source_pipeline(
     config_json: String,
     keyword: String,
 ) -> Result<source::SourcePipelineResult, String> {
-    let source: source::BookSource = serde_json::from_str(&config_json)
-        .map_err(|error| format!("JSON 解析失败：{error}"))?;
+    let source: source::BookSource =
+        serde_json::from_str(&config_json).map_err(|error| format!("JSON 解析失败：{error}"))?;
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
     engine
         .run_pipeline(&source, &keyword)
