@@ -31,6 +31,21 @@ function readJson(relativePath) {
   }
 }
 
+function hasExpectedIconSignature(relativePath) {
+  const bytes = readFileSync(resolve(root, "src-tauri", relativePath));
+  if (relativePath.toLowerCase().endsWith(".ico")) {
+    return bytes.length >= 4 && bytes.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0]));
+  }
+
+  if (relativePath.toLowerCase().endsWith(".png")) {
+    return bytes.length >= 8 && bytes.subarray(0, 8).equals(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+  }
+
+  return false;
+}
+
 const packageJson = readJson("package.json");
 const tauriConfig = readJson("src-tauri/tauri.conf.json");
 
@@ -85,6 +100,8 @@ if (packageJson && tauriConfig) {
       const size = statSync(iconPath).size;
       if (size < 1024) {
         addBlocker("bundle icon", `${icon} 只有 ${size} bytes，疑似占位文件`);
+      } else if (!hasExpectedIconSignature(icon)) {
+        addBlocker("bundle icon", `${icon} 文件头不是有效的 ICO/PNG 格式`);
       } else {
         addCheck("bundle icon", `${icon} (${size} bytes)`);
       }
