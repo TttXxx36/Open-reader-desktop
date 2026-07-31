@@ -296,7 +296,7 @@ impl Database {
 
         {
             let mut statement = connection.prepare(
-                "SELECT cache_key, length(payload)
+                "SELECT cache_key, length(CAST(payload AS BLOB))
                  FROM source_cache
                  ORDER BY fetched_at DESC, cache_key DESC",
             )?;
@@ -588,7 +588,7 @@ mod tests {
             .save_source_cache("bytes-a", &saved.id, "book", "1234", 60)
             .expect("cache should save");
         database
-            .save_source_cache("bytes-b", &saved.id, "book", "123", 60)
+            .save_source_cache("bytes-b", &saved.id, "book", "章节", 60)
             .expect("cache should save");
         assert_eq!(
             database
@@ -600,7 +600,7 @@ mod tests {
             let connection = database.connection.lock().expect("database lock");
             let bytes: i64 = connection
                 .query_row(
-                    "SELECT COALESCE(SUM(length(payload)), 0) FROM source_cache",
+                    "SELECT COALESCE(SUM(length(CAST(payload AS BLOB))), 0) FROM source_cache",
                     [],
                     |row| row.get(0),
                 )
