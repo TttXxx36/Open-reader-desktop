@@ -248,6 +248,20 @@ impl Database {
         Ok(payload)
     }
 
+    pub fn get_source_cache_any(&self, cache_key: &str) -> Result<Option<String>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection
+            .query_row(
+                "SELECT payload
+                 FROM source_cache
+                 WHERE cache_key = ?1",
+                params![cache_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
     pub fn save_source_cache(
         &self,
         cache_key: &str,
@@ -559,6 +573,12 @@ mod tests {
                 .get_source_cache("cache-key")
                 .expect("expired cache should miss"),
             None
+        );
+        assert_eq!(
+            database
+                .get_source_cache_any("cache-key")
+                .expect("stale cache should read"),
+            Some(r#"{"title":"Fixture"}"#.to_string())
         );
 
         for (key, payload) in [("a", "1111"), ("b", "2222"), ("c", "3333")] {
