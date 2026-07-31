@@ -161,7 +161,7 @@ pub struct MultiSourceSearchResult {
     pub enabled_sources: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookInfo {
     pub title: String,
     pub author: Option<String>,
@@ -170,14 +170,14 @@ pub struct BookInfo {
     pub book_url: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceChapter {
     pub title: String,
     pub url: String,
     pub index: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceChapterContent {
     pub title: String,
     pub content: String,
@@ -192,7 +192,7 @@ pub struct SourcePreview {
     pub body_preview: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceDebugStep {
     pub stage: String,
     pub url: String,
@@ -208,6 +208,13 @@ pub struct SourcePipelineResult {
     pub book_info: BookInfo,
     pub chapters: Vec<SourceChapter>,
     pub first_chapter: SourceChapterContent,
+    pub debug_steps: Vec<SourceDebugStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceBookDetail {
+    pub book_info: BookInfo,
+    pub chapters: Vec<SourceChapter>,
     pub debug_steps: Vec<SourceDebugStep>,
 }
 
@@ -356,6 +363,24 @@ impl SourceEngine {
             failures,
             enabled_sources,
         }
+    }
+
+    pub async fn fetch_book_detail(
+        &self,
+        source: &BookSource,
+        book_url: &str,
+    ) -> Result<SourceBookDetail, SourceError> {
+        let mut debug_steps = Vec::new();
+        let book_info = self
+            .fetch_book_info(source, book_url, &mut debug_steps)
+            .await?;
+        let chapters = self.fetch_toc(source, book_url, &mut debug_steps).await?;
+
+        Ok(SourceBookDetail {
+            book_info,
+            chapters,
+            debug_steps,
+        })
     }
 
     pub async fn run_pipeline(
@@ -533,7 +558,7 @@ impl SourceEngine {
         parse_chapter_list(rules, &body, &url)
     }
 
-    async fn fetch_chapter_content(
+    pub async fn fetch_chapter_content(
         &self,
         source: &BookSource,
         chapter: &SourceChapter,
