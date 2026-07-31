@@ -45,7 +45,7 @@ replaceRules 是可选数组，应用在正文提取完成后，按照数组顺�
 
 ```json
 "replaceRules": [
-  { "pattern": "\\\\s+", "replacement": " ", "enabled": true },
+  { "pattern": "\\s+", "replacement": " ", "enabled": true },
   { "pattern": "广告.*?$", "replacement": "" }
 ]
 ```
