@@ -1,0 +1,575 @@
+use regex::Regex;
+use reqwest::header::CONTENT_TYPE;
+use scraper::{ElementRef, Html, Selector};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{collections::HashMap, time::Duration};
+use thiserror::Error;
+use url::Url;
+
+const DEFAULT_TIMEOUT_SECS: u64 = 15;
+const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SEARCH_RESULTS: usize = 100;
+
+#[derive(Debug, Error)]
+pub enum SourceError {
+    #[error("invalid source configuration: {0}")]
+    InvalidConfig(String),
+    #[error("invalid URL: {0}")]
+    InvalidUrl(String),
+    #[error("unsupported URL scheme: {0}")]
+    UnsupportedScheme(String),
+    #[error("invalid CSS selector: {0}")]
+    InvalidSelector(String),
+    #[error("invalid regular expression: {0}")]
+    InvalidRegex(String),
+    #[error("request failed: {0}")]
+    Request(#[from] reqwest::Error),
+    #[error("response body exceeds {0} bytes")]
+    BodyTooLarge(usize),
+    #[error("no value matched the source rule")]
+    NoMatch,
+    #[error("invalid JSON path: {0}")]
+    InvalidJsonPath(String),
+    #[error("invalid JSON response: {0}")]
+    InvalidJson(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookSource {
+    pub name: String,
+    #[serde(alias = "searchUrl")]
+    pub search_url: String,
+    #[serde(default, alias = "bookInfoUrl")]
+    pub book_info_url: Option<String>,
+    #[serde(default, alias = "tocUrl")]
+    pub toc_url: Option<String>,
+    #[serde(default, alias = "contentUrl")]
+    pub content_url: Option<String>,
+    #[serde(default, alias = "ruleSearch")]
+    pub search: Option<PageRules>,
+    #[serde(default, alias = "ruleBookInfo")]
+    pub book_info: Option<PageRules>,
+    #[serde(default, alias = "ruleToc")]
+    pub toc: Option<PageRules>,
+    #[serde(default, alias = "ruleContent")]
+    pub content: Option<PageRules>,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PageRules {
+    #[serde(default)]
+    pub item: Option<String>,
+    #[serde(default)]
+    pub title: Option<SourceRule>,
+    #[serde(default)]
+    pub author: Option<SourceRule>,
+    #[serde(default, alias = "bookUrl")]
+    pub url: Option<SourceRule>,
+    #[serde(default)]
+    pub intro: Option<SourceRule>,
+    #[serde(default)]
+    pub content: Option<SourceRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SourceRule {
+    Selector(String),
+    Detailed {
+        selector: String,
+        #[serde(default)]
+        attr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+    },
+}
+
+impl SourceRule {
+    fn selector(&self) -> &str {
+        match self {
+            Self::Selector(value) => value,
+            Self::Detailed { selector, .. } => selector,
+        }
+    }
+
+    fn attr(&self) -> Option<&str> {
+        match self {
+            Self::Selector(_) => None,
+            Self::Detailed { attr, .. } => attr.as_deref(),
+        }
+    }
+
+    fn regex(&self) -> Option<&str> {
+        match self {
+            Self::Selector(_) => None,
+            Self::Detailed { regex, .. } => regex.as_deref(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceValidation {
+    pub valid: bool,
+    pub source: Option<BookSource>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchResult {
+    pub title: String,
+    pub author: Option<String>,
+    pub book_url: Option<String>,
+    pub source_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookInfo {
+    pub title: String,
+    pub author: Option<String>,
+    pub intro: Option<String>,
+    pub cover_url: Option<String>,
+    pub book_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceChapter {
+    pub title: String,
+    pub url: String,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceChapterContent {
+    pub title: String,
+    pub content: String,
+    pub next_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourcePreview {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub bytes: usize,
+    pub body_preview: String,
+}
+
+pub struct SourceEngine {
+    client: reqwest::Client,
+    max_body_bytes: usize,
+}
+
+impl SourceEngine {
+    pub fn new(timeout_secs: u64, max_body_bytes: usize) -> Result<Self, SourceError> {
+        if timeout_secs == 0 {
+            return Err(SourceError::InvalidConfig("timeout must be greater than zero".to_string()));
+        }
+        if max_body_bytes == 0 {
+            return Err(SourceError::InvalidConfig(
+                "max_body_bytes must be greater than zero".to_string(),
+            ));
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .user_agent("OpenReaderDesktop/0.1")
+            .build()?;
+
+        Ok(Self {
+            client,
+            max_body_bytes,
+        })
+    }
+
+    pub fn default() -> Result<Self, SourceError> {
+        Self::new(DEFAULT_TIMEOUT_SECS, DEFAULT_MAX_BODY_BYTES)
+    }
+
+    pub async fn fetch(&self, url: &str) -> Result<SourcePreview, SourceError> {
+        validate_url(url)?;
+        let response = self.client.get(expand_url_template(url)).send().await?;
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+
+        let mut body = Vec::new();
+        let mut response = response.error_for_status()?;
+        while let Some(chunk) = response.chunk().await? {
+            if body.len() + chunk.len() > self.max_body_bytes {
+                return Err(SourceError::BodyTooLarge(self.max_body_bytes));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        let preview = String::from_utf8_lossy(&body)
+            .chars()
+            .take(2_000)
+            .collect();
+
+        Ok(SourcePreview {
+            status,
+            content_type,
+            bytes: body.len(),
+            body_preview: preview,
+        })
+    }
+
+    pub fn extract_html_value(
+        &self,
+        html: &str,
+        rule: &SourceRule,
+    ) -> Result<String, SourceError> {
+        let document = Html::parse_document(html);
+        let selector = parse_selector(rule.selector())?;
+        let element = document.select(&selector).next().ok_or(SourceError::NoMatch)?;
+        extract_from_element(element, rule)
+    }
+
+    pub fn extract_json_values(
+        &self,
+        json: &str,
+        path: &str,
+    ) -> Result<Vec<String>, SourceError> {
+        let value: Value =
+            serde_json::from_str(json).map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+        extract_json_path(&value, path)
+    }
+
+    pub fn parse_search_html(
+        &self,
+        source: &BookSource,
+        html: &str,
+    ) -> Result<Vec<SearchResult>, SourceError> {
+        let rules = source
+            .search
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("search rules are required".to_string()))?;
+        let item_selector = parse_selector(rules.item.as_deref().unwrap_or("body"))?;
+        let document = Html::parse_document(html);
+        let mut results = Vec::new();
+
+        for item in document.select(&item_selector).take(MAX_SEARCH_RESULTS) {
+            let title = rules
+                .title
+                .as_ref()
+                .map(|rule| extract_from_element(item, rule))
+                .transpose()?
+                .unwrap_or_default();
+            let author = rules
+                .author
+                .as_ref()
+                .map(|rule| extract_from_element(item, rule))
+                .transpose()?;
+            let book_url = rules
+                .url
+                .as_ref()
+                .map(|rule| extract_from_element(item, rule))
+                .transpose()?;
+
+            if !title.is_empty() || book_url.is_some() {
+                results.push(SearchResult {
+                    title,
+                    author: non_empty(author),
+                    book_url: non_empty(book_url),
+                    source_name: source.name.clone(),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+}
+
+pub fn validate_source_json(input: &str) -> SourceValidation {
+    let source = match serde_json::from_str::<BookSource>(input) {
+        Ok(source) => source,
+        Err(error) => {
+            return SourceValidation {
+                valid: false,
+                source: None,
+                errors: vec![format!("JSON 解析失败：{error}")],
+                warnings: Vec::new(),
+            };
+        }
+    };
+
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    if source.name.trim().is_empty() {
+        errors.push("name 不能为空".to_string());
+    }
+    validate_endpoint("searchUrl", &source.search_url, &mut errors);
+    for (name, value) in [
+        ("bookInfoUrl", source.book_info_url.as_deref()),
+        ("tocUrl", source.toc_url.as_deref()),
+        ("contentUrl", source.content_url.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_endpoint(name, value, &mut errors);
+        }
+    }
+
+    validate_page_rules("ruleSearch", source.search.as_ref(), &mut errors, &mut warnings);
+    validate_page_rules(
+        "ruleBookInfo",
+        source.book_info.as_ref(),
+        &mut errors,
+        &mut warnings,
+    );
+    validate_page_rules("ruleToc", source.toc.as_ref(), &mut errors, &mut warnings);
+    validate_page_rules(
+        "ruleContent",
+        source.content.as_ref(),
+        &mut errors,
+        &mut warnings,
+    );
+
+    if source.book_info_url.is_none() {
+        warnings.push("未配置 bookInfoUrl，M4 前无法完成详情链路".to_string());
+    }
+    if source.toc_url.is_none() {
+        warnings.push("未配置 tocUrl，M4 前无法完成目录链路".to_string());
+    }
+    if source.content_url.is_none() {
+        warnings.push("未配置 contentUrl，M4 前无法完成正文链路".to_string());
+    }
+
+    SourceValidation {
+        valid: errors.is_empty(),
+        source: Some(source),
+        errors,
+        warnings,
+    }
+}
+
+fn validate_endpoint(name: &str, value: &str, errors: &mut Vec<String>) {
+    if value.trim().is_empty() {
+        errors.push(format!("{name} 不能为空"));
+        return;
+    }
+
+    if let Err(error) = validate_url(value) {
+        errors.push(format!("{name}：{error}"));
+    }
+}
+
+fn validate_page_rules(
+    name: &str,
+    rules: Option<&PageRules>,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    let Some(rules) = rules else {
+        warnings.push(format!("未配置 {name}"));
+        return;
+    };
+
+    if let Some(item) = &rules.item {
+        if let Err(error) = parse_selector(item) {
+            errors.push(format!("{name}.item：{error}"));
+        }
+    }
+
+    for (field, rule) in [
+        ("title", rules.title.as_ref()),
+        ("author", rules.author.as_ref()),
+        ("url", rules.url.as_ref()),
+        ("intro", rules.intro.as_ref()),
+        ("content", rules.content.as_ref()),
+    ] {
+        if let Some(rule) = rule {
+            if rule.selector().trim().is_empty() {
+                errors.push(format!("{name}.{field} selector 不能为空"));
+                continue;
+            }
+            if let Err(error) = parse_selector(rule.selector()) {
+                errors.push(format!("{name}.{field}：{error}"));
+            }
+            if let Some(regex) = rule.regex() {
+                if let Err(error) = Regex::new(regex) {
+                    errors.push(format!("{name}.{field} regex：{error}"));
+                }
+            }
+        }
+    }
+}
+
+fn validate_url(url: &str) -> Result<(), SourceError> {
+    let parsed = Url::parse(&expand_url_template(url))
+        .map_err(|error| SourceError::InvalidUrl(error.to_string()))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        scheme => Err(SourceError::UnsupportedScheme(scheme.to_string())),
+    }
+}
+
+fn expand_url_template(url: &str) -> String {
+    url.replace("{{keyword}}", "open-reader")
+        .replace("{{page}}", "1")
+}
+
+fn parse_selector(value: &str) -> Result<Selector, SourceError> {
+    Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
+}
+
+fn extract_from_element(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<String, SourceError> {
+    let selector = parse_selector(rule.selector())?;
+    let value = if let Some(attribute) = rule.attr() {
+        element
+            .select(&selector)
+            .next()
+            .and_then(|item| item.value().attr(attribute))
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        element
+            .select(&selector)
+            .next()
+            .map(|item| item.text().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default()
+    };
+
+    apply_regex(value.trim(), rule.regex())
+}
+
+fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError> {
+    let Some(pattern) = pattern else {
+        return Ok(value.to_string());
+    };
+    let regex = Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+    let captures = regex.captures(value).ok_or(SourceError::NoMatch)?;
+    Ok(captures
+        .get(1)
+        .or_else(|| captures.get(0))
+        .map(|capture| capture.as_str().to_string())
+        .unwrap_or_default())
+}
+
+fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceError> {
+    let path = path.trim().trim_start_matches("$.").trim_start_matches('$');
+    if path.is_empty() {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+
+    let mut current = vec![value];
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+
+        let wildcard = segment.ends_with("[*]");
+        let key = segment.trim_end_matches("[*]");
+        let mut next = Vec::new();
+
+        for item in current {
+            if wildcard {
+                let Some(array) = item.get(key).and_then(Value::as_array) else {
+                    continue;
+                };
+                next.extend(array);
+            } else if let Some(child) = item.get(key) {
+                next.push(child);
+            } else if let Ok(index) = key.parse::<usize>() {
+                if let Some(child) = item.get(index) {
+                    next.push(child);
+                }
+            }
+        }
+        current = next;
+    }
+
+    if current.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+
+    Ok(current
+        .into_iter()
+        .map(|item| match item {
+            Value::String(value) => value.clone(),
+            other => other.to_string(),
+        })
+        .collect())
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_the_public_fixture() {
+        let result = validate_source_json(include_str!("../fixtures/sample_source.json"));
+        assert!(result.valid, "{:?}", result.errors);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_selector_and_regex() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "search": {
+                "item": "article[",
+                "title": { "selector": "h2", "regex": "[" }
+              }
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("selector")));
+        assert!(result.errors.iter().any(|error| error.contains("regex")));
+    }
+
+    #[test]
+    fn extracts_html_search_results() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<article class="book"><h2><a href="/book/1">第一本</a></h2><span class="author">作者甲</span></article>"#,
+            )
+            .expect("html should parse");
+
+        assert_eq!(results[0].title, "第一本");
+        assert_eq!(results[0].author.as_deref(), Some("作者甲"));
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn extracts_json_wildcard_values() {
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let values = engine
+            .extract_json_values(
+                r#"{ "books": [{ "title": "第一本" }, { "title": "第二本" }] }"#,
+                "$.books[*].title",
+            )
+            .expect("json should parse");
+        assert_eq!(values, vec!["第一本", "第二本"]);
+    }
+}
