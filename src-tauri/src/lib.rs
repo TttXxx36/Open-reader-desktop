@@ -223,8 +223,9 @@ async fn fetch_source_chapter(
     }
 
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    let mut debug_steps = Vec::new();
     let result = engine
-        .fetch_chapter_content(&source, &chapter)
+        .fetch_chapter_content(&source, &chapter, &mut debug_steps)
         .await
         .map_err(|error| error.to_string())?;
     let payload = serde_json::to_string(&result).map_err(|error| error.to_string())?;
