@@ -111,6 +111,13 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 - 完整的安装包、签名和回滚验收项见 [Windows 发布验收清单](release-checklist.md)。
 
+## M5.6 发布候选预检
+
+- `npm run verify:release` 检查 package/Tauri 版本一致性、产品名、图标路径和 `bundle.active`，当前会报告但不放行外部阻塞项。
+- `npm run verify:release:strict` 额外要求真实图标、`bundle.active=true` 和已生成的 `dist/index.html`，用于发布前最终门禁。
+- CI 已运行非严格预检；它不会替代签名证书、干净 Windows 安装/升级/卸载和 WebView2 环境回归。
+- 现有 `src-tauri/icons/*.b64` 是占位编码文件，不是可直接发布的 Windows 图标；准备真实图标后再开启 Tauri bundle。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
