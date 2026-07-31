@@ -13,6 +13,9 @@ use url::{form_urlencoded, Url};
 const DEFAULT_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 100;
+const MAX_REPLACE_RULES: usize = 32;
+const MAX_REPLACE_PATTERN_BYTES: usize = 512;
+const MAX_REPLACE_REPLACEMENT_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -61,6 +64,21 @@ pub struct BookSource {
     pub content: Option<PageRules>,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(default, alias = "replaceRules", alias = "replacements")]
+    pub replace_rules: Vec<ReplaceRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplaceRule {
+    pub pattern: String,
+    #[serde(default)]
+    pub replacement: String,
+    #[serde(default = "default_replace_enabled")]
+    pub enabled: bool,
+}
+
+fn default_replace_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -585,6 +603,7 @@ impl SourceEngine {
         let document = Html::parse_document(&body);
         let content = extract_document_rule(&document, rules.content.as_ref())?
             .ok_or(SourceError::NoMatch)?;
+        let content = apply_replace_rules(&content, &source.replace_rules)?;
 
         Ok(SourceChapterContent {
             title: chapter.title.clone(),
@@ -861,6 +880,7 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         &mut errors,
         &mut warnings,
     );
+    validate_replace_rules(&source.replace_rules, &mut errors, &mut warnings);
 
     if source.book_info_url.is_none() {
         warnings.push("未配置 bookInfoUrl，端到端流程无法完成详情链路".to_string());
@@ -887,6 +907,56 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         errors,
         warnings,
     }
+}
+
+fn validate_replace_rules(
+    rules: &[ReplaceRule],
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    if rules.len() > MAX_REPLACE_RULES {
+        errors.push(format!(
+            "replaceRules 最多支持 {} 条规则",
+            MAX_REPLACE_RULES
+        ));
+    }
+
+    for (index, rule) in rules.iter().enumerate() {
+        let label = format!("replaceRules[{index}]");
+        if rule.pattern.trim().is_empty() {
+            errors.push(format!("{label}.pattern 不能为空"));
+        }
+        if rule.pattern.len() > MAX_REPLACE_PATTERN_BYTES {
+            errors.push(format!(
+                "{label}.pattern 不能超过 {} 字节",
+                MAX_REPLACE_PATTERN_BYTES
+            ));
+        }
+        if rule.replacement.len() > MAX_REPLACE_REPLACEMENT_BYTES {
+            errors.push(format!(
+                "{label}.replacement 不能超过 {} 字节",
+                MAX_REPLACE_REPLACEMENT_BYTES
+            ));
+        }
+        if let Err(error) = Regex::new(&rule.pattern) {
+            errors.push(format!("{label}.pattern：{error}"));
+        }
+        if !rule.enabled {
+            warnings.push(format!("{label} 当前已停用"));
+        }
+    }
+}
+
+fn apply_replace_rules(content: &str, rules: &[ReplaceRule]) -> Result<String, SourceError> {
+    let mut result = content.to_string();
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        let regex = Regex::new(&rule.pattern)
+            .map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+        result = regex
+            .replace_all(&result, rule.replacement.as_str())
+            .into_owned();
+    }
+    Ok(result)
 }
 
 fn validate_endpoint(name: &str, value: &str, errors: &mut Vec<String>) {
@@ -1134,6 +1204,43 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].title, "另一本");
         assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
+    fn applies_enabled_replace_rules_in_order() {
+        let rules = vec![
+            ReplaceRule {
+                pattern: r"\s+".to_string(),
+                replacement: " ".to_string(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "内部标记".to_string(),
+                replacement: String::new(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "正文".to_string(),
+                replacement: "不应改变".to_string(),
+                enabled: false,
+            },
+        ];
+
+        let content = apply_replace_rules("  正文   内部标记  ", &rules).expect("replace should work");
+        assert_eq!(content, " 正文  ");
+    }
+
+    #[test]
+    fn rejects_invalid_replace_rules() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken replace",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "replaceRules": [{ "pattern": "[", "replacement": "" }]
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("replaceRules[0]")));
     }
 
     #[test]
