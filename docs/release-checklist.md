@@ -37,3 +37,19 @@
 ## 当前状态
 
 M5.5 已完成安全审计、缓存统计和前端可观测性。安装包回归、图标、签名和发布候选版本归入 M5.6。
+
+
+## M5.6 发布预检
+
+在仓库根目录执行：
+
+```powershell
+npm install --no-audit --no-fund
+npm run verify:release
+npm run verify:release:strict
+```
+
+- `verify:release` 检查版本一致性、产品名、图标路径和打包状态；当前允许以“BLOCKED”结果退出 0，便于 CI 报告未完成的外部准备项。
+- `verify:release:strict` 是真正的发布门禁，要求 `bundle.active=true`、所有图标存在且不是占位文件，并且 `dist/index.html` 已生成；任一条件不满足都会退出 1。
+- CI 会运行非严格预检；它不会绕过图标、签名或安装回归阻塞。
+
