@@ -215,10 +215,8 @@ impl Database {
 
     pub fn delete_source(&self, source_id: &str) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let changed = connection.execute(
-            "DELETE FROM book_sources WHERE id = ?1",
-            params![source_id],
-        )?;
+        let changed =
+            connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
         if changed == 0 {
             return Err(DbError::NotFound);
         }
