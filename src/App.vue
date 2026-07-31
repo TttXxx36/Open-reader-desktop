@@ -462,6 +462,17 @@ function nextChapter() {
 </template>
 
 <style scoped>
+.nav-item {
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .source-content {
   max-width: 1240px;
 }
