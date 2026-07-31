@@ -327,9 +327,9 @@ async fn fetch_source_book(
             return Err(error.to_string());
         }
     };
-    let chapter_update = previous.as_ref().map(|cached| {
-        source::summarize_chapter_update(&cached.chapters, &detail.chapters)
-    });
+    let chapter_update = previous
+        .as_ref()
+        .map(|cached| source::summarize_chapter_update(&cached.chapters, &detail.chapters));
     let result = RemoteBookDetail {
         source_id: summary.id.clone(),
         source_name: summary.name.clone(),
