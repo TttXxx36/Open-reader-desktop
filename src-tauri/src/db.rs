@@ -399,3 +399,37 @@ fn generated_id(prefix: &str) -> String {
             .as_nanos()
     )
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persists_source_configuration_and_enabled_state() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-db-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        let saved = database
+            .save_source(None, "Fixture", r#"{"name":"Fixture"}"#)
+            .expect("source should save");
+        assert!(saved.enabled);
+        assert_eq!(database.list_sources().expect("sources should list").len(), 1);
+
+        let disabled = database
+            .set_source_enabled(&saved.id, false)
+            .expect("source should update");
+        assert!(!disabled.enabled);
+
+        database
+            .delete_source(&saved.id)
+            .expect("source should delete");
+        assert!(database.list_sources().expect("sources should list").is_empty());
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+}
