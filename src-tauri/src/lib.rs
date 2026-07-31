@@ -318,7 +318,7 @@ async fn fetch_source_book(
     let detail: SourceBookDetail = match engine.fetch_book_detail(&source, &book_url).await {
         Ok(detail) => detail,
         Err(error) => {
-            if let Some(mut fallback) = previous {
+            if let Some(mut fallback) = previous.clone() {
                 fallback.stale = true;
                 fallback.refresh_error = Some(error.to_string());
                 fallback.chapter_update = None;
@@ -330,7 +330,7 @@ async fn fetch_source_book(
     let chapter_update = previous.as_ref().map(|cached| {
         source::summarize_chapter_update(&cached.chapters, &detail.chapters)
     });
-    let mut result = RemoteBookDetail {
+    let result = RemoteBookDetail {
         source_id: summary.id.clone(),
         source_name: summary.name.clone(),
         book_info: detail.book_info,
