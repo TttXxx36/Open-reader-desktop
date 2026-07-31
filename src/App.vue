@@ -56,6 +56,29 @@ interface SourceSummary {
   updated_at: string;
 }
 
+interface SourceAuditReport {
+  source_id: string;
+  source_name: string;
+  enabled: boolean;
+  permission_status: string;
+  permission_scope: string | null;
+  reviewed_at: string | null;
+  hosts: string[];
+  sensitive_headers: string[];
+  errors: string[];
+  warnings: string[];
+  pass: boolean;
+}
+
+interface SourceCacheStatus {
+  entries: number;
+  bytes: number;
+  expired_entries: number;
+  oldest_fetched_at: number | null;
+  max_entries: number;
+  max_bytes: number;
+}
+
 interface SourceDebugStep {
   stage: string;
   url: string;
@@ -154,6 +177,10 @@ const searchKeyword = ref("");
 const searchBusy = ref(false);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
 const sourceTransferBusy = ref(false);
+const sourceAuditBusy = ref(false);
+const sourceAudit = ref<SourceAuditReport[] | null>(null);
+const sourceCacheBusy = ref(false);
+const sourceCacheStatus = ref<SourceCacheStatus | null>(null);
 const remoteBusy = ref(false);
 const remoteBook = ref<RemoteBookDetail | null>(null);
 const remoteChapter = ref<RemoteChapterContent | null>(null);
@@ -220,7 +247,7 @@ async function loadBooks() {
 async function openSources() {
   view.value = "sources";
   errorMessage.value = "";
-  await loadSources();
+  await Promise.all([loadSources(), refreshSourceCacheStatus()]);
 }
 
 async function loadSources() {
@@ -232,6 +259,35 @@ async function loadSources() {
   } finally {
     sourceListBusy.value = false;
   }
+}
+
+async function runSourceAudit() {
+  sourceAuditBusy.value = true;
+  errorMessage.value = "";
+  try {
+    sourceAudit.value = await invoke<SourceAuditReport[]>("audit_sources");
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceAuditBusy.value = false;
+  }
+}
+
+async function refreshSourceCacheStatus() {
+  sourceCacheBusy.value = true;
+  try {
+    sourceCacheStatus.value = await invoke<SourceCacheStatus>("get_source_cache_status");
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceCacheBusy.value = false;
+  }
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
 function selectSource(source: SourceSummary) {
@@ -814,6 +870,12 @@ function nextChapter() {
           <button class="import-button" type="button" :disabled="sourceBusy || sourceTransferBusy" @click="validateSource">
             {{ sourceBusy ? "校验中…" : "校验 JSON" }}
           </button>
+          <button class="secondary-button" type="button" :disabled="sourceAuditBusy || sourceTransferBusy" @click="runSourceAudit">
+            {{ sourceAuditBusy ? "审计中…" : "安全审计" }}
+          </button>
+          <button class="secondary-button" type="button" :disabled="sourceCacheBusy || sourceTransferBusy" @click="refreshSourceCacheStatus">
+            {{ sourceCacheBusy ? "读取中…" : "缓存状态" }}
+          </button>
         </div>
       </header>
 
@@ -885,6 +947,39 @@ function nextChapter() {
           </template>
         </section>
       </div>
+
+      <section v-if="sourceAudit || sourceCacheStatus" class="source-audit-panel" aria-live="polite">
+        <div class="source-section-heading">
+          <div>
+            <span class="eyebrow">SECURITY & CACHE</span>
+            <h2>安全与缓存状态</h2>
+          </div>
+          <span class="source-limit">只显示统计与审计摘要，不展示缓存正文</span>
+        </div>
+        <div class="source-audit-grid">
+          <article v-if="sourceCacheStatus" class="source-audit-card">
+            <span class="eyebrow">CACHE OBSERVABILITY</span>
+            <strong>{{ sourceCacheStatus.entries }} / {{ sourceCacheStatus.max_entries }} 条</strong>
+            <p>{{ formatBytes(sourceCacheStatus.bytes) }} / {{ formatBytes(sourceCacheStatus.max_bytes) }} · 过期 {{ sourceCacheStatus.expired_entries }} 条</p>
+            <button class="source-link-button" type="button" :disabled="sourceCacheBusy" @click="refreshSourceCacheStatus">
+              {{ sourceCacheBusy ? "刷新中…" : "刷新" }}
+            </button>
+          </article>
+          <article v-if="sourceAudit" class="source-audit-card source-audit-list">
+            <span class="eyebrow">SOURCE SECURITY</span>
+            <p v-if="!sourceAudit.length">没有可审计书源。</p>
+            <div v-for="audit in sourceAudit" :key="audit.source_id" class="source-audit-row">
+              <div>
+                <strong>{{ audit.source_name }}</strong>
+                <span :class="{ enabled: audit.pass }">{{ audit.pass ? "通过" : "需修正" }}</span>
+              </div>
+              <p>权限：{{ audit.permission_status }} · 主机：{{ audit.hosts.join("、") || "无" }}</p>
+              <p v-if="audit.errors.length" class="source-inline-error">{{ audit.errors.join("；") }}</p>
+              <p v-if="audit.warnings.length" class="source-audit-warning">{{ audit.warnings.join("；") }}</p>
+            </div>
+          </article>
+        </div>
+      </section>
 
       <section class="source-debug">
         <div class="source-debug-heading">
@@ -1348,6 +1443,73 @@ function nextChapter() {
   background: rgba(19, 27, 42, 0.72);
 }
 
+.source-audit-panel {
+  margin-top: 18px;
+  padding: 22px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background: rgba(19, 27, 42, 0.72);
+}
+
+.source-audit-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.7fr) minmax(0, 1.3fr);
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.source-audit-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 12px;
+  background: rgba(12, 17, 27, 0.48);
+}
+
+.source-audit-card strong {
+  display: block;
+  margin-top: 10px;
+  font-size: 20px;
+}
+
+.source-audit-card p {
+  margin: 8px 0 0;
+  color: #8391a6;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.source-audit-list {
+  display: grid;
+  gap: 10px;
+}
+
+.source-audit-row {
+  padding: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 9px;
+}
+
+.source-audit-row > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.source-audit-row span {
+  color: #ffcf9b;
+  font-size: 10px;
+}
+
+.source-audit-row span.enabled {
+  color: #b9f6dd;
+}
+
+.source-audit-warning {
+  color: #e3c788 !important;
+}
+
+
 .source-debug-heading {
   display: flex;
   align-items: end;
@@ -1541,6 +1703,10 @@ function nextChapter() {
   .source-debug-heading {
     align-items: start;
     flex-direction: column;
+  }
+
+  .source-audit-grid {
+    grid-template-columns: 1fr;
   }
 }
 
