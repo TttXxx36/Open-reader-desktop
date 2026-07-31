@@ -971,7 +971,9 @@ function nextChapter() {
             <div v-for="audit in sourceAudit" :key="audit.source_id" class="source-audit-row">
               <div>
                 <strong>{{ audit.source_name }}</strong>
-                <span :class="{ enabled: audit.pass }">{{ audit.pass ? "通过" : "需修正" }}</span>
+                <span :class="{ enabled: audit.pass && !audit.warnings.length }">
+                  {{ audit.pass && !audit.warnings.length ? "通过" : audit.pass ? "需关注" : "需修正" }}
+                </span>
               </div>
               <p>权限：{{ audit.permission_status }} · 主机：{{ audit.hosts.join("、") || "无" }}</p>
               <p v-if="audit.errors.length" class="source-inline-error">{{ audit.errors.join("；") }}</p>
