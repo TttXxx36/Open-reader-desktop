@@ -109,6 +109,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - Windows 安装包当前仍是发布阻塞项：`bundle.active=false`，因为 `src-tauri/icons/icon.ico`、签名证书和干净安装/升级/卸载环境尚未准备。不要在这些验收完成前发布安装包。
 - 当前可执行验收：`npm run typecheck`、`npm run build`、`npm run test:rust`、`cargo fmt --check --manifest-path src-tauri/Cargo.toml` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
 
+- 完整的安装包、签名和回滚验收项见 [Windows 发布验收清单](release-checklist.md)。
+
 ## 本地数据
 
 开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
