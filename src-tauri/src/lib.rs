@@ -1,8 +1,10 @@
 mod db;
 mod library;
+mod source;
 
 use db::{BookDetail, BookSummary, ChapterContent, Database};
 use library::parse_book_bytes;
+use source::{BookSource, SourceEngine, SourceValidation, SourcePreview};
 use tauri::Manager;
 
 #[tauri::command]
@@ -61,6 +63,17 @@ fn save_progress(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn validate_book_source(config_json: String) -> SourceValidation {
+    source::validate_source_json(&config_json)
+}
+
+#[tauri::command]
+async fn fetch_source_preview(url: String) -> Result<SourcePreview, String> {
+    let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    engine.fetch(&url).await.map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -77,7 +90,9 @@ pub fn run() {
             import_book,
             get_book_detail,
             get_chapter_content,
-            save_progress
+            save_progress,
+            validate_book_source,
+            fetch_source_preview
         ])
         .run(tauri::generate_context!())
         .expect("error while running Open Reader Desktop");
