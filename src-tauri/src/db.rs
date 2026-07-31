@@ -1,9 +1,11 @@
-use rusqlite::{Connection, OptionalExtension};
+use crate::library::ParsedBook;
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::{
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 
@@ -15,46 +17,268 @@ pub enum DbError {
     Io(#[from] std::io::Error),
     #[error("database lock is unavailable")]
     Lock,
+    #[error("book not found")]
+    NotFound,
 }
 
 pub struct Database {
     connection: Mutex<Connection>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct LibrarySummary {
-    pub book_count: i64,
-    pub last_opened: Option<String>,
+#[derive(Debug, Clone, Serialize)]
+pub struct BookSummary {
+    pub id: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub format: String,
+    pub chapter_count: i64,
+    pub current_chapter: i64,
+    pub progress: f64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChapterSummary {
+    pub id: String,
+    pub title: String,
+    pub index: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookDetail {
+    pub book: BookSummary,
+    pub chapters: Vec<ChapterSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChapterContent {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    pub index: i64,
+    pub total: i64,
 }
 
 impl Database {
     pub fn open(app_data_dir: &Path) -> Result<Self, DbError> {
         fs::create_dir_all(app_data_dir)?;
         let database_path: PathBuf = app_data_dir.join("open-reader.db");
-        let connection = Connection::open(database_path)?;
-        connection.execute_batch(include_str!("../migrations/0001_init.sql"))?;
+        let mut connection = Connection::open(database_path)?;
+        apply_migrations(&mut connection)?;
+
         Ok(Self {
             connection: Mutex::new(connection),
         })
     }
 
-    pub fn summary(&self) -> Result<LibrarySummary, DbError> {
+    pub fn list_books(&self) -> Result<Vec<BookSummary>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let book_count = connection.query_row(
-            "SELECT COUNT(*) FROM books",
-            [],
-            |row| row.get::<_, i64>(0),
+        let mut statement = connection.prepare(
+            "SELECT b.id, b.title, b.author, b.format, COUNT(c.id),                     b.current_chapter, b.progress, b.updated_at
+             FROM books b
+             LEFT JOIN chapters c ON c.book_id = b.id
+             GROUP BY b.id
+             ORDER BY b.updated_at DESC",
         )?;
-        let last_opened = connection
-            .query_row("SELECT MAX(updated_at) FROM books", [], |row| {
-                row.get::<_, Option<String>>(0)
-            })
-            .optional()?
-            .flatten();
-
-        Ok(LibrarySummary {
-            book_count,
-            last_opened,
-        })
+        let rows = statement.query_map([], book_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
+
+    pub fn import_book(&self, source_name: &str, parsed: ParsedBook) -> Result<BookSummary, DbError> {
+        let book_id = format!(
+            "book-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let ParsedBook {
+            title,
+            author,
+            format,
+            chapters,
+        } = parsed;
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+
+        transaction.execute(
+            "DELETE FROM chapters WHERE book_id IN (SELECT id FROM books WHERE path = ?1)",
+            params![source_name],
+        )?;
+        transaction.execute("DELETE FROM books WHERE path = ?1", params![source_name])?;
+        transaction.execute(
+            "INSERT INTO books (id, title, author, path, format, current_chapter, progress)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, 0)",
+            params![book_id, title, author, source_name, format],
+        )?;
+
+        for (index, chapter) in chapters.into_iter().enumerate() {
+            let chapter_id = format!("{book_id}-chapter-{index}");
+            transaction.execute(
+                "INSERT INTO chapters (id, book_id, chapter_index, title, content)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    chapter_id,
+                    book_id,
+                    index as i64,
+                    chapter.title,
+                    chapter.content
+                ],
+            )?;
+        }
+
+        transaction.commit()?;
+        drop(connection);
+        self.get_book_summary(&book_id)
+    }
+
+    pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let book = connection
+            .query_row(
+                "SELECT b.id, b.title, b.author, b.format, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
+                 FROM books b
+                 LEFT JOIN chapters c ON c.book_id = b.id
+                 WHERE b.id = ?1
+                 GROUP BY b.id",
+                params![book_id],
+                book_from_row,
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)?;
+
+        let mut statement = connection.prepare(
+            "SELECT id, title, chapter_index
+             FROM chapters
+             WHERE book_id = ?1
+             ORDER BY chapter_index",
+        )?;
+        let chapters = statement
+            .query_map(params![book_id], |row| {
+                Ok(ChapterSummary {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    index: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(BookDetail { book, chapters })
+    }
+
+    pub fn get_chapter_content(
+        &self,
+        book_id: &str,
+        chapter_id: &str,
+    ) -> Result<ChapterContent, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let total: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM chapters WHERE book_id = ?1",
+            params![book_id],
+            |row| row.get(0),
+        )?;
+        connection
+            .query_row(
+                "SELECT id, title, content, chapter_index
+                 FROM chapters
+                 WHERE book_id = ?1 AND id = ?2",
+                params![book_id, chapter_id],
+                |row| {
+                    Ok(ChapterContent {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        content: row.get(2)?,
+                        index: row.get(3)?,
+                        total,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)
+    }
+
+    pub fn save_progress(
+        &self,
+        book_id: &str,
+        chapter_id: &str,
+        current_chapter: i64,
+        progress: f64,
+    ) -> Result<(), DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let changed = connection.execute(
+            "UPDATE books
+             SET current_chapter = ?1, progress = ?2, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?3
+               AND EXISTS (SELECT 1 FROM chapters WHERE id = ?4 AND book_id = ?3)",
+            params![current_chapter, progress.clamp(0.0, 1.0), book_id, chapter_id],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        Ok(())
+    }
+
+    fn get_book_summary(&self, book_id: &str) -> Result<BookSummary, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection
+            .query_row(
+                "SELECT b.id, b.title, b.author, b.format, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
+                 FROM books b
+                 LEFT JOIN chapters c ON c.book_id = b.id
+                 WHERE b.id = ?1
+                 GROUP BY b.id",
+                params![book_id],
+                book_from_row,
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)
+    }
+}
+
+fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+           version INTEGER PRIMARY KEY NOT NULL,
+           applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+         );",
+    )?;
+
+    for (version, sql) in [
+        (1_i64, include_str!("../migrations/0001_init.sql")),
+        (2_i64, include_str!("../migrations/0002_library.sql")),
+    ] {
+        let applied: Option<i64> = connection
+            .query_row(
+                "SELECT version FROM schema_migrations WHERE version = ?1",
+                params![version],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if applied.is_none() {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(sql)?;
+            transaction.execute(
+                "INSERT INTO schema_migrations (version) VALUES (?1)",
+                params![version],
+            )?;
+            transaction.commit()?;
+        }
+    }
+
+    Ok(())
+}
+
+fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
+    Ok(BookSummary {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        author: row.get(2)?,
+        format: row.get(3)?,
+        chapter_count: row.get(4)?,
+        current_chapter: row.get(5)?,
+        progress: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
 }
