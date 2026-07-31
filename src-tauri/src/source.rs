@@ -583,13 +583,13 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
     );
 
     if source.book_info_url.is_none() {
-        warnings.push("未配置 bookInfoUrl，M4 前无法完成详情链路".to_string());
+        warnings.push("未配置 bookInfoUrl，端到端流程无法完成详情链路".to_string());
     }
     if source.toc_url.is_none() {
-        warnings.push("未配置 tocUrl，M4 前无法完成目录链路".to_string());
+        warnings.push("未配置 tocUrl，端到端流程无法完成目录链路".to_string());
     }
     if source.content_url.is_none() {
-        warnings.push("未配置 contentUrl，M4 前无法完成正文链路".to_string());
+        warnings.push("未配置 contentUrl，端到端流程无法完成正文链路".to_string());
     }
 
     SourceValidation {
