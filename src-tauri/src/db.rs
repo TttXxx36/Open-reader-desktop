@@ -224,6 +224,64 @@ impl Database {
         Ok(())
     }
 
+    pub fn get_source_cache(&self, cache_key: &str) -> Result<Option<String>, DbError> {
+        let now = unix_timestamp();
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let payload = connection
+            .query_row(
+                "SELECT payload
+                 FROM source_cache
+                 WHERE cache_key = ?1 AND expires_at > ?2",
+                params![cache_key, now],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if payload.is_none() {
+            connection.execute(
+                "DELETE FROM source_cache
+                 WHERE cache_key = ?1 AND expires_at <= ?2",
+                params![cache_key, now],
+            )?;
+        }
+
+        Ok(payload)
+    }
+
+    pub fn save_source_cache(
+        &self,
+        cache_key: &str,
+        source_id: &str,
+        kind: &str,
+        payload: &str,
+        ttl_secs: u64,
+    ) -> Result<(), DbError> {
+        let fetched_at = unix_timestamp();
+        let expires_at = fetched_at.saturating_add(ttl_secs.min(i64::MAX as u64) as i64);
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection.execute(
+            "INSERT INTO source_cache (cache_key, source_id, kind, payload, fetched_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(cache_key) DO UPDATE SET
+               source_id = excluded.source_id,
+               kind = excluded.kind,
+               payload = excluded.payload,
+               fetched_at = excluded.fetched_at,
+               expires_at = excluded.expires_at",
+            params![cache_key, source_id, kind, payload, fetched_at, expires_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_expired_source_cache(&self) -> Result<usize, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let changed = connection.execute(
+            "DELETE FROM source_cache WHERE expires_at <= ?1",
+            params![unix_timestamp()],
+        )?;
+        Ok(changed)
+    }
+
     pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let book = connection
@@ -344,6 +402,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
         (1_i64, include_str!("../migrations/0001_init.sql")),
         (2_i64, include_str!("../migrations/0002_library.sql")),
         (3_i64, include_str!("../migrations/0003_sources.sql")),
+        (4_i64, include_str!("../migrations/0004_source_cache.sql")),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -390,6 +449,14 @@ fn source_from_row(row: &Row<'_>) -> rusqlite::Result<SourceSummary> {
     })
 }
 
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .min(i64::MAX as u64) as i64
+}
+
 fn generated_id(prefix: &str) -> String {
     format!(
         "{prefix}-{}",
@@ -421,6 +488,19 @@ mod tests {
         assert_eq!(
             database.list_sources().expect("sources should list").len(),
             1
+        );
+        database
+            .save_source_cache("cache-key", &saved.id, "book", r#"{"title":"Fixture"}"#, 60)
+            .expect("cache should save");
+        assert_eq!(
+            database.get_source_cache("cache-key").expect("cache should read"),
+            Some(r#"{"title":"Fixture"}"#.to_string())
+        );
+        assert_eq!(
+            database
+                .clear_expired_source_cache()
+                .expect("cache cleanup should work"),
+            0
         );
 
         let disabled = database
