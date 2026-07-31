@@ -69,9 +69,7 @@ fn validate_book_source(config_json: String) -> SourceValidation {
 }
 
 #[tauri::command]
-fn list_sources(
-    database: tauri::State<'_, Database>,
-) -> Result<Vec<SourceSummary>, String> {
+fn list_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceSummary>, String> {
     database.list_sources().map_err(|error| error.to_string())
 }
 
@@ -105,10 +103,7 @@ fn set_source_enabled(
 }
 
 #[tauri::command]
-fn delete_source(
-    database: tauri::State<'_, Database>,
-    source_id: String,
-) -> Result<(), String> {
+fn delete_source(database: tauri::State<'_, Database>, source_id: String) -> Result<(), String> {
     database
         .delete_source(&source_id)
         .map_err(|error| error.to_string())
