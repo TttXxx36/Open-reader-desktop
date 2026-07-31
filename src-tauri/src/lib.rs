@@ -303,6 +303,9 @@ pub fn run() {
                 .app_data_dir()
                 .expect("unable to resolve the application data directory");
             let database = Database::open(&app_data_dir).expect("unable to initialize SQLite");
+            if let Err(error) = database.clear_expired_source_cache() {
+                eprintln!("unable to clear expired source cache: {error}");
+            }
             app.manage(database);
             Ok(())
         })
