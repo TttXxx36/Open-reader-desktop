@@ -87,6 +87,14 @@ interface RemoteChapter {
   index: number;
 }
 
+interface ChapterUpdateSummary {
+  changed: boolean;
+  fingerprint: string;
+  added: number;
+  removed: number;
+  retained: number;
+}
+
 interface RemoteBookDetail {
   source_id: string;
   source_name: string;
@@ -99,12 +107,18 @@ interface RemoteBookDetail {
   };
   chapters: RemoteChapter[];
   debug_steps: SourceDebugStep[];
+  chapter_fingerprint: string;
+  chapter_update: ChapterUpdateSummary | null;
+  stale: boolean;
+  refresh_error: string | null;
 }
 
 interface RemoteChapterContent {
   title: string;
   content: string;
   next_url: string | null;
+  stale: boolean;
+  refresh_error: string | null;
 }
 
 interface MultiSourceSearchResult {
@@ -426,7 +440,10 @@ async function refreshRemoteBook() {
       bookUrl: remoteBook.value.book_info.book_url,
       forceRefresh: true,
     });
-    const target = loaded.chapters.find((item) => item.url === currentUrl) ?? loaded.chapters[0];
+    const currentIndex = remoteChapterIndex();
+    const target = loaded.chapters.find((item) => item.url === currentUrl)
+      ?? loaded.chapters[Math.min(Math.max(currentIndex, 0), loaded.chapters.length - 1)]
+      ?? loaded.chapters[0];
     if (!target) {
       throw new Error("书源未返回可阅读章节");
     }
@@ -931,6 +948,21 @@ function nextChapter() {
           <button class="toolbar-button" type="button" @click="cycleTheme">{{ themeLabels[settings.theme] }}</button>
         </div>
       </header>
+
+      <div
+        v-if="remoteBook.stale || remoteBook.chapter_update || remoteChapter.stale"
+        class="reader-notices"
+        role="status"
+      >
+        <p v-if="remoteBook.stale || remoteChapter.stale" class="reader-stale-note">
+          刷新失败，正在显示缓存内容：{{ remoteBook.refresh_error || remoteChapter.refresh_error || "未知错误" }}
+        </p>
+        <p v-else-if="remoteBook.chapter_update" class="reader-update-note">
+          {{ remoteBook.chapter_update.changed ? "目录已更新" : "目录未变化" }}：
+          新增 {{ remoteBook.chapter_update.added }} 章，移除 {{ remoteBook.chapter_update.removed }} 章，
+          保留 {{ remoteBook.chapter_update.retained }} 章。
+        </p>
+      </div>
 
       <div class="reader-layout">
         <aside class="chapter-panel">
@@ -1704,6 +1736,30 @@ function nextChapter() {
 .toolbar-button:disabled {
   cursor: not-allowed;
   opacity: 0.35;
+}
+
+.reader-notices {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 14px;
+}
+
+.reader-notices p {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.reader-update-note {
+  color: #b9f6dd;
+  background: rgba(30, 101, 82, 0.24);
+}
+
+.reader-stale-note {
+  color: #ffcf9b;
+  background: rgba(139, 90, 34, 0.2);
 }
 
 .reader-layout {
