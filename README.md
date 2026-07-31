@@ -27,7 +27,7 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 
 - [x] 创建公开仓库并明确产品边界
 - [x] 初始化 Tauri + Vue + Rust 工程
-- [ ] 完成本地 TXT/EPUB 阅读 MVP
+- [x] 完成本地 TXT/EPUB 阅读 MVP
 - [ ] 完成单书源端到端流程
 - [ ] 完成多源搜索、缓存、替换规则和发布流程
 
@@ -38,7 +38,7 @@ npm install
 npm run tauri dev
 ```
 
-检查命令和 Windows/WebView2 环境说明见 [docs/development.md](docs/development.md)。
+M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。详细检查命令见 [docs/development.md](docs/development.md)。
 
 ## 参与开发
 
