@@ -41,3 +41,5 @@ jobs:
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
       - name: Cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
