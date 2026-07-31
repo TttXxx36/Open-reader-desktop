@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, time::Duration};
 use thiserror::Error;
-use url::Url;
+use url::{form_urlencoded, Url};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -516,7 +516,7 @@ fn render_url(
 }
 
 fn encode_keyword(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join("+")
+    form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 fn last_path_segment(value: &str) -> &str {
