@@ -23,6 +23,8 @@ jobs:
         run: npm run typecheck
       - name: Build frontend
         run: npm run build
+      - name: Release preflight
+        run: npm run verify:release
 
   rust:
     name: Rust checks
