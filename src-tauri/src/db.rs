@@ -307,9 +307,7 @@ impl Database {
             for row in rows {
                 let (key, length) = row?;
                 let bytes = usize::try_from(length.max(0)).unwrap_or(usize::MAX);
-                if kept_entries < max_entries
-                    && kept_bytes.saturating_add(bytes) <= max_bytes
-                {
+                if kept_entries < max_entries && kept_bytes.saturating_add(bytes) <= max_bytes {
                     kept_entries += 1;
                     kept_bytes = kept_bytes.saturating_add(bytes);
                 } else {
