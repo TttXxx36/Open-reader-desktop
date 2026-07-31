@@ -157,6 +157,14 @@ pub struct SourcePreview {
     pub body_preview: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourcePipelineResult {
+    pub search_results: Vec<SearchResult>,
+    pub book_info: BookInfo,
+    pub chapters: Vec<SourceChapter>,
+    pub first_chapter: SourceChapterContent,
+}
+
 pub struct SourceEngine {
     client: reqwest::Client,
     max_body_bytes: usize,
@@ -217,6 +225,149 @@ impl SourceEngine {
             content_type,
             bytes: body.len(),
             body_preview: preview,
+        })
+    }
+
+
+    pub async fn run_pipeline(
+        &self,
+        source: &BookSource,
+        keyword: &str,
+    ) -> Result<SourcePipelineResult, SourceError> {
+        let search_url = render_url(&source.search_url, Some(keyword), None, None, None);
+        let search_body = self.fetch_text(&search_url).await?;
+        let mut search_results = self.parse_search_html(source, &search_body)?;
+        for result in &mut search_results {
+            if let Some(url) = &result.book_url {
+                result.book_url = Some(absolutize_url(&search_url, url));
+            }
+        }
+
+        let first_result = search_results.first().ok_or(SourceError::NoMatch)?;
+        let book_url = first_result
+            .book_url
+            .clone()
+            .ok_or_else(|| SourceError::InvalidConfig("search result has no book URL".to_string()))?;
+        let book_info = self.fetch_book_info(source, &book_url).await?;
+        let chapters = self.fetch_toc(source, &book_url).await?;
+        let first_chapter = chapters.first().ok_or(SourceError::NoMatch)?;
+        let first_chapter_content = self.fetch_chapter_content(source, first_chapter).await?;
+
+        Ok(SourcePipelineResult {
+            search_results,
+            book_info,
+            chapters,
+            first_chapter: first_chapter_content,
+        })
+    }
+
+    async fn fetch_text(&self, url: &str) -> Result<String, SourceError> {
+        validate_url(url)?;
+        let response = self
+            .client
+            .get(expand_url_template(url))
+            .send()
+            .await?
+            .error_for_status()?;
+        let mut body = Vec::new();
+        let mut response = response;
+
+        while let Some(chunk) = response.chunk().await? {
+            if body.len() + chunk.len() > self.max_body_bytes {
+                return Err(SourceError::BodyTooLarge(self.max_body_bytes));
+            }
+            body.extend_from_slice(&chunk);
+        }
+
+        Ok(String::from_utf8_lossy(&body).into_owned())
+    }
+
+    async fn fetch_book_info(
+        &self,
+        source: &BookSource,
+        book_url: &str,
+    ) -> Result<BookInfo, SourceError> {
+        let template = source
+            .book_info_url
+            .as_deref()
+            .ok_or_else(|| SourceError::InvalidConfig("bookInfoUrl is required".to_string()))?;
+        let url = render_url(
+            template,
+            None,
+            Some(book_url),
+            Some(last_path_segment(book_url)),
+            None,
+        );
+        let body = self.fetch_text(&url).await?;
+        let rules = source
+            .book_info
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("bookInfo rules are required".to_string()))?;
+        let document = Html::parse_document(&body);
+
+        Ok(BookInfo {
+            title: extract_document_rule(&document, rules.title.as_ref())?
+                .unwrap_or_else(|| "未命名书籍".to_string()),
+            author: non_empty(extract_document_rule(&document, rules.author.as_ref())?),
+            intro: non_empty(extract_document_rule(&document, rules.intro.as_ref())?),
+            cover_url: non_empty(extract_document_rule(&document, rules.url.as_ref())?),
+            book_url: book_url.to_string(),
+        })
+    }
+
+    async fn fetch_toc(
+        &self,
+        source: &BookSource,
+        book_url: &str,
+    ) -> Result<Vec<SourceChapter>, SourceError> {
+        let template = source
+            .toc_url
+            .as_deref()
+            .ok_or_else(|| SourceError::InvalidConfig("tocUrl is required".to_string()))?;
+        let url = render_url(
+            template,
+            None,
+            Some(book_url),
+            Some(last_path_segment(book_url)),
+            None,
+        );
+        let body = self.fetch_text(&url).await?;
+        let rules = source
+            .toc
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("toc rules are required".to_string()))?;
+        parse_chapter_list(rules, &body, &url)
+    }
+
+    async fn fetch_chapter_content(
+        &self,
+        source: &BookSource,
+        chapter: &SourceChapter,
+    ) -> Result<SourceChapterContent, SourceError> {
+        let template = source
+            .content_url
+            .as_deref()
+            .ok_or_else(|| SourceError::InvalidConfig("contentUrl is required".to_string()))?;
+        let url = render_url(
+            template,
+            None,
+            None,
+            None,
+            Some(last_path_segment(&chapter.url)),
+        );
+        let body = self.fetch_text(&url).await?;
+        let rules = source
+            .content
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
+        let document = Html::parse_document(&body);
+        let content = extract_document_rule(&document, rules.content.as_ref())?
+            .ok_or(SourceError::NoMatch)?;
+
+        Ok(SourceChapterContent {
+            title: chapter.title.clone(),
+            content,
+            next_url: None,
         })
     }
 
@@ -284,6 +435,110 @@ impl SourceEngine {
 
         Ok(results)
     }
+}
+
+
+fn extract_document_rule(
+    document: &Html,
+    rule: Option<&SourceRule>,
+) -> Result<Option<String>, SourceError> {
+    let Some(rule) = rule else {
+        return Ok(None);
+    };
+    let selector = parse_selector(rule.selector())?;
+    let Some(element) = document.select(&selector).next() else {
+        return Ok(None);
+    };
+    Ok(Some(extract_from_element(element, rule)?))
+}
+
+fn parse_chapter_list(
+    rules: &PageRules,
+    body: &str,
+    base_url: &str,
+) -> Result<Vec<SourceChapter>, SourceError> {
+    let document = Html::parse_document(body);
+    let item_selector = parse_selector(rules.item.as_deref().unwrap_or("body"))?;
+    let mut chapters = Vec::new();
+
+    for (index, item) in document.select(&item_selector).enumerate() {
+        let Some(title) = extract_document_rule_from_element(item, rules.title.as_ref())? else {
+            continue;
+        };
+        let url = extract_document_rule_from_element(item, rules.url.as_ref())?
+            .map(|value| absolutize_url(base_url, &value))
+            .unwrap_or_else(|| format!("{base_url}#chapter-{index}"));
+        chapters.push(SourceChapter { title, url, index });
+    }
+
+    Ok(chapters)
+}
+
+fn extract_document_rule_from_element(
+    element: ElementRef<'_>,
+    rule: Option<&SourceRule>,
+) -> Result<Option<String>, SourceError> {
+    let Some(rule) = rule else {
+        return Ok(None);
+    };
+    Ok(Some(extract_from_element(element, rule)?))
+}
+
+fn render_url(
+    template: &str,
+    keyword: Option<&str>,
+    book_url: Option<&str>,
+    book_id: Option<&str>,
+    chapter_id: Option<&str>,
+) -> String {
+    let mut result = template.to_string();
+    if let Some(keyword) = keyword {
+        result = result
+            .replace("{{keyword}}", &encode_keyword(keyword))
+            .replace("{{key}}", &encode_keyword(keyword));
+    }
+    if let Some(book_url) = book_url {
+        result = result
+            .replace("{{bookUrl}}", book_url)
+            .replace("{{book_url}}", book_url);
+    }
+    if let Some(book_id) = book_id {
+        result = result
+            .replace("{{bookId}}", book_id)
+            .replace("{{book_id}}", book_id);
+    }
+    if let Some(chapter_id) = chapter_id {
+        result = result
+            .replace("{{chapterId}}", chapter_id)
+            .replace("{{chapter_id}}", chapter_id);
+    }
+    result
+}
+
+fn encode_keyword(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join("+")
+}
+
+fn last_path_segment(value: &str) -> &str {
+    value
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .split('?')
+        .next()
+        .unwrap_or_default()
+}
+
+fn absolutize_url(base_url: &str, value: &str) -> String {
+    if value.starts_with("http://") || value.starts_with("https://") {
+        return value.to_string();
+    }
+    Url::parse(base_url)
+        .ok()
+        .and_then(|base| base.join(value).ok())
+        .map(|url| url.to_string())
+        .unwrap_or_else(|| value.to_string())
 }
 
 pub fn validate_source_json(input: &str) -> SourceValidation {
@@ -571,5 +826,68 @@ mod tests {
             )
             .expect("json should parse");
         assert_eq!(values, vec!["第一本", "第二本"]);
+    #[tokio::test]
+    async fn runs_authorized_fixture_pipeline() {
+        let (base_url, server) = spawn_fixture_server();
+        let mut source: BookSource =
+            serde_json::from_str(include_str!("../fixtures/sample_source.json"))
+                .expect("fixture source should parse");
+        source.search_url = format!("{base_url}/search?q={{keyword}}");
+        source.book_info_url = Some(format!("{base_url}/book/{{bookId}}"));
+        source.toc_url = Some(format!("{base_url}/book/{{bookId}}/toc"));
+        source.content_url = Some(format!("{base_url}/chapter/{{chapterId}}"));
+
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .run_pipeline(&source, "demo")
+            .await
+            .expect("fixture pipeline should succeed");
+
+        assert_eq!(result.search_results.len(), 1);
+        assert_eq!(result.book_info.title, "测试书");
+        assert_eq!(result.chapters[0].title, "第一章");
+        assert!(result.first_chapter.content.contains("这是正文"));
+        server.join().expect("fixture server should stop");
+    }
+
+    fn spawn_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(4) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else if path == "/book/1" {
+                    r#"<h1>测试书</h1><div class="author">作者甲</div><p class="intro">一本用于 M4 的公开测试书</p>"#
+                } else if path == "/book/1/toc" {
+                    r#"<ol class="chapters"><li><a href="/chapter/1">第一章</a></li></ol>"#
+                } else {
+                    r#"<article class="content">这是正文，用于验证搜索到正文的完整链路。</article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{address}"), server)
+    }
+
     }
 }
