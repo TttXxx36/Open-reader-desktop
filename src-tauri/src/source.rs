@@ -786,7 +786,13 @@ fn extract_document_rule_from_element(
 pub fn chapter_fingerprint(chapters: &[SourceChapter]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for chapter in chapters {
-        for byte in chapter_identity(chapter).as_bytes() {
+        let fingerprint_value = format!(
+            "index:{}|title:{}|url:{}",
+            chapter.index,
+            chapter.title.trim(),
+            chapter.url.trim()
+        );
+        for byte in fingerprint_value.as_bytes() {
             hash ^= u64::from(*byte);
             hash = hash.wrapping_mul(0x100000001b3);
         }
