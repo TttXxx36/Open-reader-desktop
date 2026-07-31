@@ -19,4 +19,4 @@
 - `get_source_cache_status` 只返回缓存条目数、payload 字节数、过期条目数和容量上限，不返回缓存正文。
 - Rust 受限客户端只允许 HTTP/HTTPS，默认超时 15 秒、响应体上限 2 MiB，最多跟随 5 次重定向；敏感请求头会被拒绝。
 - WebView CSP 不允许任意 HTTPS `connect-src`；所有远程书源请求都通过 Rust 客户端发起。
-- 当前 `bundle.active=false`，因为图标、签名资产和干净 Windows 安装回归尚未准备完成；未完成这些验收前不会发布安装包。
+- 当前 `bundle.active=true`，GitHub Actions 可在版本标签上发布未签名的 Windows 安装器和便携 ZIP；签名暂缓，Release 标题与说明会明确标注 unsigned，干净 Windows 安装回归仍需完成。
