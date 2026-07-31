@@ -564,6 +564,12 @@ mod tests {
         }
         assert_eq!(
             database
+                .get_source_cache_any("cache-key")
+                .expect("stale cache should read"),
+            Some(r#"{"title":"Fixture"}"#.to_string())
+        );
+        assert_eq!(
+            database
                 .clear_expired_source_cache()
                 .expect("cache cleanup should work"),
             1
@@ -573,12 +579,6 @@ mod tests {
                 .get_source_cache("cache-key")
                 .expect("expired cache should miss"),
             None
-        );
-        assert_eq!(
-            database
-                .get_source_cache_any("cache-key")
-                .expect("stale cache should read"),
-            Some(r#"{"title":"Fixture"}"#.to_string())
         );
 
         for (key, payload) in [("a", "1111"), ("b", "2222"), ("c", "3333")] {
