@@ -123,6 +123,7 @@ const books = ref<BookSummary[]>([]);
 const detail = ref<BookDetail | null>(null);
 const chapter = ref<ChapterContent | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
+const sourceImportInput = ref<HTMLInputElement | null>(null);
 const status = ref("正在加载书架…");
 const errorMessage = ref("");
 const isImporting = ref(false);
@@ -138,6 +139,7 @@ const sourcePipeline = ref<SourcePipelineResult | null>(null);
 const searchKeyword = ref("");
 const searchBusy = ref(false);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
+const sourceTransferBusy = ref(false);
 const remoteBusy = ref(false);
 const remoteBook = ref<RemoteBookDetail | null>(null);
 const remoteChapter = ref<RemoteChapterContent | null>(null);
@@ -301,6 +303,58 @@ function clearSearch() {
   searchKeyword.value = "";
 }
 
+async function exportSources() {
+  sourceTransferBusy.value = true;
+  errorMessage.value = "";
+  try {
+    const payload = await invoke<string>("export_sources");
+    const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "open-reader-sources-" + new Date().toISOString().slice(0, 10) + ".json";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceTransferBusy.value = false;
+  }
+}
+
+function openSourceImportPicker() {
+  sourceImportInput.value?.click();
+}
+
+async function importSourceFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+
+  if (file.size > 2 * 1024 * 1024) {
+    errorMessage.value = "书源文件超过 2 MB 限制";
+    input.value = "";
+    return;
+  }
+
+  sourceTransferBusy.value = true;
+  errorMessage.value = "";
+  try {
+    const imported = await invoke<SourceSummary[]>("import_sources", {
+      bundleJson: await file.text(),
+    });
+    await loadSources();
+    if (imported[0]) {
+      selectSource(imported[0]);
+    }
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceTransferBusy.value = false;
+    input.value = "";
+  }
+}
+
 async function openRemoteBook(item: UnifiedSearchItem) {
   if (!item.book_url || remoteBusy.value) return;
 
@@ -314,6 +368,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     const loaded = await invoke<RemoteBookDetail>("fetch_source_book", {
       sourceId: item.source_id,
       bookUrl: item.book_url,
+      forceRefresh: false,
     });
     const firstChapter = loaded.chapters[0];
     if (!firstChapter) {
@@ -323,6 +378,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     const firstContent = await invoke<RemoteChapterContent>("fetch_source_chapter", {
       sourceId: loaded.source_id,
       chapter: firstChapter,
+      forceRefresh: false,
     });
     remoteBook.value = loaded;
     remoteChapterRef.value = firstChapter;
@@ -339,7 +395,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
   }
 }
 
-async function loadRemoteChapter(chapterItem: RemoteChapter) {
+async function loadRemoteChapter(chapterItem: RemoteChapter, forceRefresh = false) {
   if (!remoteBook.value || remoteBusy.value) return;
 
   remoteBusy.value = true;
@@ -348,8 +404,41 @@ async function loadRemoteChapter(chapterItem: RemoteChapter) {
     remoteChapter.value = await invoke<RemoteChapterContent>("fetch_source_chapter", {
       sourceId: remoteBook.value.source_id,
       chapter: chapterItem,
+      forceRefresh,
     });
     remoteChapterRef.value = chapterItem;
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    remoteBusy.value = false;
+  }
+}
+
+async function refreshRemoteBook() {
+  if (!remoteBook.value || remoteBusy.value) return;
+
+  const currentUrl = remoteChapterRef.value?.url;
+  remoteBusy.value = true;
+  errorMessage.value = "";
+  try {
+    const loaded = await invoke<RemoteBookDetail>("fetch_source_book", {
+      sourceId: remoteBook.value.source_id,
+      bookUrl: remoteBook.value.book_info.book_url,
+      forceRefresh: true,
+    });
+    const target = loaded.chapters.find((item) => item.url === currentUrl) ?? loaded.chapters[0];
+    if (!target) {
+      throw new Error("书源未返回可阅读章节");
+    }
+
+    const content = await invoke<RemoteChapterContent>("fetch_source_chapter", {
+      sourceId: loaded.source_id,
+      chapter: target,
+      forceRefresh: true,
+    });
+    remoteBook.value = loaded;
+    remoteChapterRef.value = target;
+    remoteChapter.value = content;
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
@@ -582,6 +671,13 @@ function nextChapter() {
         accept=".txt,.epub,text/plain,application/epub+zip"
         @change="importFile"
       />
+      <input
+        ref="sourceImportInput"
+        class="file-input"
+        type="file"
+        accept=".json,application/json"
+        @change="importSourceFile"
+      />
 
       <header class="topbar">
         <div>
@@ -649,7 +745,7 @@ function nextChapter() {
             {{ failure.source_name }}：{{ failure.message }}
           </p>
         </div>
-        <p class="search-results-note">当前版本只展示统一搜索结果，详情与阅读接入将在后续里程碑完成。</p>
+        <p class="search-results-note">有书籍链接的结果可直接打开详情和章节阅读；无链接结果仅展示元数据。</p>
       </section>
 
       <section v-if="books.length" class="library-grid" aria-label="本地书架">
@@ -689,10 +785,16 @@ function nextChapter() {
           <h1>书源</h1>
         </div>
         <div class="source-toolbar-actions">
-          <button class="secondary-button" type="button" :disabled="sourceBusy" @click="saveSource">
+          <button class="secondary-button" type="button" :disabled="sourceTransferBusy" @click="openSourceImportPicker">
+            {{ sourceTransferBusy ? "处理中…" : "导入 JSON" }}
+          </button>
+          <button class="secondary-button" type="button" :disabled="sourceTransferBusy" @click="exportSources">
+            {{ sourceTransferBusy ? "处理中…" : "导出 JSON" }}
+          </button>
+          <button class="secondary-button" type="button" :disabled="sourceBusy || sourceTransferBusy" @click="saveSource">
             {{ sourceBusy ? "保存中…" : "保存书源" }}
           </button>
-          <button class="import-button" type="button" :disabled="sourceBusy" @click="validateSource">
+          <button class="import-button" type="button" :disabled="sourceBusy || sourceTransferBusy" @click="validateSource">
             {{ sourceBusy ? "校验中…" : "校验 JSON" }}
           </button>
         </div>
@@ -823,6 +925,9 @@ function nextChapter() {
         <div class="reader-controls">
           <label>字号 <input v-model.number="settings.fontSize" type="range" min="15" max="30" step="1" /></label>
           <label>行距 <input v-model.number="settings.lineHeight" type="range" min="1.4" max="2.4" step="0.1" /></label>
+          <button class="toolbar-button" type="button" :disabled="remoteBusy" @click="refreshRemoteBook">
+            {{ remoteBusy ? "刷新中…" : "刷新内容" }}
+          </button>
           <button class="toolbar-button" type="button" @click="cycleTheme">{{ themeLabels[settings.theme] }}</button>
         </div>
       </header>
