@@ -1226,7 +1226,8 @@ mod tests {
             },
         ];
 
-        let content = apply_replace_rules("  正文   内部标记  ", &rules).expect("replace should work");
+        let content =
+            apply_replace_rules("  正文   内部标记  ", &rules).expect("replace should work");
         assert_eq!(content, " 正文  ");
     }
 
@@ -1240,7 +1241,10 @@ mod tests {
             }"#,
         );
         assert!(!result.valid);
-        assert!(result.errors.iter().any(|error| error.contains("replaceRules[0]")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("replaceRules[0]")));
     }
 
     #[test]
