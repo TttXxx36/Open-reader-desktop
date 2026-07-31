@@ -650,7 +650,10 @@ fn search_result_key(item: &UnifiedSearchResult) -> String {
     let title = normalize_search_text(&item.title);
     let author = normalize_search_text(item.author.as_deref().unwrap_or_default());
     if title.is_empty() && author.is_empty() {
-        return format!("url:{}", normalize_search_text(item.book_url.as_deref().unwrap_or_default()));
+        return format!(
+            "url:{}",
+            normalize_search_text(item.book_url.as_deref().unwrap_or_default())
+        );
     }
     format!("{}|{}", title, author)
 }
