@@ -1,0 +1,284 @@
+name: Windows installer smoke
+
+on:
+  workflow_run:
+    workflows: ["Windows release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: "Successful Windows release workflow run ID to test"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: windows-installer-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Install and package smoke tests
+    if: \${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Download release artifact
+        shell: pwsh
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          if ("\${{ github.event_name }}" -eq "workflow_run") {
+            $runId = "\${{ github.event.workflow_run.id }}"
+          } else {
+            $runId = "\${{ inputs.release_run_id }}"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($runId)) {
+            throw "A successful Windows release run ID is required"
+          }
+
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+          gh run download $runId --repo $env:GITHUB_REPOSITORY --dir $artifactRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to download artifacts from workflow run $runId"
+          }
+
+      - name: Verify package files and checksums
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $manifest = Join-Path $artifactRoot "release-sha256.txt"
+          if (-not (Test-Path -LiteralPath $manifest)) {
+            throw "release-sha256.txt was not found"
+          }
+
+          $nsis = Get-ChildItem -LiteralPath $artifactRoot -Filter "*-setup.exe" -File -Recurse |
+            Select-Object -First 1
+          $msi = Get-ChildItem -LiteralPath $artifactRoot -Filter "*.msi" -File -Recurse |
+            Select-Object -First 1
+          $portable = Get-ChildItem -LiteralPath $artifactRoot -Filter "*-portable.zip" -File -Recurse |
+            Select-Object -First 1
+
+          foreach ($asset in @($nsis, $msi, $portable)) {
+            if ($null -eq $asset) {
+              throw "Required release asset is missing"
+            }
+            if ($asset.Length -lt 1024) {
+              throw "Release asset is unexpectedly small: $($asset.FullName)"
+            }
+          }
+
+          foreach ($line in Get-Content -LiteralPath $manifest) {
+            if ([string]::IsNullOrWhiteSpace($line)) {
+              continue
+            }
+            if ($line -notmatch "^([0-9a-fA-F]{64})\s{2}(.+)$") {
+              throw "Malformed checksum line: $line"
+            }
+
+            $expected = $Matches[1].ToLowerInvariant()
+            $relative = $Matches[2]
+            $path = Join-Path $artifactRoot $relative
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Checksum entry points to a missing file: $relative"
+            }
+
+            $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) {
+              throw "SHA-256 mismatch for $relative"
+            }
+          }
+
+          "NSIS: $($nsis.FullName)"
+          "MSI: $($msi.FullName)"
+          "Portable: $($portable.FullName)"
+          "Checksum manifest: verified"
+
+      - name: Portable launch smoke test
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $portable = Get-ChildItem -LiteralPath $artifactRoot -Filter "*-portable.zip" -File -Recurse |
+            Select-Object -First 1
+          $portableRoot = Join-Path $env:RUNNER_TEMP "open-reader-portable"
+          if (Test-Path -LiteralPath $portableRoot) {
+            Remove-Item -LiteralPath $portableRoot -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $portable.FullName -DestinationPath $portableRoot -Force
+
+          $portableExe = Join-Path $portableRoot "Open-Reader-Desktop.exe"
+          foreach ($required in @($portableExe, (Join-Path $portableRoot "LICENSE"), (Join-Path $portableRoot "README.md"))) {
+            if (-not (Test-Path -LiteralPath $required)) {
+              throw "Portable package is missing $required"
+            }
+          }
+
+          $process = Start-Process -FilePath $portableExe -PassThru
+          try {
+            Start-Sleep -Seconds 5
+            if ($process.HasExited) {
+              throw "Portable executable exited during the launch smoke test with code $($process.ExitCode)"
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: NSIS install, launch, uninstall and data retention
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $nsis = Get-ChildItem -LiteralPath $artifactRoot -Filter "*-setup.exe" -File -Recurse |
+            Select-Object -First 1
+          $installRoot = Join-Path $env:RUNNER_TEMP "open-reader-nsis-install"
+          if (Test-Path -LiteralPath $installRoot) {
+            Remove-Item -LiteralPath $installRoot -Recurse -Force
+          }
+
+          $installer = Start-Process -FilePath $nsis.FullName -ArgumentList "/S", "/D=$installRoot" -Wait -PassThru
+          if ($installer.ExitCode -ne 0) {
+            throw "NSIS installer failed with exit code $($installer.ExitCode)"
+          }
+
+          $installedExe = Get-ChildItem -LiteralPath $installRoot -Filter "*.exe" -File -Recurse |
+            Where-Object { $_.Name -notmatch "^(uninstall|unins).*\.exe$" } |
+            Select-Object -First 1
+          $uninstaller = Get-ChildItem -LiteralPath $installRoot -Filter "*.exe" -File -Recurse |
+            Where-Object { $_.Name -match "^(uninstall|unins).*\.exe$" } |
+            Select-Object -First 1
+          if ($null -eq $installedExe -or $null -eq $uninstaller) {
+            throw "NSIS installation did not produce an executable and uninstaller"
+          }
+
+          $dataRoot = Join-Path $env:APPDATA "com.tttxxx36.openreaderdesktop"
+          $sentinel = Join-Path $dataRoot "installer-smoke-sentinel.txt"
+          New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
+          Set-Content -LiteralPath $sentinel -Value "installer-smoke" -Encoding utf8
+
+          $process = Start-Process -FilePath $installedExe.FullName -PassThru
+          try {
+            Start-Sleep -Seconds 5
+            if ($process.HasExited) {
+              throw "NSIS-installed executable exited during launch smoke test with code $($process.ExitCode)"
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) {
+            throw "NSIS uninstaller failed with exit code $($uninstall.ExitCode)"
+          }
+          Start-Sleep -Seconds 2
+          if (Test-Path -LiteralPath $installedExe.FullName) {
+            throw "NSIS uninstaller left the application executable behind"
+          }
+          if (-not (Test-Path -LiteralPath $sentinel)) {
+            throw "NSIS uninstall removed the application data sentinel"
+          }
+
+      - name: MSI install, launch, uninstall and data retention
+        shell: pwsh
+        run: |
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $msi = Get-ChildItem -LiteralPath $artifactRoot -Filter "*.msi" -File -Recurse |
+            Select-Object -First 1
+
+          $msiArgs = '/i "' + $msi.FullName + '" /qn /norestart'
+          $install = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -ArgumentList $msiArgs -Wait -PassThru
+          if ($install.ExitCode -notin @(0, 3010)) {
+            throw "MSI installer failed with exit code $($install.ExitCode)"
+          }
+
+          $registryPaths = @(
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+          )
+          $entry = $registryPaths |
+            ForEach-Object { Get-ItemProperty -Path $_ -ErrorAction SilentlyContinue } |
+            Where-Object { $_.DisplayName -eq "Open Reader Desktop" } |
+            Select-Object -First 1
+          if ($null -eq $entry) {
+            throw "MSI install did not create an Open Reader Desktop uninstall entry"
+          }
+
+          $installLocation = $entry.InstallLocation
+          $installedExe = $null
+          if (-not [string]::IsNullOrWhiteSpace($installLocation) -and (Test-Path -LiteralPath $installLocation)) {
+            $installedExe = Get-ChildItem -LiteralPath $installLocation -Filter "*.exe" -File -Recurse |
+              Where-Object { $_.Name -notmatch "^(uninstall|unins).*\.exe$" } |
+              Select-Object -First 1
+          }
+          if ($null -eq $installedExe) {
+            $candidateRoots = @(
+              (Join-Path $env:ProgramFiles "Open Reader Desktop"),
+              (Join-Path $env:ProgramFiles "open-reader-desktop")
+            )
+            $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+            if (-not [string]::IsNullOrWhiteSpace($programFilesX86)) {
+              $candidateRoots += @(
+                (Join-Path $programFilesX86 "Open Reader Desktop"),
+                (Join-Path $programFilesX86 "open-reader-desktop")
+              )
+            }
+            foreach ($root in $candidateRoots) {
+              if (Test-Path -LiteralPath $root) {
+                $installedExe = Get-ChildItem -LiteralPath $root -Filter "*.exe" -File -Recurse |
+                  Where-Object { $_.Name -notmatch "^(uninstall|unins).*\.exe$" } |
+                  Select-Object -First 1
+                if ($null -ne $installedExe) {
+                  break
+                }
+              }
+            }
+          }
+          if ($null -eq $installedExe) {
+            throw "MSI install location did not contain the application executable"
+          }
+
+          $dataRoot = Join-Path $env:APPDATA "com.tttxxx36.openreaderdesktop"
+          $sentinel = Join-Path $dataRoot "installer-smoke-sentinel.txt"
+          New-Item -ItemType Directory -Path $dataRoot -Force | Out-Null
+          Set-Content -LiteralPath $sentinel -Value "installer-smoke" -Encoding utf8
+
+          $process = Start-Process -FilePath $installedExe.FullName -PassThru
+          try {
+            Start-Sleep -Seconds 5
+            if ($process.HasExited) {
+              throw "MSI-installed executable exited during launch smoke test with code $($process.ExitCode)"
+            }
+          } finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          $productCode = $entry.PSChildName
+          $uninstallArgs = "/x $productCode /qn /norestart"
+          $uninstall = Start-Process -FilePath "$env:WINDIR\System32\msiexec.exe" -ArgumentList $uninstallArgs -Wait -PassThru
+          if ($uninstall.ExitCode -notin @(0, 3010)) {
+            throw "MSI uninstaller failed with exit code $($uninstall.ExitCode)"
+          }
+          Start-Sleep -Seconds 2
+          if (Test-Path -LiteralPath $installedExe.FullName) {
+            throw "MSI uninstaller left the application executable behind"
+          }
+          if (-not (Test-Path -LiteralPath $sentinel)) {
+            throw "MSI uninstall removed the application data sentinel"
+          }
+
+      - name: Report upgrade and manual coverage gaps
+        shell: pwsh
+        run: |
+          Write-Host "Automated coverage: package files, SHA-256, portable launch, NSIS install/launch/uninstall, MSI install/launch/uninstall, and data retention."
+          Write-Host "Manual follow-up still required: two-version in-place upgrade, WebView2 missing-runtime messaging, offline/network error UX, and rollback/revocation."
