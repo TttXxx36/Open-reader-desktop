@@ -52,10 +52,12 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 
 ### M6.1 书源导入兼容层
 
-- [ ] 支持项目导出包、单对象和数组三种外部 JSON 形态
+- [x] 支持项目导出包、单对象和数组三种外部 JSON 形态，并兼容 UTF-8 BOM 及 `sources`、`bookSources`、`items`、`data` 包装
 - [ ] 映射 \`bookSourceName\`、\`ruleSearch\`、\`ruleBookInfo\`、\`ruleToc\`、\`ruleContent\`
-- [ ] 对不支持的 XPath/JavaScript/认证头提供逐项提示
-- [ ] 导入前显示预览，允许跳过不兼容条目
+- [x] 对不支持的 XPath/JavaScript/认证头拒绝导入并提供明确错误（逐项预览/跳过仍待补齐）
+- [x] 支持从 HTTP(S) URL 获取 JSON，并复用本地文件的同一解析、校验和持久化流程
+- [x] 对 URL 长度（2 KB）和响应体大小（2 MB）设置上限，不携带 Cookie 或认证头
+- [ ] 导入前显示预览，允许跳过不兼容条目（下一小步）
 - [ ] 使用授权或合成夹具覆盖每种输入格式
 
 ### M6.2 阅读内容模型
@@ -86,6 +88,7 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 
 - 2026-08-02：提交 UI 可用性修复、真实翻书 SVG、中文优先字体栈与全局阅读设置（设置页、字体、字号、行距、版心、段间距、首行缩进）。
 - 2026-08-02：新增安全书源适配器，接受项目导出包、单对象和数组；映射 Legado 常用 CSS 规则，并拒绝 XPath、JavaScript 和未实现的认证规则。
+- 2026-08-02：M6.1 扩展 JSON 解析形态（BOM、包装对象）并新增 URL 导入命令；URL 仅允许 HTTP(S)，限制 2 KB 地址和 2 MB 响应体，前端书源页已接入 URL 输入与 UI 契约检查。
 - 2026-08-02：新增 `scripts/verify-ui-contract.mjs` 并接入 CI；Rust 适配器包含原生包、Legado CSS 子集、数组、无效文档、不安全规则和未知属性测试。
 - 当前边界：适配器按“整文件失败”处理不兼容条目，预览、逐条跳过和授权夹具将在 M6.1 补齐；本轮不在本地构建或安装。
 - CI 验证：运行 [30709107190](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30709107190) 在提交 `8cd878c` 上通过 Frontend checks 与 Rust checks；此前发现并修复 `export_sources` 对已移除 `SourceBundle` 的回归引用。
