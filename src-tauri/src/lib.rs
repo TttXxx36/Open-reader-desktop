@@ -156,6 +156,12 @@ fn audit_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceAudit
 const MAX_SOURCE_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SOURCE_IMPORT_URL_BYTES: usize = 2 * 1024;
 
+#[derive(Debug, Clone, Serialize)]
+struct RemoteSourceImportPreview {
+    payload: String,
+    preview: source_import::ImportPreview,
+}
+
 fn persist_imported_sources(
     database: &Database,
     bundle: Vec<source_import::ImportedSource>,
@@ -191,13 +197,63 @@ fn persist_imported_sources(
     Ok(imported)
 }
 
-fn import_source_payload(database: &Database, payload: &str) -> Result<Vec<SourceSummary>, String> {
+fn import_source_payload(
+    database: &Database,
+    payload: &str,
+) -> Result<Vec<SourceSummary>, String> {
     if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
         return Err("书源文件超过 2 MB 限制".to_string());
     }
 
     let bundle = source_import::parse_import_bundle(payload)?;
     persist_imported_sources(database, bundle)
+}
+
+fn preview_source_payload(payload: &str) -> Result<source_import::ImportPreview, String> {
+    if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
+        return Err("书源文件超过 2 MB 限制".to_string());
+    }
+
+    source_import::preview_import_bundle(payload)
+}
+
+fn validate_source_import_url(url: &str) -> Result<&str, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("书源 URL 不能为空".to_string());
+    }
+    if url.len() > MAX_SOURCE_IMPORT_URL_BYTES {
+        return Err("书源 URL 不能超过 2 KB".to_string());
+    }
+    Ok(url)
+}
+
+async fn fetch_source_import_payload(url: &str) -> Result<String, String> {
+    let url = validate_source_import_url(url)?;
+    let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    engine
+        .fetch_text_document(url)
+        .await
+        .map_err(|error| format!("书源 URL 获取失败：{error}"))
+}
+
+#[tauri::command]
+fn preview_sources(bundle_json: String) -> Result<source_import::ImportPreview, String> {
+    preview_source_payload(&bundle_json)
+}
+
+#[tauri::command]
+fn import_sources_selected(
+    database: tauri::State<'_, Database>,
+    bundle_json: String,
+    indices: Vec<usize>,
+) -> Result<Vec<SourceSummary>, String> {
+    if bundle_json.len() > MAX_SOURCE_BUNDLE_BYTES {
+        return Err("书源文件超过 2 MB 限制".to_string());
+    }
+
+    let bundle = source_import::parse_selected_entries(&bundle_json, &indices)?;
+    persist_imported_sources(&database, bundle)
 }
 
 #[tauri::command]
@@ -226,23 +282,20 @@ fn import_sources(
 }
 
 #[tauri::command]
+async fn preview_sources_from_url(
+    url: String,
+) -> Result<RemoteSourceImportPreview, String> {
+    let payload = fetch_source_import_payload(&url).await?;
+    let preview = preview_source_payload(&payload)?;
+    Ok(RemoteSourceImportPreview { payload, preview })
+}
+
+#[tauri::command]
 async fn import_sources_from_url(
     database: tauri::State<'_, Database>,
     url: String,
 ) -> Result<Vec<SourceSummary>, String> {
-    let url = url.trim();
-    if url.is_empty() {
-        return Err("书源 URL 不能为空".to_string());
-    }
-    if url.len() > MAX_SOURCE_IMPORT_URL_BYTES {
-        return Err("书源 URL 不能超过 2 KB".to_string());
-    }
-
-    let engine = SourceEngine::default().map_err(|error| error.to_string())?;
-    let payload = engine
-        .fetch_text_document(url)
-        .await
-        .map_err(|error| format!("书源 URL 获取失败：{error}"))?;
+    let payload = fetch_source_import_payload(&url).await?;
     import_source_payload(&database, &payload)
 }
 
@@ -594,6 +647,9 @@ pub fn run() {
             audit_sources,
             export_sources,
             import_sources,
+            preview_sources,
+            import_sources_selected,
+            preview_sources_from_url,
             import_sources_from_url,
             fetch_source_preview,
             search_sources,
