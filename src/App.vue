@@ -198,6 +198,7 @@ const searchKeyword = ref("");
 const searchBusy = ref(false);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
 const sourceTransferBusy = ref(false);
+const sourceTransferMessage = ref("");
 const sourceAuditBusy = ref(false);
 const sourceAudit = ref<SourceAuditReport[] | null>(null);
 const sourceCacheBusy = ref(false);
@@ -437,6 +438,7 @@ async function exportSources() {
     anchor.download = "open-reader-sources-" + new Date().toISOString().slice(0, 10) + ".json";
     anchor.click();
     URL.revokeObjectURL(url);
+    sourceTransferMessage.value = "书源已导出，请检查下载目录";
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
@@ -445,6 +447,7 @@ async function exportSources() {
 }
 
 function openSourceImportPicker() {
+  sourceTransferMessage.value = "";
   sourceImportInput.value?.click();
 }
 
@@ -460,6 +463,7 @@ async function importSourceFile(event: Event) {
   }
 
   sourceTransferBusy.value = true;
+  sourceTransferMessage.value = "";
   errorMessage.value = "";
   try {
     const imported = await invoke<SourceSummary[]>("import_sources", {
@@ -469,6 +473,7 @@ async function importSourceFile(event: Event) {
     if (imported[0]) {
       selectSource(imported[0]);
     }
+    sourceTransferMessage.value = "已导入 " + imported.length + " 个书源";
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
@@ -930,6 +935,8 @@ function nextChapter() {
           </button>
         </div>
       </header>
+
+      <p v-if="sourceTransferMessage" class="source-inline-success">{{ sourceTransferMessage }}</p>
 
       <div class="source-grid">
         <section class="source-library">
@@ -1494,7 +1501,8 @@ function nextChapter() {
 }
 
 .source-list-empty,
-.source-inline-error {
+.source-inline-error,
+.source-inline-success {
   color: #8391a6;
   font-size: 12px;
   line-height: 1.6;
@@ -1506,6 +1514,10 @@ function nextChapter() {
 
 .source-inline-error {
   color: #ffb0bc;
+}
+
+.source-inline-success {
+  color: #b9f6dd;
 }
 
 .source-row {
