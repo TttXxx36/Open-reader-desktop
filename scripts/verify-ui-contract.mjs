@@ -14,6 +14,9 @@ requireContract(sourceInputMatches.length === 1, "书源导入 input 应只声�
 requireContract(sourceInputIndex >= 0 && libraryViewIndex >= 0 && sourceInputIndex < libraryViewIndex,
   "书源导入 input 必须位于视图条件之外，避免切换视图后失效");
 requireContract(/@click="openSettings"/.test(app), "设置导航必须绑定 openSettings");
+requireContract(/v-model="sourceImportUrl"/.test(app), "书源页必须提供 URL 导入输入框");
+requireContract(/@click="importSourceUrl"/.test(app), "URL 导入按钮必须绑定 importSourceUrl");
+requireContract(app.includes("import_sources_from_url"), "前端必须调用 URL 书源导入命令");
 requireContract(/id="settings"/.test(app), "设置视图必须存在");
 requireContract(/import brandMark from "\.\/assets\/open-reader-mark\.svg";/.test(app),
   "品牌图标必须使用真实 SVG 资源");
