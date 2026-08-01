@@ -54,7 +54,7 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 
 - [x] 支持项目导出包、单对象和数组三种外部 JSON 形态，并兼容 UTF-8 BOM 及 `sources`、`bookSources`、`items`、`data` 包装
 - [ ] 映射 \`bookSourceName\`、\`ruleSearch\`、\`ruleBookInfo\`、\`ruleToc\`、\`ruleContent\`
-- [x] 对不支持的 XPath/JavaScript/认证头拒绝导入并提供明确错误（逐项预览/跳过仍待补齐）
+- [x] 对不支持的 XPath/JavaScript/认证头在预览中逐项标明并跳过；严格保存命令仍会拒绝不兼容项
 - [x] 支持从 HTTP(S) URL 获取 JSON，并复用本地文件的同一解析、校验和持久化流程
 - [x] 对 URL 长度（2 KB）和响应体大小（2 MB）设置上限，不携带 Cookie 或认证头
 - [x] 导入前显示预览，自动跳过不兼容条目；仅保存通过校验的条目
@@ -91,8 +91,8 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 - 2026-08-02：M6.1 扩展 JSON 解析形态（BOM、包装对象）并新增 URL 导入命令；URL 仅允许 HTTP(S)，限制 2 KB 地址和 2 MB 响应体，前端书源页已接入 URL 输入与 UI 契约检查。
 - 2026-08-02：新增导入预览和逐项结果：本地文件与 URL 都先展示可导入/跳过原因，确认后只保存通过校验的条目；原始脚本、XPath 和敏感认证头仍不会执行或带入请求。
 - 2026-08-02：新增 `scripts/verify-ui-contract.mjs` 并接入 CI；Rust 适配器包含原生包、Legado CSS 子集、数组、无效文档、不安全规则和未知属性测试。
-- 当前边界：适配器按“整文件失败”处理不兼容条目，预览、逐条跳过和授权夹具将在 M6.1 补齐；本轮不在本地构建或安装。
-- CI 验证：运行 [30709974740](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30709974740) 在提交 `aa2e8d3` 上通过 Frontend checks、Rust 格式检查、Cargo check 与 Rust tests；中间提交的格式差异已在最终提交修复。
+- 当前边界：界面导入使用预览和逐条跳过，原有 `import_sources` 命令仍保留整包严格模式供兼容调用；JSON API 规则、更多编码和授权夹具仍需后续 M6.1/M6.2 评估。本轮不在本地构建或安装。
+- CI 验证：运行 [30710780902](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30710780902) 在提交 `43c6fdf` 上通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 Rust tests；预览、URL 预取和选中项导入均包含在本次验证中。
 
 ## 四、测试与验收
 
