@@ -356,6 +356,12 @@ impl SourceEngine {
         })
     }
 
+    pub async fn fetch_text_document(&self, url: &str) -> Result<String, SourceError> {
+        self.fetch_text(url, &HashMap::new())
+            .await
+            .map(|fetched| fetched.body)
+    }
+
     pub async fn search(
         &self,
         source: &BookSource,
