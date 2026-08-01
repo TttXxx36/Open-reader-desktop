@@ -43,6 +43,13 @@ jobs:
           }
 
           $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+          gh run download $runId --repo $env:GITHUB_REPOSITORY --dir $artifactRoot
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to download artifacts from workflow run $runId"
+          }
+
           $manifest = Get-ChildItem -LiteralPath $artifactRoot -Filter "release-sha256.txt" -File -Recurse |
             Select-Object -First 1
           if ($null -eq $manifest) {
@@ -53,12 +60,6 @@ jobs:
           }
           $releaseRoot = $manifest.Directory.FullName
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "RELEASE_ARTIFACT_ROOT=$releaseRoot" -Encoding utf8
-
-          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
-          gh run download $runId --repo $env:GITHUB_REPOSITORY --dir $artifactRoot
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to download artifacts from workflow run $runId"
-          }
 
       - name: Verify package files and checksums
         shell: pwsh
