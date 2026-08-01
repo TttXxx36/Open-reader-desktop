@@ -170,7 +170,6 @@ fn parse_entries(entries: &[Value]) -> Result<Vec<ImportedSource>, String> {
         .collect()
 }
 
-
 fn entry_enabled(value: &Value) -> bool {
     value
         .as_object()
@@ -181,8 +180,8 @@ fn entry_enabled(value: &Value) -> bool {
 
 fn entry_name(value: &Value) -> Option<String> {
     let object = value.as_object()?;
-    if let Some(name) = optional_text(object.get("name"))
-        .or_else(|| optional_text(object.get("bookSourceName")))
+    if let Some(name) =
+        optional_text(object.get("name")).or_else(|| optional_text(object.get("bookSourceName")))
     {
         return Some(name);
     }
@@ -192,7 +191,9 @@ fn entry_name(value: &Value) -> Option<String> {
             continue;
         };
         let nested = match config {
-            Value::String(text) => serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok()?,
+            Value::String(text) => {
+                serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok()?
+            },
             other => other.clone(),
         };
         if let Some(name) = entry_name(&nested) {
@@ -217,8 +218,10 @@ fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
         .or_else(|| object.get("configJson"))
     {
         let config_value = match config {
-            Value::String(text) => serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}'))
-                .map_err(|error| format!("第 {} 个书源 config_json 无效：{error}", index + 1))?,
+            Value::String(text) => {
+                serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}'))
+                    .map_err(|error| format!("第 {} 个书源 config_json 无效：{error}", index + 1))?
+            },
             other => other.clone(),
         };
         let config_json = normalize_source_value(&config_value)
@@ -682,7 +685,10 @@ mod tests {
         let payload = json!({ "data": source.to_string() });
         let imported = parse_import_bundle(&payload.to_string()).expect("string wrapper");
         assert_eq!(imported.len(), 1);
-        assert_eq!(entry_name(&json!({ "config_json": imported[0].config_json })), Some("String wrapper".to_string()));
+        assert_eq!(
+            entry_name(&json!({ "config_json": imported[0].config_json })),
+            Some("String wrapper".to_string())
+        );
     }
 
     #[test]
