@@ -23,6 +23,8 @@ jobs:
         run: npm run typecheck
       - name: Build frontend
         run: npm run build
+      - name: UI contract check
+        run: npm run verify:ui
       - name: Release preflight
         run: npm run verify:release
 
