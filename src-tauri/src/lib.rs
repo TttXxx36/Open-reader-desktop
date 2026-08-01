@@ -153,7 +153,6 @@ fn audit_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceAudit
         .collect())
 }
 
-
 const MAX_SOURCE_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SOURCE_IMPORT_URL_BYTES: usize = 2 * 1024;
 
@@ -192,10 +191,7 @@ fn persist_imported_sources(
     Ok(imported)
 }
 
-fn import_source_payload(
-    database: &Database,
-    payload: &str,
-) -> Result<Vec<SourceSummary>, String> {
+fn import_source_payload(database: &Database, payload: &str) -> Result<Vec<SourceSummary>, String> {
     if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
         return Err("书源文件超过 2 MB 限制".to_string());
     }
