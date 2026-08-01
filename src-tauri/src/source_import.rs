@@ -1,5 +1,7 @@
 use crate::source::BookSource;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct ImportedSource {
@@ -8,15 +10,105 @@ pub struct ImportedSource {
     pub config_json: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportPreviewEntry {
+    pub index: usize,
+    pub name: Option<String>,
+    pub enabled: bool,
+    pub valid: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportPreview {
+    pub entries: Vec<ImportPreviewEntry>,
+    pub valid_count: usize,
+    pub invalid_count: usize,
+}
+
 /// Parse the native export format, a raw source object, or an array of
 /// Legado-compatible source objects. Only the safe CSS/HTTP subset is mapped.
 pub fn parse_import_bundle(input: &str) -> Result<Vec<ImportedSource>, String> {
+    let entries = extract_import_values(input)?;
+    let imported = parse_entries(&entries)?;
+
+    if imported.is_empty() {
+        return Err("书源文件没有可导入的配置".to_string());
+    }
+    Ok(imported)
+}
+
+pub fn preview_import_bundle(input: &str) -> Result<ImportPreview, String> {
+    let entries = extract_import_values(input)?;
+    if entries.is_empty() {
+        return Err("书源文件没有可导入的配置".to_string());
+    }
+
+    let mut preview_entries = Vec::with_capacity(entries.len());
+    let mut valid_count = 0;
+    for (index, entry) in entries.iter().enumerate() {
+        let valid = match parse_entry(entry, index) {
+            Ok(_) => {
+                valid_count += 1;
+                true
+            }
+            Err(_) => false,
+        };
+        let error = if valid {
+            None
+        } else {
+            parse_entry(entry, index).err()
+        };
+        preview_entries.push(ImportPreviewEntry {
+            index,
+            name: entry_name(entry),
+            enabled: entry_enabled(entry),
+            valid,
+            error,
+        });
+    }
+
+    Ok(ImportPreview {
+        invalid_count: entries.len() - valid_count,
+        entries: preview_entries,
+        valid_count,
+    })
+}
+
+pub fn parse_selected_entries(
+    input: &str,
+    indices: &[usize],
+) -> Result<Vec<ImportedSource>, String> {
+    if indices.is_empty() {
+        return Err("没有选择可导入的书源".to_string());
+    }
+
+    let entries = extract_import_values(input)?;
+    let mut selected = Vec::with_capacity(indices.len());
+    let mut seen = HashSet::new();
+    for index in indices {
+        if !seen.insert(*index) {
+            continue;
+        }
+        let entry = entries
+            .get(*index)
+            .ok_or_else(|| format!("书源序号超出范围：{}", index + 1))?;
+        selected.push(parse_entry(entry, *index)?);
+    }
+
+    if selected.is_empty() {
+        return Err("没有选择可导入的书源".to_string());
+    }
+    Ok(selected)
+}
+
+fn extract_import_values(input: &str) -> Result<Vec<Value>, String> {
     let input = input.trim_start_matches('\u{feff}');
     let value: Value =
         serde_json::from_str(input).map_err(|error| format!("书源文件 JSON 无效：{error}"))?;
 
-    let imported = match value {
-        Value::Array(entries) => parse_entries(&entries)?,
+    match value {
+        Value::Array(entries) => Ok(entries),
         Value::Object(mut object)
             if object.contains_key("version") && object.contains_key("sources") =>
         {
@@ -27,23 +119,17 @@ pub fn parse_import_bundle(input: &str) -> Result<Vec<ImportedSource>, String> {
             if version != 1 {
                 return Err(format!("不支持的书源文件版本：{version}"));
             }
-            let entries = object
+            let sources = object
                 .remove("sources")
-                .and_then(|value| value.as_array().cloned())
                 .ok_or_else(|| "书源文件缺少 sources 数组".to_string())?;
-            parse_entries(&entries)?
+            extract_value_entries(&sources, "sources")
         }
         Value::Object(object) => match extract_wrapper_entries(&object)? {
-            Some(entries) => parse_entries(&entries)?,
-            None => vec![parse_entry(&Value::Object(object), 0)?],
+            Some(entries) => Ok(entries),
+            None => Ok(vec![Value::Object(object)]),
         },
-        _ => return Err("书源文件必须是对象或数组".to_string()),
-    };
-
-    if imported.is_empty() {
-        return Err("书源文件没有可导入的配置".to_string());
+        _ => Err("书源文件必须是对象或数组".to_string()),
     }
-    Ok(imported)
 }
 
 fn extract_wrapper_entries(object: &Map<String, Value>) -> Result<Option<Vec<Value>>, String> {
@@ -51,17 +137,29 @@ fn extract_wrapper_entries(object: &Map<String, Value>) -> Result<Option<Vec<Val
         let Some(value) = object.get(key) else {
             continue;
         };
-        if let Some(entries) = value.as_array() {
-            return Ok(Some(entries.clone()));
-        }
-        if key == "data" {
-            if let Some(nested) = value.as_object() {
-                return extract_wrapper_entries(nested);
-            }
-        }
-        return Err(format!("书源文件 {key} 必须是数组"));
+        return extract_value_entries(value, key).map(Some);
     }
     Ok(None)
+}
+
+fn extract_value_entries(value: &Value, key: &str) -> Result<Vec<Value>, String> {
+    match value {
+        Value::Array(entries) => Ok(entries.clone()),
+        Value::String(text) => {
+            let text = text.trim_start_matches('\u{feff}');
+            let parsed: Value = serde_json::from_str(text)
+                .map_err(|error| format!("书源文件 {key} JSON 无效：{error}"))?;
+            extract_value_entries(&parsed, key)
+        }
+        Value::Object(object) => {
+            if let Some(entries) = extract_wrapper_entries(object)? {
+                Ok(entries)
+            } else {
+                Ok(vec![value.clone()])
+            }
+        }
+        _ => Err(format!("书源文件 {key} 必须是数组或 JSON 对象")),
+    }
 }
 
 fn parse_entries(entries: &[Value]) -> Result<Vec<ImportedSource>, String> {
@@ -70,6 +168,38 @@ fn parse_entries(entries: &[Value]) -> Result<Vec<ImportedSource>, String> {
         .enumerate()
         .map(|(index, entry)| parse_entry(entry, index))
         .collect()
+}
+
+
+fn entry_enabled(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn entry_name(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    if let Some(name) = optional_text(object.get("name"))
+        .or_else(|| optional_text(object.get("bookSourceName")))
+    {
+        return Some(name);
+    }
+
+    for key in ["config_json", "configJson"] {
+        let Some(config) = object.get(key) else {
+            continue;
+        };
+        let nested = match config {
+            Value::String(text) => serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok()?,
+            other => other.clone(),
+        };
+        if let Some(name) = entry_name(&nested) {
+            return Some(name);
+        }
+    }
+    None
 }
 
 fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
@@ -87,7 +217,7 @@ fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
         .or_else(|| object.get("configJson"))
     {
         let config_value = match config {
-            Value::String(text) => serde_json::from_str::<Value>(text)
+            Value::String(text) => serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}'))
                 .map_err(|error| format!("第 {} 个书源 config_json 无效：{error}", index + 1))?,
             other => other.clone(),
         };
@@ -516,6 +646,43 @@ mod tests {
         let source: BookSource =
             serde_json::from_str(&imported[0].config_json).expect("wrapped source");
         assert_eq!(source.name, "Wrapped");
+    }
+
+    #[test]
+    fn previews_valid_and_invalid_entries() {
+        let payload = json!([
+            {
+                "bookSourceName": "Valid",
+                "searchUrl": "https://valid.test?q={{key}}"
+            },
+            {
+                "bookSourceName": "Unsafe",
+                "searchUrl": "https://unsafe.test?q={{key}}",
+                "ruleSearch": { "bookList": "li", "name": "@js:return 'x'" }
+            }
+        ]);
+        let preview = preview_import_bundle(&payload.to_string()).expect("preview");
+        assert_eq!(preview.entries.len(), 2);
+        assert_eq!(preview.valid_count, 1);
+        assert_eq!(preview.invalid_count, 1);
+        assert!(preview.entries[0].valid);
+        assert!(!preview.entries[1].valid);
+        assert!(preview.entries[1]
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("不受支持")));
+    }
+
+    #[test]
+    fn accepts_string_wrappers() {
+        let source = json!({
+            "bookSourceName": "String wrapper",
+            "searchUrl": "https://string.test?q={{key}}"
+        });
+        let payload = json!({ "data": source.to_string() });
+        let imported = parse_import_bundle(&payload.to_string()).expect("string wrapper");
+        assert_eq!(imported.len(), 1);
+        assert_eq!(entry_name(&json!({ "config_json": imported[0].config_json })), Some("String wrapper".to_string()));
     }
 
     #[test]
