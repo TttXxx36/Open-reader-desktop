@@ -197,10 +197,7 @@ fn persist_imported_sources(
     Ok(imported)
 }
 
-fn import_source_payload(
-    database: &Database,
-    payload: &str,
-) -> Result<Vec<SourceSummary>, String> {
+fn import_source_payload(database: &Database, payload: &str) -> Result<Vec<SourceSummary>, String> {
     if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
         return Err("书源文件超过 2 MB 限制".to_string());
     }
@@ -282,9 +279,7 @@ fn import_sources(
 }
 
 #[tauri::command]
-async fn preview_sources_from_url(
-    url: String,
-) -> Result<RemoteSourceImportPreview, String> {
+async fn preview_sources_from_url(url: String) -> Result<RemoteSourceImportPreview, String> {
     let payload = fetch_source_import_payload(&url).await?;
     let preview = preview_source_payload(&payload)?;
     Ok(RemoteSourceImportPreview { payload, preview })
