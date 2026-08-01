@@ -43,6 +43,17 @@ jobs:
           }
 
           $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $manifest = Get-ChildItem -LiteralPath $artifactRoot -Filter "release-sha256.txt" -File -Recurse |
+            Select-Object -First 1
+          if ($null -eq $manifest) {
+            Write-Host "Downloaded artifact tree:"
+            Get-ChildItem -LiteralPath $artifactRoot -File -Recurse |
+              Select-Object -ExpandProperty FullName
+            throw "release-sha256.txt was not found in downloaded artifacts"
+          }
+          $releaseRoot = $manifest.Directory.FullName
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "RELEASE_ARTIFACT_ROOT=$releaseRoot" -Encoding utf8
+
           New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
           gh run download $runId --repo $env:GITHUB_REPOSITORY --dir $artifactRoot
           if ($LASTEXITCODE -ne 0) {
@@ -52,7 +63,7 @@ jobs:
       - name: Verify package files and checksums
         shell: pwsh
         run: |
-          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $artifactRoot = $env:RELEASE_ARTIFACT_ROOT
           $manifest = Join-Path $artifactRoot "release-sha256.txt"
           if (-not (Test-Path -LiteralPath $manifest)) {
             throw "release-sha256.txt was not found"
@@ -103,7 +114,7 @@ jobs:
       - name: Portable launch smoke test
         shell: pwsh
         run: |
-          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $artifactRoot = $env:RELEASE_ARTIFACT_ROOT
           $portable = Get-ChildItem -LiteralPath $artifactRoot -Filter "*-portable.zip" -File -Recurse |
             Select-Object -First 1
           $portableRoot = Join-Path $env:RUNNER_TEMP "open-reader-portable"
@@ -134,7 +145,7 @@ jobs:
       - name: NSIS install, launch, uninstall and data retention
         shell: pwsh
         run: |
-          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $artifactRoot = $env:RELEASE_ARTIFACT_ROOT
           $nsis = Get-ChildItem -LiteralPath $artifactRoot -Filter "*-setup.exe" -File -Recurse |
             Select-Object -First 1
           $installRoot = Join-Path $env:RUNNER_TEMP "open-reader-nsis-install"
@@ -189,7 +200,7 @@ jobs:
       - name: MSI install, launch, uninstall and data retention
         shell: pwsh
         run: |
-          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "release-artifact"
+          $artifactRoot = $env:RELEASE_ARTIFACT_ROOT
           $msi = Get-ChildItem -LiteralPath $artifactRoot -Filter "*.msi" -File -Recurse |
             Select-Object -First 1
 
