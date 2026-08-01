@@ -199,6 +199,7 @@ const searchBusy = ref(false);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
 const sourceTransferBusy = ref(false);
 const sourceTransferMessage = ref("");
+const sourceImportUrl = ref("");
 const sourceAuditBusy = ref(false);
 const sourceAudit = ref<SourceAuditReport[] | null>(null);
 const sourceCacheBusy = ref(false);
@@ -426,6 +427,14 @@ function clearSearch() {
   searchKeyword.value = "";
 }
 
+async function finishSourceImport(imported: SourceSummary[], label: string) {
+  await loadSources();
+  if (imported[0]) {
+    selectSource(imported[0]);
+  }
+  sourceTransferMessage.value = "已从" + label + "导入 " + imported.length + " 个书源";
+}
+
 async function exportSources() {
   sourceTransferBusy.value = true;
   errorMessage.value = "";
@@ -451,6 +460,26 @@ function openSourceImportPicker() {
   sourceImportInput.value?.click();
 }
 
+async function importSourceUrl() {
+  const url = sourceImportUrl.value.trim();
+  if (!url) {
+    errorMessage.value = "请先输入书源 URL";
+    return;
+  }
+
+  sourceTransferBusy.value = true;
+  sourceTransferMessage.value = "";
+  errorMessage.value = "";
+  try {
+    const imported = await invoke<SourceSummary[]>("import_sources_from_url", { url });
+    await finishSourceImport(imported, "URL");
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceTransferBusy.value = false;
+  }
+}
+
 async function importSourceFile(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -469,11 +498,7 @@ async function importSourceFile(event: Event) {
     const imported = await invoke<SourceSummary[]>("import_sources", {
       bundleJson: await file.text(),
     });
-    await loadSources();
-    if (imported[0]) {
-      selectSource(imported[0]);
-    }
-    sourceTransferMessage.value = "已导入 " + imported.length + " 个书源";
+    await finishSourceImport(imported, "本地文件");
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
@@ -915,6 +940,22 @@ function nextChapter() {
           <h1>书源</h1>
         </div>
         <div class="source-toolbar-actions">
+          <input
+            v-model="sourceImportUrl"
+            class="source-url-input"
+            type="url"
+            autocomplete="url"
+            placeholder="粘贴书源 JSON URL"
+            @keyup.enter="importSourceUrl"
+          />
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="sourceTransferBusy || !sourceImportUrl.trim()"
+            @click="importSourceUrl"
+          >
+            {{ sourceTransferBusy ? "处理中…" : "从 URL 导入" }}
+          </button>
           <button class="secondary-button" type="button" :disabled="sourceTransferBusy" @click="openSourceImportPicker">
             {{ sourceTransferBusy ? "处理中…" : "导入 JSON" }}
           </button>
@@ -1456,6 +1497,24 @@ function nextChapter() {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+.source-toolbar-actions {
+  flex-wrap: wrap;
+}
+
+.source-url-input {
+  width: 240px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 9px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.source-url-input:focus {
+  border-color: rgba(139, 183, 255, 0.75);
+  outline: none;
 }
 
 .secondary-button {
