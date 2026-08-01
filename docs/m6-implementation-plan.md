@@ -91,7 +91,7 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 - 2026-08-02：M6.1 扩展 JSON 解析形态（BOM、包装对象）并新增 URL 导入命令；URL 仅允许 HTTP(S)，限制 2 KB 地址和 2 MB 响应体，前端书源页已接入 URL 输入与 UI 契约检查。
 - 2026-08-02：新增 `scripts/verify-ui-contract.mjs` 并接入 CI；Rust 适配器包含原生包、Legado CSS 子集、数组、无效文档、不安全规则和未知属性测试。
 - 当前边界：适配器按“整文件失败”处理不兼容条目，预览、逐条跳过和授权夹具将在 M6.1 补齐；本轮不在本地构建或安装。
-- CI 验证：运行 [30709107190](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30709107190) 在提交 `8cd878c` 上通过 Frontend checks 与 Rust checks；此前发现并修复 `export_sources` 对已移除 `SourceBundle` 的回归引用。
+- CI 验证：运行 [30709974740](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30709974740) 在提交 `aa2e8d3` 上通过 Frontend checks、Rust 格式检查、Cargo check 与 Rust tests；中间提交的格式差异已在最终提交修复。
 
 ## 四、测试与验收
 
