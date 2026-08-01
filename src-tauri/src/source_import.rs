@@ -11,12 +11,15 @@ pub struct ImportedSource {
 /// Parse the native export format, a raw source object, or an array of
 /// Legado-compatible source objects. Only the safe CSS/HTTP subset is mapped.
 pub fn parse_import_bundle(input: &str) -> Result<Vec<ImportedSource>, String> {
+    let input = input.trim_start_matches('\u{feff}');
     let value: Value =
         serde_json::from_str(input).map_err(|error| format!("书源文件 JSON 无效：{error}"))?;
 
     let imported = match value {
         Value::Array(entries) => parse_entries(&entries)?,
-        Value::Object(mut object) if object.contains_key("version") => {
+        Value::Object(mut object)
+            if object.contains_key("version") && object.contains_key("sources") =>
+        {
             let version = object
                 .get("version")
                 .and_then(Value::as_u64)
@@ -30,15 +33,10 @@ pub fn parse_import_bundle(input: &str) -> Result<Vec<ImportedSource>, String> {
                 .ok_or_else(|| "书源文件缺少 sources 数组".to_string())?;
             parse_entries(&entries)?
         }
-        Value::Object(object) if object.contains_key("sources") => {
-            let entries = object
-                .get("sources")
-                .and_then(Value::as_array)
-                .cloned()
-                .ok_or_else(|| "书源文件 sources 必须是数组".to_string())?;
-            parse_entries(&entries)?
-        }
-        Value::Object(object) => vec![parse_entry(&Value::Object(object), 0)?],
+        Value::Object(object) => match extract_wrapper_entries(&object)? {
+            Some(entries) => parse_entries(&entries)?,
+            None => vec![parse_entry(&Value::Object(object), 0)?],
+        },
         _ => return Err("书源文件必须是对象或数组".to_string()),
     };
 
@@ -46,6 +44,24 @@ pub fn parse_import_bundle(input: &str) -> Result<Vec<ImportedSource>, String> {
         return Err("书源文件没有可导入的配置".to_string());
     }
     Ok(imported)
+}
+
+fn extract_wrapper_entries(object: &Map<String, Value>) -> Result<Option<Vec<Value>>, String> {
+    for key in ["sources", "bookSources", "booksources", "items", "data"] {
+        let Some(value) = object.get(key) else {
+            continue;
+        };
+        if let Some(entries) = value.as_array() {
+            return Ok(Some(entries.clone()));
+        }
+        if key == "data" {
+            if let Some(nested) = value.as_object() {
+                return extract_wrapper_entries(nested);
+            }
+        }
+        return Err(format!("书源文件 {key} 必须是数组"));
+    }
+    Ok(None)
 }
 
 fn parse_entries(entries: &[Value]) -> Result<Vec<ImportedSource>, String> {
@@ -485,6 +501,21 @@ mod tests {
         });
         let error = parse_import_bundle(&payload.to_string()).expect_err("unknown attr");
         assert!(error.contains("安全子集"));
+    }
+
+    #[test]
+    fn accepts_bom_and_nested_wrappers() {
+        let source = json!({
+            "bookSourceName": "Wrapped",
+            "searchUrl": "https://wrapped.test/search?q={{key}}"
+        });
+        let payload = json!({ "data": { "bookSources": [source] } });
+        let input = format!("\u{feff}{}", payload);
+        let imported = parse_import_bundle(&input).expect("BOM and wrapper");
+        assert_eq!(imported.len(), 1);
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("wrapped source");
+        assert_eq!(source.name, "Wrapped");
     }
 
     #[test]
