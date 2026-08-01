@@ -153,35 +153,14 @@ fn audit_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceAudit
         .collect())
 }
 
+
 const MAX_SOURCE_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SOURCE_IMPORT_URL_BYTES: usize = 2 * 1024;
 
-#[tauri::command]
-fn export_sources(database: tauri::State<'_, Database>) -> Result<String, String> {
-    let sources = database.list_sources().map_err(|error| error.to_string())?;
-    let bundle = serde_json::json!({
-        "version": 1,
-        "sources": sources
-            .into_iter()
-            .map(|source| serde_json::json!({
-                "id": source.id,
-                "enabled": source.enabled,
-                "config_json": source.config_json,
-            }))
-            .collect::<Vec<_>>(),
-    });
-    serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn import_sources(
-    database: tauri::State<'_, Database>,
-    bundle_json: String,
+fn persist_imported_sources(
+    database: &Database,
+    bundle: Vec<source_import::ImportedSource>,
 ) -> Result<Vec<SourceSummary>, String> {
-    if bundle_json.len() > MAX_SOURCE_BUNDLE_BYTES {
-        return Err("书源文件超过 2 MB 限制".to_string());
-    }
-
-    let bundle = source_import::parse_import_bundle(&bundle_json)?;
     let mut imported = Vec::with_capacity(bundle.len());
 
     for (index, item) in bundle.into_iter().enumerate() {
@@ -211,6 +190,64 @@ fn import_sources(
     }
 
     Ok(imported)
+}
+
+fn import_source_payload(
+    database: &Database,
+    payload: &str,
+) -> Result<Vec<SourceSummary>, String> {
+    if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
+        return Err("书源文件超过 2 MB 限制".to_string());
+    }
+
+    let bundle = source_import::parse_import_bundle(payload)?;
+    persist_imported_sources(database, bundle)
+}
+
+#[tauri::command]
+fn export_sources(database: tauri::State<'_, Database>) -> Result<String, String> {
+    let sources = database.list_sources().map_err(|error| error.to_string())?;
+    let bundle = serde_json::json!({
+        "version": 1,
+        "sources": sources
+            .into_iter()
+            .map(|source| serde_json::json!({
+                "id": source.id,
+                "enabled": source.enabled,
+                "config_json": source.config_json,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_sources(
+    database: tauri::State<'_, Database>,
+    bundle_json: String,
+) -> Result<Vec<SourceSummary>, String> {
+    import_source_payload(&database, &bundle_json)
+}
+
+#[tauri::command]
+async fn import_sources_from_url(
+    database: tauri::State<'_, Database>,
+    url: String,
+) -> Result<Vec<SourceSummary>, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("书源 URL 不能为空".to_string());
+    }
+    if url.len() > MAX_SOURCE_IMPORT_URL_BYTES {
+        return Err("书源 URL 不能超过 2 KB".to_string());
+    }
+
+    let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    let payload = engine
+        .fetch_text_document(url)
+        .await
+        .map_err(|error| format!("书源 URL 获取失败：{error}"))?;
+    import_source_payload(&database, &payload)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -561,6 +598,7 @@ pub fn run() {
             audit_sources,
             export_sources,
             import_sources,
+            import_sources_from_url,
             fetch_source_preview,
             search_sources,
             fetch_source_book,
