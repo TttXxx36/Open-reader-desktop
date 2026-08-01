@@ -158,17 +158,17 @@ const MAX_SOURCE_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
 #[tauri::command]
 fn export_sources(database: tauri::State<'_, Database>) -> Result<String, String> {
     let sources = database.list_sources().map_err(|error| error.to_string())?;
-    let bundle = SourceBundle {
-        version: 1,
-        sources: sources
+    let bundle = serde_json::json!({
+        "version": 1,
+        "sources": sources
             .into_iter()
-            .map(|source| SourceBundleItem {
-                id: Some(source.id),
-                enabled: source.enabled,
-                config_json: source.config_json,
-            })
-            .collect(),
-    };
+            .map(|source| serde_json::json!({
+                "id": source.id,
+                "enabled": source.enabled,
+                "config_json": source.config_json,
+            }))
+            .collect::<Vec<_>>(),
+    });
     serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())
 }
 
