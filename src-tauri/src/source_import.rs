@@ -193,7 +193,7 @@ fn entry_name(value: &Value) -> Option<String> {
         let nested = match config {
             Value::String(text) => {
                 serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')).ok()?
-            },
+            }
             other => other.clone(),
         };
         if let Some(name) = entry_name(&nested) {
@@ -221,7 +221,7 @@ fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
             Value::String(text) => {
                 serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}'))
                     .map_err(|error| format!("第 {} 个书源 config_json 无效：{error}", index + 1))?
-            },
+            }
             other => other.clone(),
         };
         let config_json = normalize_source_value(&config_value)
