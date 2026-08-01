@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Open Reader</title>
+  <desc id="desc">An open book icon</desc>
+  <defs>
+    <linearGradient id="book-gradient" x1="7" y1="10" x2="57" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9be7d8"/>
+      <stop offset="1" stop-color="#6fc4ff"/>
+    </linearGradient>
+  </defs>
+  <path d="M8 13c10-4 18-2 24 4v35c-6-6-14-8-24-4V13Z" fill="url(#book-gradient)" stroke="#07111f" stroke-linejoin="round" stroke-width="2.5"/>
+  <path d="M56 13c-10-4-18-2-24 4v35c6-6 14-8 24-4V13Z" fill="url(#book-gradient)" stroke="#07111f" stroke-linejoin="round" stroke-width="2.5"/>
+  <path d="M32 17v35" fill="none" stroke="#07111f" stroke-linecap="round" stroke-width="2.5"/>
+  <path d="M15 21c5-1 10 0 14 3M49 21c-5-1-10 0-14 3" fill="none" stroke="#e8fbff" stroke-linecap="round" stroke-width="2"/>
+</svg>
