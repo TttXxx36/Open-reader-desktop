@@ -62,6 +62,25 @@ interface SourceSummary {
   updated_at: string;
 }
 
+interface SourceImportPreviewEntry {
+  index: number;
+  name: string | null;
+  enabled: boolean;
+  valid: boolean;
+  error: string | null;
+}
+
+interface SourceImportPreview {
+  entries: SourceImportPreviewEntry[];
+  valid_count: number;
+  invalid_count: number;
+}
+
+interface SourceImportUrlPreview {
+  payload: string;
+  preview: SourceImportPreview;
+}
+
 interface SourceAuditReport {
   source_id: string;
   source_name: string;
@@ -200,6 +219,9 @@ const searchResult = ref<MultiSourceSearchResult | null>(null);
 const sourceTransferBusy = ref(false);
 const sourceTransferMessage = ref("");
 const sourceImportUrl = ref("");
+const sourceImportPreview = ref<SourceImportPreview | null>(null);
+const sourceImportPayload = ref("");
+const sourceImportLabel = ref("");
 const sourceAuditBusy = ref(false);
 const sourceAudit = ref<SourceAuditReport[] | null>(null);
 const sourceCacheBusy = ref(false);
@@ -460,6 +482,57 @@ function openSourceImportPicker() {
   sourceImportInput.value?.click();
 }
 
+function showSourceImportPreview(
+  preview: SourceImportPreview,
+  payload: string,
+  label: string,
+) {
+  sourceImportPreview.value = preview;
+  sourceImportPayload.value = payload;
+  sourceImportLabel.value = label;
+  sourceTransferMessage.value =
+    "已解析 " + preview.entries.length + " 个书源：" +
+    preview.valid_count + " 个可导入，" +
+    preview.invalid_count + " 个将跳过";
+}
+
+function clearSourceImportPreview() {
+  sourceImportPreview.value = null;
+  sourceImportPayload.value = "";
+  sourceImportLabel.value = "";
+}
+
+async function confirmSourceImport() {
+  const preview = sourceImportPreview.value;
+  const payload = sourceImportPayload.value;
+  const label = sourceImportLabel.value || "来源";
+  if (!preview || !payload) return;
+
+  const indices = preview.entries
+    .filter((entry) => entry.valid)
+    .map((entry) => entry.index);
+  if (indices.length === 0) {
+    errorMessage.value = "没有可导入的兼容书源";
+    return;
+  }
+
+  sourceTransferBusy.value = true;
+  sourceTransferMessage.value = "";
+  errorMessage.value = "";
+  try {
+    const imported = await invoke<SourceSummary[]>("import_sources_selected", {
+      bundleJson: payload,
+      indices,
+    });
+    await finishSourceImport(imported, label);
+    clearSourceImportPreview();
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceTransferBusy.value = false;
+  }
+}
+
 async function importSourceUrl() {
   const url = sourceImportUrl.value.trim();
   if (!url) {
@@ -471,8 +544,8 @@ async function importSourceUrl() {
   sourceTransferMessage.value = "";
   errorMessage.value = "";
   try {
-    const imported = await invoke<SourceSummary[]>("import_sources_from_url", { url });
-    await finishSourceImport(imported, "URL");
+    const result = await invoke<SourceImportUrlPreview>("preview_sources_from_url", { url });
+    showSourceImportPreview(result.preview, result.payload, "URL");
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
@@ -495,10 +568,11 @@ async function importSourceFile(event: Event) {
   sourceTransferMessage.value = "";
   errorMessage.value = "";
   try {
-    const imported = await invoke<SourceSummary[]>("import_sources", {
-      bundleJson: await file.text(),
+    const payload = await file.text();
+    const preview = await invoke<SourceImportPreview>("preview_sources", {
+      bundleJson: payload,
     });
-    await finishSourceImport(imported, "本地文件");
+    showSourceImportPreview(preview, payload, "本地文件");
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
@@ -978,6 +1052,53 @@ function nextChapter() {
       </header>
 
       <p v-if="sourceTransferMessage" class="source-inline-success">{{ sourceTransferMessage }}</p>
+
+      <section v-if="sourceImportPreview" class="source-import-preview" aria-live="polite">
+        <div class="source-import-preview-heading">
+          <div>
+            <span class="eyebrow">SOURCE IMPORT REVIEW</span>
+            <h2>导入预览 · {{ sourceImportLabel }}</h2>
+          </div>
+          <span class="source-preview-count">
+            {{ sourceImportPreview.valid_count }}/{{ sourceImportPreview.entries.length }} 可导入
+          </span>
+        </div>
+        <p class="source-import-preview-note">
+          不兼容条目会自动跳过；预览阶段不会保存配置，也不会执行书源脚本。
+        </p>
+        <ul class="source-preview-list">
+          <li
+            v-for="entry in sourceImportPreview.entries"
+            :key="entry.index"
+            class="source-preview-entry"
+            :class="{ invalid: !entry.valid }"
+          >
+            <strong>{{ entry.index + 1 }}. {{ entry.name || "未命名书源" }}</strong>
+            <span v-if="entry.valid">
+              {{ entry.enabled ? "可导入 · 启用" : "可导入 · 停用" }}
+            </span>
+            <span v-else>跳过 · {{ entry.error || "不兼容" }}</span>
+          </li>
+        </ul>
+        <div class="source-preview-actions">
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="sourceTransferBusy || sourceImportPreview.valid_count === 0"
+            @click="confirmSourceImport"
+          >
+            {{ sourceTransferBusy ? "导入中…" : "导入通过项" }}
+          </button>
+          <button
+            class="source-link-button"
+            type="button"
+            :disabled="sourceTransferBusy"
+            @click="clearSourceImportPreview"
+          >
+            取消
+          </button>
+        </div>
+      </section>
 
       <div class="source-grid">
         <section class="source-library">
@@ -1515,6 +1636,88 @@ function nextChapter() {
 .source-url-input:focus {
   border-color: rgba(139, 183, 255, 0.75);
   outline: none;
+}
+
+.source-import-preview {
+  margin-top: 18px;
+  padding: 18px 20px;
+  border: 1px solid rgba(139, 183, 255, 0.28);
+  border-radius: 16px;
+  background: rgba(18, 34, 53, 0.72);
+}
+
+.source-import-preview-heading,
+.source-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.source-import-preview-heading h2 {
+  margin: 5px 0 0;
+  font-size: 18px;
+}
+
+.source-preview-count {
+  color: #b9f6dd;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.source-import-preview-note {
+  margin: 12px 0;
+  color: #a8b6ca;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.source-preview-list {
+  display: grid;
+  gap: 7px;
+  max-height: 240px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.source-preview-entry {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px;
+  border: 1px solid rgba(155, 231, 216, 0.16);
+  border-radius: 9px;
+  color: #dce7f7;
+  background: rgba(12, 17, 27, 0.55);
+  font-size: 12px;
+}
+
+.source-preview-entry strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-preview-entry span {
+  color: #b9f6dd;
+  text-align: right;
+}
+
+.source-preview-entry.invalid {
+  border-color: rgba(255, 176, 188, 0.3);
+}
+
+.source-preview-entry.invalid span {
+  color: #ffb0bc;
+}
+
+.source-preview-actions {
+  justify-content: flex-start;
+  margin-top: 14px;
 }
 
 .secondary-button {
