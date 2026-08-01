@@ -468,6 +468,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_and_empty_documents() {
+        let invalid = parse_import_bundle("{").expect_err("invalid json");
+        assert!(invalid.contains("JSON 无效"));
+
+        let empty = parse_import_bundle("[]").expect_err("empty array");
+        assert!(empty.contains("没有可导入"));
+    }
+
+    #[test]
+    fn rejects_unknown_rule_attributes() {
+        let payload = json!({
+            "bookSourceName": "Unknown attribute",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "ruleSearch": { "bookList": "li", "name": "h2@html" }
+        });
+        let error = parse_import_bundle(&payload.to_string()).expect_err("unknown attr");
+        assert!(error.contains("安全子集"));
+    }
+
+    #[test]
     fn accepts_a_raw_source_array() {
         let payload = json!([
             {
