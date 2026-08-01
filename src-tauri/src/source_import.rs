@@ -105,7 +105,8 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
     if is_native_source(object) {
         let source: BookSource = serde_json::from_value(Value::Object(object.clone()))
             .map_err(|error| format!("原生书源配置无法解析：{error}"))?;
-        return serde_json::to_value(source).map_err(|error| format!("书源配置序列化失败：{error}"));
+        return serde_json::to_value(source)
+            .map_err(|error| format!("书源配置序列化失败：{error}"));
     }
 
     let name = required_text(object, &["name", "bookSourceName"], "name")?;
@@ -123,9 +124,9 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
         ("contentUrl", &["contentUrl", "content_url"][..]),
     ] {
         if let Some(value) = first_value(object, keys) {
-            let url = value.as_str().ok_or_else(|| {
-                format!("{target} 必须是字符串；当前只支持 HTTP/CSS 书源")
-            })?;
+            let url = value
+                .as_str()
+                .ok_or_else(|| format!("{target} 必须是字符串；当前只支持 HTTP/CSS 书源"))?;
             output.insert(target.to_string(), Value::String(normalize_url(url)));
         }
     }
@@ -184,11 +185,7 @@ fn is_native_source(object: &Map<String, Value>) -> bool {
             || object.contains_key("search_url"))
 }
 
-fn normalize_page_rules(
-    value: &Value,
-    stage: &str,
-    item_keys: &[&str],
-) -> Result<Value, String> {
+fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Result<Value, String> {
     let object = value
         .as_object()
         .ok_or_else(|| format!("{stage} 必须是对象"))?;
@@ -237,11 +234,21 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("{context} 缺少 selector"))?;
             let (selector, parsed_attr) = parse_legado_rule(raw_selector, context)?;
-            let attr = object
-                .get("attr")
-                .and_then(Value::as_str)
-                .and_then(normalize_attr)
-                .or(parsed_attr);
+            let attr = if let Some(raw_attr) = object.get("attr").and_then(Value::as_str) {
+                let normalized = raw_attr.trim().to_ascii_lowercase();
+                if !matches!(
+                    normalized.as_str(),
+                    "text" | "content" | "href" | "src" | "title" | "alt" | "data-src"
+                ) {
+                    return Err(format!(
+                        "{context} 的属性后缀 @{} 不在安全子集内",
+                        raw_attr.trim()
+                    ));
+                }
+                normalize_attr(raw_attr)
+            } else {
+                parsed_attr
+            };
             let mut output = Map::new();
             output.insert("selector".to_string(), Value::String(selector));
             if let Some(attr) = attr {
@@ -283,9 +290,7 @@ fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>
     let attr = suffix.and_then(normalize_attr);
     if let Some(suffix) = suffix {
         if attr.is_none() && !suffix.eq_ignore_ascii_case("text") {
-            return Err(format!(
-                "{context} 的属性后缀 @{suffix} 不在安全子集内"
-            ));
+            return Err(format!("{context} 的属性后缀 @{suffix} 不在安全子集内"));
         }
     }
     Ok((selector, attr))
@@ -307,11 +312,7 @@ fn normalize_selector(value: &str, context: &str) -> Result<String, String> {
             "{context} 使用了不受支持的 XPath/脚本规则；请改写为 CSS 选择器"
         ));
     }
-    for (prefix, replacement) in [
-        ("class.", "."),
-        ("id.", "#"),
-        ("tag.", ""),
-    ] {
+    for (prefix, replacement) in [("class.", "."), ("id.", "#"), ("tag.", "")] {
         if let Some(rest) = selector.strip_prefix(prefix) {
             selector = format!("{replacement}{rest}");
             break;
@@ -354,11 +355,7 @@ fn normalize_headers(value: &Value) -> Result<Value, String> {
     Ok(Value::Object(headers))
 }
 
-fn required_text(
-    object: &Map<String, Value>,
-    keys: &[&str],
-    name: &str,
-) -> Result<String, String> {
+fn required_text(object: &Map<String, Value>, keys: &[&str], name: &str) -> Result<String, String> {
     first_value(object, keys)
         .and_then(Value::as_str)
         .map(str::trim)
@@ -381,6 +378,9 @@ fn first_value<'a>(object: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a 
 
 fn normalize_url(value: &str) -> String {
     value
+        .split("||")
+        .next()
+        .unwrap_or_default()
         .trim()
         .replace("{{page}}", "1")
         .replace("{{pageNum}}", "1")
@@ -443,7 +443,13 @@ mod tests {
         let source: BookSource =
             serde_json::from_str(&imported[0].config_json).expect("canonical source");
         assert_eq!(source.name, "Legado Fixture");
-        assert_eq!(source.search.as_ref().and_then(|rules| rules.item.as_deref()), Some(".book-list"));
+        assert_eq!(
+            source
+                .search
+                .as_ref()
+                .and_then(|rules| rules.item.as_deref()),
+            Some(".book-list")
+        );
         assert!(matches!(
             source.search.as_ref().and_then(|rules| rules.url.as_ref()),
             Some(SourceRule::Detailed { attr: Some(attr), .. }) if attr == "href"
