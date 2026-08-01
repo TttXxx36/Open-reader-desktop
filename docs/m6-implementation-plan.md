@@ -88,6 +88,7 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 - 2026-08-02：新增安全书源适配器，接受项目导出包、单对象和数组；映射 Legado 常用 CSS 规则，并拒绝 XPath、JavaScript 和未实现的认证规则。
 - 2026-08-02：新增 `scripts/verify-ui-contract.mjs` 并接入 CI；Rust 适配器包含原生包、Legado CSS 子集、数组、无效文档、不安全规则和未知属性测试。
 - 当前边界：适配器按“整文件失败”处理不兼容条目，预览、逐条跳过和授权夹具将在 M6.1 补齐；本轮不在本地构建或安装。
+- CI 验证：运行 [30709107190](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30709107190) 在提交 `8cd878c` 上通过 Frontend checks 与 Rust checks；此前发现并修复 `export_sources` 对已移除 `SourceBundle` 的回归引用。
 
 ## 四、测试与验收
 
