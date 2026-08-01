@@ -1,6 +1,7 @@
 mod db;
 mod library;
 mod source;
+mod source_import;
 
 use db::{BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceSummary};
 use library::parse_book_bytes;
@@ -180,17 +181,10 @@ fn import_sources(
         return Err("书源文件超过 2 MB 限制".to_string());
     }
 
-    let bundle: SourceBundle = serde_json::from_str(&bundle_json)
-        .map_err(|error| format!("书源文件 JSON 无效：{error}"))?;
-    if bundle.version != 1 {
-        return Err(format!("不支持的书源文件版本：{}", bundle.version));
-    }
-    if bundle.sources.is_empty() {
-        return Err("书源文件没有可导入的配置".to_string());
-    }
+    let bundle = source_import::parse_import_bundle(&bundle_json)?;
+    let mut imported = Vec::with_capacity(bundle.len());
 
-    let mut imported = Vec::with_capacity(bundle.sources.len());
-    for (index, item) in bundle.sources.into_iter().enumerate() {
+    for (index, item) in bundle.into_iter().enumerate() {
         let validation = source::validate_source_json(&item.config_json);
         let source = validation.source.ok_or_else(|| {
             format!(
@@ -217,19 +211,6 @@ fn import_sources(
     }
 
     Ok(imported)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SourceBundle {
-    version: u32,
-    sources: Vec<SourceBundleItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SourceBundleItem {
-    id: Option<String>,
-    enabled: bool,
-    config_json: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
