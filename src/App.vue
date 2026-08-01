@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import brandMark from "./assets/open-reader-mark.svg";
 
-type View = "library" | "reader" | "sources";
+type View = "library" | "reader" | "sources" | "settings";
 type ReaderTheme = "night" | "paper" | "sepia";
+type ReaderFont = "system" | "yahei" | "serif" | "kai";
 
 interface BookSummary {
   id: string;
@@ -36,8 +38,12 @@ interface ChapterContent {
 }
 
 interface ReaderSettings {
+  fontFamily: ReaderFont;
   fontSize: number;
   lineHeight: number;
+  contentWidth: number;
+  paragraphSpacing: number;
+  textIndent: number;
   theme: ReaderTheme;
 }
 
@@ -155,6 +161,21 @@ interface MultiSourceSearchResult {
 }
 
 const SETTINGS_KEY = "open-reader.settings";
+const DEFAULT_READER_SETTINGS: ReaderSettings = {
+  fontFamily: "system",
+  fontSize: 19,
+  lineHeight: 1.9,
+  contentWidth: 820,
+  paragraphSpacing: 1.3,
+  textIndent: 2,
+  theme: "night",
+};
+const readerFontStacks: Record<ReaderFont, string> = {
+  system: '"Segoe UI Variable", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
+  yahei: '"Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif',
+  serif: '"Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", SimSun, serif',
+  kai: '"KaiTi", "Kaiti SC", "STKaiti", serif',
+};
 const view = ref<View>("library");
 const books = ref<BookSummary[]>([]);
 const detail = ref<BookDetail | null>(null);
@@ -206,13 +227,23 @@ const remoteChapterParagraphs = computed(() =>
   remoteChapter.value?.content.split(/\n{2,}/).filter(Boolean) ?? [],
 );
 const readerStyle = computed(() => ({
-  "--reader-font-size": `${settings.value.fontSize}px`,
+  "--reader-font-family": readerFontStacks[settings.value.fontFamily],
+  "--reader-font-size": String(settings.value.fontSize) + "px",
   "--reader-line-height": settings.value.lineHeight,
+  "--reader-content-width": String(settings.value.contentWidth) + "px",
+  "--reader-paragraph-spacing": String(settings.value.paragraphSpacing) + "em",
+  "--reader-text-indent": String(settings.value.textIndent) + "em",
 }));
 const themeLabels: Record<ReaderTheme, string> = {
   night: "夜间",
   paper: "纸张",
   sepia: "暖色",
+};
+const readerFontLabels: Record<ReaderFont, string> = {
+  system: "系统无衬线",
+  yahei: "微软雅黑",
+  serif: "宋体/衬线",
+  kai: "楷体",
 };
 
 onMounted(loadBooks);
@@ -222,17 +253,24 @@ watch(settings, (value) => {
 
 function loadSettings(): ReaderSettings {
   try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "");
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") as Partial<ReaderSettings>;
+    const fontFamily = saved.fontFamily;
+    const theme = saved.theme;
     return {
-      fontSize: Number(saved.fontSize) || 19,
-      lineHeight: Number(saved.lineHeight) || 1.9,
-      theme: saved.theme === "paper" || saved.theme === "sepia" ? saved.theme : "night",
+      ...DEFAULT_READER_SETTINGS,
+      ...saved,
+      fontFamily: fontFamily === "yahei" || fontFamily === "serif" || fontFamily === "kai" ? fontFamily : "system",
+      theme: theme === "paper" || theme === "sepia" ? theme : "night",
+      fontSize: Number(saved.fontSize) || DEFAULT_READER_SETTINGS.fontSize,
+      lineHeight: Number(saved.lineHeight) || DEFAULT_READER_SETTINGS.lineHeight,
+      contentWidth: Number(saved.contentWidth) || DEFAULT_READER_SETTINGS.contentWidth,
+      paragraphSpacing: Number(saved.paragraphSpacing) || DEFAULT_READER_SETTINGS.paragraphSpacing,
+      textIndent: Number.isFinite(Number(saved.textIndent)) ? Number(saved.textIndent) : DEFAULT_READER_SETTINGS.textIndent,
     };
   } catch {
-    return { fontSize: 19, lineHeight: 1.9, theme: "night" };
+    return { ...DEFAULT_READER_SETTINGS };
   }
 }
-
 async function loadBooks() {
   try {
     books.value = await invoke<BookSummary[]>("list_books");
@@ -248,6 +286,20 @@ async function openSources() {
   view.value = "sources";
   errorMessage.value = "";
   await Promise.all([loadSources(), refreshSourceCacheStatus()]);
+}
+
+function openSettings() {
+  view.value = "settings";
+  errorMessage.value = "";
+}
+
+function closeSettings() {
+  view.value = remoteBook.value && remoteChapter.value || detail.value && chapter.value ? "reader" : "library";
+  errorMessage.value = "";
+}
+
+function resetSettings() {
+  settings.value = { ...DEFAULT_READER_SETTINGS };
 }
 
 async function loadSources() {
@@ -715,9 +767,16 @@ function nextChapter() {
 
 <template>
   <main class="shell">
+    <input
+      ref="sourceImportInput"
+      class="file-input"
+      type="file"
+      accept=".json,application/json"
+      @change="importSourceFile"
+    />
     <aside class="sidebar">
       <div class="brand">
-        <span class="brand-mark">O</span>
+        <span class="brand-mark"><img :src="brandMark" alt="" aria-hidden="true" /></span>
         <div>
           <strong>Open Reader</strong>
           <span>Desktop · M2</span>
@@ -725,9 +784,9 @@ function nextChapter() {
       </div>
 
       <nav class="nav" aria-label="主导航">
-        <button class="nav-item active" type="button" @click="closeReader">书架 <span>⌘1</span></button>
-        <button class="nav-item" type="button" :class="{ active: view === 'sources' }" @click="openSources">书源 <span>M3</span></button>
-        <button class="nav-item" type="button" disabled>设置 <span>M6</span></button>
+        <button class="nav-item" :class="{ active: view === 'library' }" type="button" @click="closeReader">书架 <span>⌘1</span></button>
+        <button class="nav-item" :class="{ active: view === 'sources' }" type="button" @click="openSources">书源 <span>M6</span></button>
+        <button class="nav-item" :class="{ active: view === 'settings' }" type="button" @click="openSettings">设置 <span>M6</span></button>
       </nav>
 
       <div class="sidebar-note">
@@ -743,13 +802,6 @@ function nextChapter() {
         type="file"
         accept=".txt,.epub,text/plain,application/epub+zip"
         @change="importFile"
-      />
-      <input
-        ref="sourceImportInput"
-        class="file-input"
-        type="file"
-        accept=".json,application/json"
-        @change="importSourceFile"
       />
 
       <header class="topbar">
@@ -1024,6 +1076,65 @@ function nextChapter() {
       </section>
     </section>
 
+    <section v-else-if="view === 'settings'" class="content settings-content" id="settings">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">APP & READER SETTINGS</span>
+          <h1>设置</h1>
+        </div>
+        <button class="secondary-button" type="button" @click="closeSettings">返回阅读</button>
+      </header>
+
+      <section class="settings-panel">
+        <div class="settings-section-heading">
+          <div>
+            <span class="eyebrow">READER</span>
+            <h2>阅读外观</h2>
+          </div>
+          <button class="source-link-button" type="button" @click="resetSettings">恢复默认</button>
+        </div>
+
+        <div class="settings-grid">
+          <label class="settings-field">
+            <span>字体</span>
+            <select v-model="settings.fontFamily">
+              <option v-for="(label, key) in readerFontLabels" :key="key" :value="key">{{ label }}</option>
+            </select>
+          </label>
+          <label class="settings-field">
+            <span>主题</span>
+            <select v-model="settings.theme">
+              <option value="night">夜间</option>
+              <option value="paper">纸张</option>
+              <option value="sepia">暖色</option>
+            </select>
+          </label>
+          <label class="settings-field">
+            <span>字号 <strong>{{ settings.fontSize }} px</strong></span>
+            <input v-model.number="settings.fontSize" type="range" min="15" max="30" step="1" />
+          </label>
+          <label class="settings-field">
+            <span>行距 <strong>{{ settings.lineHeight.toFixed(1) }}</strong></span>
+            <input v-model.number="settings.lineHeight" type="range" min="1.4" max="2.4" step="0.1" />
+          </label>
+          <label class="settings-field">
+            <span>版心宽度 <strong>{{ settings.contentWidth }} px</strong></span>
+            <input v-model.number="settings.contentWidth" type="range" min="560" max="1100" step="20" />
+          </label>
+          <label class="settings-field">
+            <span>段间距 <strong>{{ settings.paragraphSpacing.toFixed(1) }}em</strong></span>
+            <input v-model.number="settings.paragraphSpacing" type="range" min="0.4" max="2.4" step="0.1" />
+          </label>
+          <label class="settings-field">
+            <span>首行缩进 <strong>{{ settings.textIndent.toFixed(1) }}em</strong></span>
+            <input v-model.number="settings.textIndent" type="range" min="0" max="2" step="0.5" />
+          </label>
+        </div>
+
+        <p class="settings-note">这些设置先作为全局默认值保存到本机；按书籍独立设置和 EPUB 富文本排版将在后续 M6.2/M6.3 完成。</p>
+      </section>
+    </section>
+
     <section
       v-else-if="remoteBook && remoteChapter"
       class="content reader-content"
@@ -1042,6 +1153,7 @@ function nextChapter() {
           <button class="toolbar-button" type="button" :disabled="remoteBusy" @click="refreshRemoteBook">
             {{ remoteBusy ? "刷新中…" : "刷新内容" }}
           </button>
+          <button class="toolbar-button" type="button" @click="openSettings">阅读设置</button>
           <button class="toolbar-button" type="button" @click="cycleTheme">{{ themeLabels[settings.theme] }}</button>
         </div>
       </header>
@@ -1988,6 +2100,9 @@ function nextChapter() {
   min-width: 0;
   padding: 56px clamp(28px, 6vw, 86px) 70px;
   color: #dfe7f2;
+  width: min(100%, var(--reader-content-width));
+  margin: 0 auto;
+  font-family: var(--reader-font-family);
   font-size: var(--reader-font-size);
   line-height: var(--reader-line-height);
 }
@@ -2001,7 +2116,8 @@ function nextChapter() {
 }
 
 .reader-page p {
-  margin: 0 0 1.3em;
+  margin: 0 0 var(--reader-paragraph-spacing);
+  text-indent: var(--reader-text-indent);
   white-space: pre-wrap;
 }
 
@@ -2084,6 +2200,85 @@ function nextChapter() {
     max-height: 180px;
     border-right: 0;
     border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  }
+}
+
+.settings-content {
+  max-width: 1080px;
+}
+
+.settings-panel {
+  margin-top: 28px;
+  padding: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 16px;
+  background: rgba(19, 27, 42, 0.72);
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.settings-section-heading h2 {
+  margin: 9px 0 0;
+  font-size: 20px;
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 8px;
+  color: #aebbd0;
+  font-size: 13px;
+}
+
+.settings-field > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-field strong {
+  color: #dce7f7;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-field select,
+.settings-field input[type="range"] {
+  width: 100%;
+}
+
+.settings-field select {
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 9px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.settings-field input[type="range"] {
+  accent-color: #86dfc2;
+}
+
+.settings-note {
+  margin: 24px 0 0;
+  color: #8391a6;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+@media (max-width: 720px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>
