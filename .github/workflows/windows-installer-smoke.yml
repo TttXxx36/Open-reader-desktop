@@ -22,7 +22,7 @@ concurrency:
 jobs:
   smoke:
     name: Install and package smoke tests
-    if: \${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: windows-latest
     timeout-minutes: 25
 
@@ -30,12 +30,12 @@ jobs:
       - name: Download release artifact
         shell: pwsh
         env:
-          GH_TOKEN: \${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if ("\${{ github.event_name }}" -eq "workflow_run") {
-            $runId = "\${{ github.event.workflow_run.id }}"
+          if ("${{ github.event_name }}" -eq "workflow_run") {
+            $runId = "${{ github.event.workflow_run.id }}"
           } else {
-            $runId = "\${{ inputs.release_run_id }}"
+            $runId = "${{ inputs.release_run_id }}"
           }
 
           if ([string]::IsNullOrWhiteSpace($runId)) {
