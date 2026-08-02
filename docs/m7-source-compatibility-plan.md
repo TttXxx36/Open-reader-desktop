@@ -93,18 +93,11 @@
 - 空库/旧 M5 数据库升级失败回滚、重复来源 URL 冲突和非法枚举专项夹具。
 - 跨分组拖拽、批量元数据编辑、快照清理策略和 Windows 手工恢复流程。
 
-## M7.2 规则执行增强（首个切片已完成）
+## M7.2 规则执行增强（分页诊断与安全回退链已完成）
 
-首个切片已把模板变量和分页执行内核接入真实 pipeline：支持 page、pageNum、pageIndex、page+1、page-1、keyword/key、bookUrl/bookId、chapterId；多页搜索有 20 页硬上限，并在空页或无新增结果时停止。调试步骤现在携带变量名快照（关键词、URL 和 ID 脱敏）与 cache_hit 字段，前端可直接查看每个阶段的变量上下文。
+分页/模板变量首个切片已接入真实 pipeline：支持 page、pageNum、pageIndex、page+1、page-1、keyword/key、bookUrl/bookId、chapterId；多页搜索有 20 页硬上限，并在空页或无新增结果时停止。随后补齐了统一的每源诊断模型（扫描页数、解析数量、终止原因、请求失败）和前端展示；调试步骤携带变量名快照（关键词、URL 和 ID 脱敏）与 cache_hit 字段。
 
-远程证据：[GitHub Actions run 30760156272](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760156272)（Frontend/UI contract、Rust fmt/check、40 tests）。
-
-后续切片：
-
-1. 把页数、终止原因和解析数量加入统一搜索结果诊断模型。
-2. 在不执行脚本的前提下补链式 URL/规则中间模型，限制深度、响应数和总耗时。
-3. 扩展有限 JSONPath 的数组过滤/字段别名，并为每项能力补授权夹具和拒绝用例。
-4. 将缓存命中、失败回退和重试记录合并到可导出的诊断快照。
+当前已完成安全回退链子集：导入器保留 
 
 ## M7.3 XPath 评估闸门
 
