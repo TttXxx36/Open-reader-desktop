@@ -556,6 +556,15 @@ impl SourceEngine {
         sources: Vec<SourceDefinition>,
         keyword: &str,
     ) -> MultiSourceSearchResult {
+        self.search_many_with_pages(sources, keyword, 1).await
+    }
+
+    pub async fn search_many_with_pages(
+        &self,
+        sources: Vec<SourceDefinition>,
+        keyword: &str,
+        max_pages: usize,
+    ) -> MultiSourceSearchResult {
         let enabled_sources = sources.len();
         let mut tasks = tokio::task::JoinSet::new();
 
@@ -563,7 +572,9 @@ impl SourceEngine {
             let engine = self.clone();
             let keyword = keyword.to_string();
             tasks.spawn(async move {
-                let result = engine.search(&definition.source, &keyword).await;
+                let result = engine
+                    .search_pages(&definition.source, &keyword, max_pages)
+                    .await;
                 (definition, result)
             });
         }
