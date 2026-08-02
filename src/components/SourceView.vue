@@ -88,6 +88,11 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
               <small v-if="entry.valid && entry.changed_fields.length">
                 变更：{{ entry.changed_fields.join("、") }}
               </small>
+              <div v-if="entry.unsupported_rules.length" class="source-preview-unsupported">
+                <span v-for="rule in entry.unsupported_rules" :key="rule.context + rule.value">
+                  不执行 · {{ rule.context }}：{{ rule.value }}（{{ rule.reason }}）
+                </span>
+              </div>
             </div>
             <div class="source-preview-status">
               <span v-if="entry.valid">{{ entry.action }} · {{ entry.enabled ? "启用" : "停用" }}</span>
