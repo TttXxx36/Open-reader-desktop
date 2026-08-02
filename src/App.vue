@@ -109,6 +109,9 @@ interface SourceImportPreviewEntry {
   enabled: boolean;
   valid: boolean;
   error: string | null;
+  action: string;
+  existing_id: string | null;
+  changed_fields: string[];
 }
 
 interface SourceImportPreview {
@@ -269,6 +272,8 @@ const sourceWeightDraft = ref("0");
 const sourceOrderDraft = ref("0");
 const sourceExploreDraft = ref(false);
 const sourceCommentDraft = ref("");
+const selectedSourceIds = ref<string[]>([]);
+const sourceBatchBusy = ref(false);
 const filteredSources = computed(() => {
   const filter = sourceGroupFilter.value.trim().toLocaleLowerCase();
   if (!filter) return sources.value;
@@ -276,6 +281,10 @@ const filteredSources = computed(() => {
     source.group_name.toLocaleLowerCase().includes(filter),
   );
 });
+const allFilteredSourcesSelected = computed(() =>
+  filteredSources.value.length > 0 &&
+  filteredSources.value.every((source) => selectedSourceIds.value.includes(source.id)),
+);
 const sourceId = ref<string | null>(null);
 const sourceListBusy = ref(false);
 const sourcePipelineBusy = ref(false);
@@ -638,6 +647,79 @@ async function toggleSourceExplore(source: SourceSummary) {
     if (sourceId.value === saved.id) selectSource(saved);
   } catch (error) {
     errorMessage.value = String(error);
+  }
+}
+
+function toggleSourceSelection(sourceId: string) {
+  selectedSourceIds.value = selectedSourceIds.value.includes(sourceId)
+    ? selectedSourceIds.value.filter((id) => id !== sourceId)
+    : [...selectedSourceIds.value, sourceId];
+}
+
+function toggleSelectAllSources() {
+  const visibleIds = filteredSources.value.map((source) => source.id);
+  if (!visibleIds.length) return;
+  if (allFilteredSourcesSelected.value) {
+    selectedSourceIds.value = selectedSourceIds.value.filter((id) => !visibleIds.includes(id));
+  } else {
+    selectedSourceIds.value = [...new Set([...selectedSourceIds.value, ...visibleIds])];
+  }
+}
+
+async function applySourceBatch(action: "enable" | "disable" | "explore-on" | "explore-off" | "delete") {
+  const sourceIds = [...selectedSourceIds.value];
+  if (!sourceIds.length) {
+    errorMessage.value = "请先选择书源";
+    return;
+  }
+  if (action === "delete" && !window.confirm(`确定删除选中的 ${sourceIds.length} 个书源吗？`)) return;
+
+  sourceBatchBusy.value = true;
+  errorMessage.value = "";
+  try {
+    if (action === "delete") {
+      await invoke("delete_sources", { sourceIds });
+    } else if (action === "enable" || action === "disable") {
+      await invoke("set_sources_enabled", {
+        sourceIds,
+        enabled: action === "enable",
+      });
+    } else {
+      await invoke("set_sources_explore_enabled", {
+        sourceIds,
+        enabled: action === "explore-on",
+      });
+    }
+    await loadSources();
+    selectedSourceIds.value = [];
+    if (sourceId.value && !sources.value.some((source) => source.id === sourceId.value)) {
+      newSourceDraft();
+    }
+    sourceTransferMessage.value = `已完成 ${sourceIds.length} 个书源的批量操作`;
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceBatchBusy.value = false;
+  }
+}
+
+async function reorderSource(source: SourceSummary, direction: "up" | "down") {
+  const groupSources = sources.value.filter((item) => item.group_name === source.group_name);
+  const index = groupSources.findIndex((item) => item.id === source.id);
+  const targetIndex = direction === "up" ? index - 1 : index + 1;
+  if (index < 0 || targetIndex < 0 || targetIndex >= groupSources.length) return;
+
+  const orderedIds = groupSources.map((item) => item.id);
+  [orderedIds[index], orderedIds[targetIndex]] = [orderedIds[targetIndex], orderedIds[index]];
+  sourceBatchBusy.value = true;
+  errorMessage.value = "";
+  try {
+    await invoke("reorder_sources", { sourceIds: orderedIds });
+    await loadSources();
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceBatchBusy.value = false;
   }
 }
 
@@ -1094,7 +1176,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
