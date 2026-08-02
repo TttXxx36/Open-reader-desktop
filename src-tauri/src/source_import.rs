@@ -857,6 +857,26 @@ mod tests {
     }
 
     #[test]
+    fn preserves_bounded_url_fallback_chain() {
+        let payload = json!({
+            "bookSourceName": "URL Chain Fixture",
+            "searchUrl": "https://one.example.test/search?q={{key}}||https://two.example.test/search?q={{key}}",
+            "ruleSearch": {
+                "bookList": "li.book",
+                "bookName": "h2 a",
+                "bookUrl": "h2 a@href"
+            }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("URL chain source");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("canonical URL chain source");
+        assert_eq!(
+            source.search_url,
+            "https://one.example.test/search?q={{key}}||https://two.example.test/search?q={{key}}"
+        );
+    }
+
+    #[test]
     fn normalizes_legado_aliases_and_header_string() {
         let payload = json!({
             "bookSourceName": "Alias Fixture",
