@@ -3,7 +3,7 @@ import { inject } from "vue";
 
 const context = inject<any>("open-reader-context");
 if (!context) throw new Error("Open Reader context is not available.");
-const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
+const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
 </script>
 
 <template>
@@ -52,6 +52,12 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
       </header>
 
       <p v-if="sourceTransferMessage" class="source-inline-success">{{ sourceTransferMessage }}</p>
+      <div v-if="sourceSnapshots.length" class="source-snapshot-bar">
+        <span>最近快照：{{ sourceSnapshots[0].source_count }} 个书源 · {{ sourceSnapshots[0].created_at }}</span>
+        <button class="source-link-button" type="button" :disabled="sourceTransferBusy" @click="restoreSourceSnapshot()">
+          恢复最近快照
+        </button>
+      </div>
 
       <section v-if="sourceImportPreview" class="source-import-preview" aria-live="polite">
         <div class="source-import-preview-heading">
@@ -86,6 +92,14 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
           </li>
         </ul>
         <div class="source-preview-actions">
+          <label class="source-conflict-strategy">
+            <span>冲突处理</span>
+            <select v-model="sourceImportStrategy" :disabled="sourceTransferBusy">
+              <option value="update">更新已有</option>
+              <option value="skip-existing">跳过已有</option>
+              <option value="new">全部新建</option>
+            </select>
+          </label>
           <button
             class="secondary-button"
             type="button"
@@ -126,6 +140,8 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
             <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('disable')">停用</button>
             <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('explore-on')">开启发现</button>
             <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('explore-off')">关闭发现</button>
+            <input v-model="sourceBatchGroup" class="source-batch-group-input" :disabled="sourceBatchBusy" placeholder="目标分组" />
+            <button class="source-link-button" type="button" :disabled="sourceBatchBusy || !sourceBatchGroup.trim()" @click="applySourceBatch('group')">移动分组</button>
             <button class="source-link-button danger" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('delete')">批量删除</button>
           </div>
           <p v-if="errorMessage" class="source-inline-error">{{ errorMessage }}</p>
