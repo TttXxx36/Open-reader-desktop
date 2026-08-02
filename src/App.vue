@@ -218,6 +218,7 @@ interface RemoteBookDetail {
   chapter_update: ChapterUpdateSummary | null;
   stale: boolean;
   refresh_error: string | null;
+  cache_hit: boolean;
 }
 
 interface RemoteChapterContent {
@@ -226,6 +227,7 @@ interface RemoteChapterContent {
   next_url: string | null;
   stale: boolean;
   refresh_error: string | null;
+  cache_hit: boolean;
 }
 
 interface SourceSearchDiagnostics {
@@ -2566,6 +2568,11 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 .reader-stale-note {
   color: #ffcf9b;
   background: rgba(139, 90, 34, 0.2);
+}
+
+.reader-cache-note {
+  color: #b9d9ff;
+  background: rgba(54, 92, 145, 0.22);
 }
 
 .reader-layout {
