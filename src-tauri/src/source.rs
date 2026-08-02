@@ -1465,9 +1465,7 @@ fn bounded_next_url(url: &str) -> Result<Option<String>, SourceError> {
         )));
     }
     if url.contains("||") {
-        return Err(SourceError::InvalidUrl(
-            "next URL 不支持回退链".to_string(),
-        ));
+        return Err(SourceError::InvalidUrl("next URL 不支持回退链".to_string()));
     }
     validate_url(url)?;
     Ok(Some(url.to_string()))
@@ -2759,10 +2757,7 @@ mod tests {
             Some("https://example.test/chapter/2".to_string())
         );
         assert!(bounded_next_url("https://example.test/chapter/1", "javascript:alert(1)").is_err());
-        let oversized = format!(
-            "https://example.test/{}",
-            "a".repeat(MAX_NEXT_URL_BYTES)
-        );
+        let oversized = format!("https://example.test/{}", "a".repeat(MAX_NEXT_URL_BYTES));
         assert!(bounded_next_url("https://example.test/chapter/1", &oversized).is_err());
     }
 
