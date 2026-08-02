@@ -2521,6 +2521,33 @@ mod tests {
     }
 
     #[test]
+    fn extracts_bounded_jsonpath_filter_and_bracket_alias() {
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let values = engine
+            .extract_json_values(
+                r#"{ "books": [
+                    { "kind": "novel", "title": "第一本" },
+                    { "kind": "comic", "title": "第二本" }
+                ] }"#,
+                "$.books[?(@.kind == 'novel')]['title']",
+            )
+            .expect("safe JSONPath should parse");
+        assert_eq!(values, vec!["第一本"]);
+    }
+
+    #[test]
+    fn rejects_unsafe_jsonpath_filter_expression() {
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let error = engine
+            .extract_json_values(
+                r#"{ "books": [{ "kind": "novel", "title": "第一本" }] }"#,
+                "$.books[?(@.kind != 'novel')]",
+            )
+            .expect_err("unsupported filter should be rejected");
+        assert!(matches!(error, SourceError::InvalidJsonPath(_)));
+    }
+
+    #[test]
     fn parses_json_search_results_with_jsonpath_rules() {
         let source: BookSource = serde_json::from_str(
             r#"{
