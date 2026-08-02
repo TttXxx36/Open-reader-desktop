@@ -1556,9 +1556,7 @@ pub fn evaluate_next_page_policy(
     let max_depth = policy.max_depth.min(default_next_page_depth());
     let max_pages = policy.max_pages.min(default_next_page_count());
     let max_bytes = policy.max_bytes.min(default_next_page_bytes());
-    let max_duration_secs = policy
-        .max_duration_secs
-        .min(default_next_page_duration());
+    let max_duration_secs = policy.max_duration_secs.min(default_next_page_duration());
 
     if !policy.enabled {
         return bounded(
@@ -1582,7 +1580,13 @@ pub fn evaluate_next_page_policy(
         );
     }
     if pages_used >= max_pages {
-        return bounded(false, "page_limit", depth, 0, max_bytes.saturating_sub(bytes_used));
+        return bounded(
+            false,
+            "page_limit",
+            depth,
+            0,
+            max_bytes.saturating_sub(bytes_used),
+        );
     }
     if bytes_used >= max_bytes {
         return bounded(false, "byte_limit", depth, max_pages.saturating_sub(pages_used), 0);
