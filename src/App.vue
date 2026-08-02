@@ -180,6 +180,24 @@ interface SourcePipelineResult {
   debug_steps: SourceDebugStep[];
 }
 
+interface SourceDiagnosticSnapshot {
+  schema_version: 1;
+  generated_at: string;
+  source_name: string;
+  summary: {
+    search_results: number;
+    chapters: number;
+    request_steps: number;
+    failed_steps: number;
+    cache_hits: number;
+    total_duration_ms: number;
+  };
+  cache: SourceCacheStatus | null;
+  steps: SourceDebugStep[];
+  truncated_steps: boolean;
+  privacy: string[];
+}
+
 interface UnifiedSearchItem {
   source_id: string;
   source_name: string;
@@ -1111,6 +1129,89 @@ async function runSourcePipeline() {
   }
 }
 
+const MAX_DIAGNOSTIC_STEPS = 256;
+const MAX_DIAGNOSTIC_BYTES = 256 * 1024;
+
+function truncateDiagnostic(value: string, limit: number) {
+  const normalized = value.replace(/[\\u0000-\\u001f\\u007f]/g, " ");
+  return normalized.length > limit ? normalized.slice(0, limit) + "…" : normalized;
+}
+
+function sanitizeDiagnosticUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    parsed.search = "";
+    parsed.hash = "";
+    return truncateDiagnostic(parsed.origin + parsed.pathname, 512);
+  } catch {
+    return truncateDiagnostic(value.replace(/[?#].*$/, ""), 512);
+  }
+}
+
+function exportSourceDiagnostics() {
+  const pipeline = sourcePipeline.value;
+  if (!pipeline) {
+    errorMessage.value = "请先运行一次书源调试";
+    return;
+  }
+
+  const sourceValue = sourceValidation.value?.source;
+  const sourceName = isRecord(sourceValue) && typeof sourceValue.name === "string"
+    ? truncateDiagnostic(sourceValue.name, 128)
+    : "当前书源";
+  const steps = pipeline.debug_steps
+    .slice(0, MAX_DIAGNOSTIC_STEPS)
+    .map((step): SourceDebugStep => ({
+      stage: truncateDiagnostic(step.stage, 128),
+      url: sanitizeDiagnosticUrl(step.url),
+      duration_ms: Number.isFinite(step.duration_ms) ? Math.max(0, Math.round(step.duration_ms)) : 0,
+      status: typeof step.status === "number" ? step.status : null,
+      bytes: typeof step.bytes === "number" ? Math.max(0, Math.round(step.bytes)) : null,
+      error: step.error ? truncateDiagnostic(step.error, 512) : null,
+      variables: Object.fromEntries(
+        Object.keys(step.variables ?? {})
+          .slice(0, 32)
+          .map((key) => [truncateDiagnostic(key, 64), "<redacted>"]),
+      ),
+      cache_hit: Boolean(step.cache_hit),
+    }));
+  const snapshot: SourceDiagnosticSnapshot = {
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    source_name: sourceName,
+    summary: {
+      search_results: pipeline.search_results.length,
+      chapters: pipeline.chapters.length,
+      request_steps: steps.length,
+      failed_steps: steps.filter((step) => Boolean(step.error)).length,
+      cache_hits: steps.filter((step) => step.cache_hit).length,
+      total_duration_ms: steps.reduce((total, step) => total + step.duration_ms, 0),
+    },
+    cache: sourceCacheStatus.value ? { ...sourceCacheStatus.value } : null,
+    steps,
+    truncated_steps: pipeline.debug_steps.length > steps.length,
+    privacy: [
+      "不导出关键词、书籍/章节 ID、请求头、Cookie 或正文",
+      "URL 查询参数和片段已移除",
+      "变量值统一替换为 <redacted>",
+    ],
+  };
+  const payload = JSON.stringify(snapshot, null, 2);
+  if (payload.length > MAX_DIAGNOSTIC_BYTES) {
+    errorMessage.value = "诊断快照超过 256 KB 限制，请减少调试步骤后重试";
+    return;
+  }
+
+  const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "open-reader-diagnostics-" + new Date().toISOString().slice(0, 10) + ".json";
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  sourceTransferMessage.value = "已导出脱敏诊断快照（" + steps.length + " 个步骤）";
+}
+
 async function validateSource() {
   sourceBusy.value = true;
   sourceValidation.value = null;
@@ -1269,7 +1370,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
