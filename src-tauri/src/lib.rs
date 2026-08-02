@@ -1057,6 +1057,7 @@ async fn fetch_source_chapter(
 async fn search_sources(
     database: tauri::State<'_, Database>,
     keyword: String,
+    max_pages: Option<usize>,
 ) -> Result<MultiSourceSearchResult, String> {
     let keyword = keyword.trim();
     if keyword.is_empty() {
@@ -1087,7 +1088,9 @@ async fn search_sources(
     }
 
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
-    let mut result = engine.search_many(definitions, keyword).await;
+    let mut result = engine
+        .search_many_with_pages(definitions, keyword, max_pages.unwrap_or(1))
+        .await;
     result.enabled_sources = enabled_sources;
     result.failures.splice(0..0, failures);
     Ok(result)
