@@ -1242,7 +1242,11 @@ fn validate_url(url: &str) -> Result<(), SourceError> {
 
 fn expand_url_template(url: &str) -> String {
     url.replace("{{keyword}}", "open-reader")
+        .replace("{{key}}", "open-reader")
         .replace("{{page}}", "1")
+        .replace("{{pageNum}}", "1")
+        .replace("{{page+1}}", "2")
+        .replace("{{page-1}}", "0")
 }
 
 fn parse_selector(value: &str) -> Result<Selector, SourceError> {
