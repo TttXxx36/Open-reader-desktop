@@ -1598,7 +1598,13 @@ pub fn evaluate_next_page_policy(
         );
     }
     if elapsed_secs >= max_duration_secs {
-        return bounded(false, "time_limit", depth, max_pages.saturating_sub(pages_used), max_bytes.saturating_sub(bytes_used));
+        return bounded(
+            false,
+            "time_limit",
+            depth,
+            max_pages.saturating_sub(pages_used),
+            max_bytes.saturating_sub(bytes_used),
+        );
     }
 
     let Some(candidate) = bounded_next_url(candidate_url).ok().flatten() else {
