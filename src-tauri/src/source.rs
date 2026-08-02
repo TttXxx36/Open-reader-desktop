@@ -31,6 +31,7 @@ const MAX_BOOK_URL_PATTERN_BYTES: usize = 512;
 const MAX_SOURCE_WEIGHT: i64 = 1_000_000;
 const MAX_SOURCE_CUSTOM_ORDER: i64 = 1_000_000;
 const MAX_REDIRECTS: usize = 5;
+const MAX_STAGE_BUDGET_SECS: u64 = 60;
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -48,6 +49,8 @@ pub enum SourceError {
     Request(#[from] reqwest::Error),
     #[error("response body exceeds {0} bytes")]
     BodyTooLarge(usize),
+    #[error("request exceeded stage time budget: {0}")]
+    TimeoutBudget(String),
     #[error("no value matched the source rule")]
     NoMatch,
     #[error("invalid JSON path: {0}")]
@@ -461,6 +464,7 @@ struct FetchedText {
 pub struct SourceEngine {
     client: reqwest::Client,
     max_body_bytes: usize,
+    stage_budget: Duration,
 }
 
 impl SourceEngine {
@@ -485,6 +489,7 @@ impl SourceEngine {
         Ok(Self {
             client,
             max_body_bytes,
+            stage_budget: bounded_stage_timeout(timeout_secs),
         })
     }
 
@@ -826,6 +831,7 @@ impl SourceEngine {
     ) -> Result<(String, String), SourceError> {
         let urls = render_url_chain(template, context)?;
         let total = urls.len();
+        let deadline = Instant::now() + self.stage_budget;
         let mut last_error = None;
 
         for (index, url) in urls.iter().enumerate() {
@@ -834,12 +840,54 @@ impl SourceEngine {
             } else {
                 format!("{stage}[{}]", index + 1)
             };
-            match self
-                .fetch_stage(&stage_name, url, headers, context, debug_steps)
-                .await
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_default();
+            if remaining.is_zero() {
+                let error = SourceError::TimeoutBudget(format!(
+                    "{stage} 阶段超过 {} 秒时间预算",
+                    self.stage_budget.as_secs()
+                ));
+                debug_steps.push(SourceDebugStep {
+                    stage: stage_name,
+                    url: redact_url(url),
+                    duration_ms: 0,
+                    status: None,
+                    bytes: None,
+                    error: Some(error.to_string()),
+                    variables: context.variables(),
+                    cache_hit: false,
+                });
+                last_error = Some(pipeline_error(stage, error));
+                break;
+            }
+
+            match tokio::time::timeout(
+                remaining,
+                self.fetch_stage(&stage_name, url, headers, context, debug_steps),
+            )
+            .await
             {
-                Ok(body) => return Ok((body, url.clone())),
-                Err(error) => last_error = Some(error),
+                Ok(Ok(body)) => return Ok((body, url.clone())),
+                Ok(Err(error)) => last_error = Some(error),
+                Err(_) => {
+                    let error = SourceError::TimeoutBudget(format!(
+                        "{stage_name} 超过 {} 秒时间预算",
+                        self.stage_budget.as_secs()
+                    ));
+                    debug_steps.push(SourceDebugStep {
+                        stage: stage_name,
+                        url: redact_url(url),
+                        duration_ms: self.stage_budget.as_millis() as u64,
+                        status: None,
+                        bytes: None,
+                        error: Some(error.to_string()),
+                        variables: context.variables(),
+                        cache_hit: false,
+                    });
+                    last_error = Some(pipeline_error(stage, error));
+                    break;
+                }
             }
         }
 
@@ -1302,6 +1350,14 @@ fn render_url_context(template: &str, context: &SourceRequestContext) -> String 
             .replace("{{chapter_id}}", chapter_id);
     }
     result
+}
+
+fn bounded_stage_timeout(timeout_secs: u64) -> Duration {
+    Duration::from_secs(
+        timeout_secs
+            .saturating_mul(MAX_URL_CHAIN_LENGTH as u64)
+            .min(MAX_STAGE_BUDGET_SECS),
+    )
 }
 
 fn bounded_search_pages(requested_pages: usize) -> usize {
@@ -2531,6 +2587,15 @@ mod tests {
         assert_eq!(summary.retained, 1);
         assert_eq!(summary.fingerprint, chapter_fingerprint(&current));
         assert_ne!(chapter_fingerprint(&previous), summary.fingerprint);
+    }
+
+    #[test]
+    fn bounds_url_chain_time_budget() {
+        assert_eq!(bounded_stage_timeout(1), Duration::from_secs(8));
+        assert_eq!(
+            bounded_stage_timeout(DEFAULT_TIMEOUT_SECS),
+            Duration::from_secs(MAX_STAGE_BUDGET_SECS)
+        );
     }
 
     #[test]
