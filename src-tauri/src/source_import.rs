@@ -393,9 +393,10 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
             }
         }
         Value::Object(object) => {
-            let raw_selector = first_value(object, &["selector", "rule", "value"])
-                .and_then(Value::as_str)
-                .ok_or_else(|| format!("{context} 缺少 selector"))?;
+            let raw_selector =
+                first_value(object, &["selector", "rule", "value", "jsonPath", "path"])
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| format!("{context} 缺少 selector 或 JSONPath"))?;
             let (selector, parsed_attr) = parse_legado_rule(raw_selector, context)?;
             let attr = if let Some(raw_attr) = object.get("attr").and_then(Value::as_str) {
                 let normalized = raw_attr.trim().to_ascii_lowercase();
@@ -706,6 +707,35 @@ mod tests {
             .as_ref()
             .and_then(|rules| rules.content.as_ref())
             .is_some());
+    }
+
+    #[test]
+    fn normalizes_jsonpath_rules() {
+        let payload = json!({
+            "bookSourceName": "JSON Alias Fixture",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "ruleSearch": {
+                "bookList": "$.books[*]",
+                "bookName": "$.title",
+                "bookAuthor": { "jsonPath": "$.author" },
+                "bookUrl": { "path": "$.url" }
+            }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("JSONPath source");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("canonical JSONPath source");
+        assert_eq!(
+            source.search.as_ref().and_then(|rules| rules.item.as_deref()),
+            Some("$.books[*]")
+        );
+        assert!(matches!(
+            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            Some(SourceRule::Selector(selector)) if selector == "$.title"
+        ));
+        assert!(matches!(
+            source.search.as_ref().and_then(|rules| rules.author.as_ref()),
+            Some(SourceRule::Selector(selector)) if selector == "$.author"
+        ));
     }
 
     #[test]
