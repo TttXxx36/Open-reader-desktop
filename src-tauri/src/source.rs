@@ -1532,50 +1532,17 @@ fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError
         .unwrap_or_default())
 }
 
+fn json_value_to_text(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
 fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceError> {
-    let path = path.trim().trim_start_matches("$.").trim_start_matches('$');
-    if path.is_empty() {
-        return Err(SourceError::InvalidJsonPath(path.to_string()));
-    }
-
-    let mut current = vec![value];
-    for segment in path.split('.') {
-        if segment.is_empty() {
-            return Err(SourceError::InvalidJsonPath(path.to_string()));
-        }
-
-        let wildcard = segment.ends_with("[*]");
-        let key = segment.trim_end_matches("[*]");
-        let mut next = Vec::new();
-
-        for item in current {
-            if wildcard {
-                let Some(array) = item.get(key).and_then(Value::as_array) else {
-                    continue;
-                };
-                next.extend(array);
-            } else if let Some(child) = item.get(key) {
-                next.push(child);
-            } else if let Ok(index) = key.parse::<usize>() {
-                if let Some(child) = item.get(index) {
-                    next.push(child);
-                }
-            }
-        }
-        current = next;
-    }
-
-    if current.is_empty() {
-        return Err(SourceError::NoMatch);
-    }
-
-    Ok(current
-        .into_iter()
-        .map(|item| match item {
-            Value::String(value) => value.clone(),
-            other => other.to_string(),
-        })
-        .collect())
+    extract_json_nodes(value, path)
+        .map(|values| values.into_iter().map(json_value_to_text).collect())
 }
 
 fn non_empty(value: Option<String>) -> Option<String> {
