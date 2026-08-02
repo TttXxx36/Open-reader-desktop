@@ -1370,6 +1370,1968 @@ fn expand_url_template(url: &str) -> String {
         .replace("{{page-1}}", "0")
 }
 
+fn is_json_rule_path(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with('
+    Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
+}
+
+fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
+    let selector = parse_selector(rule.selector())?;
+    let target = element
+        .select(&selector)
+        .next()
+        .ok_or(SourceError::NoMatch)?;
+    extract_selected_element(target, rule)
+}
+
+fn extract_selected_element(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<String, SourceError> {
+    let value = if let Some(attribute) = rule.attr() {
+        element
+            .value()
+            .attr(attribute)
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        element.text().collect::<Vec<_>>().join(" ")
+    };
+
+    apply_regex(value.trim(), rule.regex())
+}
+
+fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError> {
+    let Some(pattern) = pattern else {
+        return Ok(value.to_string());
+    };
+    let regex =
+        Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+    let captures = regex.captures(value).ok_or(SourceError::NoMatch)?;
+    Ok(captures
+        .get(1)
+        .or_else(|| captures.get(0))
+        .map(|capture| capture.as_str().to_string())
+        .unwrap_or_default())
+}
+
+fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceError> {
+    let path = path.trim().trim_start_matches("$.").trim_start_matches('$');
+    if path.is_empty() {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+
+    let mut current = vec![value];
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+
+        let wildcard = segment.ends_with("[*]");
+        let key = segment.trim_end_matches("[*]");
+        let mut next = Vec::new();
+
+        for item in current {
+            if wildcard {
+                let Some(array) = item.get(key).and_then(Value::as_array) else {
+                    continue;
+                };
+                next.extend(array);
+            } else if let Some(child) = item.get(key) {
+                next.push(child);
+            } else if let Ok(index) = key.parse::<usize>() {
+                if let Some(child) = item.get(index) {
+                    next.push(child);
+                }
+            }
+        }
+        current = next;
+    }
+
+    if current.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+
+    Ok(current
+        .into_iter()
+        .map(|item| match item {
+            Value::String(value) => value.clone(),
+            other => other.to_string(),
+        })
+        .collect())
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_the_public_fixture() {
+        let result = validate_source_json(include_str!("../fixtures/sample_source.json"));
+        assert!(result.valid, "{:?}", result.errors);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_selector_and_regex() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "search": {
+                "item": "article[",
+                "title": { "selector": "h2", "regex": "[" }
+              }
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("selector")));
+        assert!(result.errors.iter().any(|error| error.contains("regex")));
+    }
+
+    #[test]
+    fn extracts_html_search_results() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<article class="book"><h2><a href="/book/1">第一本</a></h2><span class="author">作者甲</span></article>"#,
+            )
+            .expect("html should parse");
+
+        assert_eq!(results[0].title, "第一本");
+        assert_eq!(results[0].author.as_deref(), Some("作者甲"));
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn deduplicates_search_results_by_title_and_author() {
+        let results = dedupe_search_results(vec![
+            UnifiedSearchResult {
+                source_id: "source-b".to_string(),
+                source_name: "书源 B".to_string(),
+                title: " 测试 书 ".to_string(),
+                author: Some(" 作者甲 ".to_string()),
+                book_url: Some("https://b.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "测试书".to_string(),
+                author: Some("作者甲".to_string()),
+                book_url: Some("https://a.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "另一本".to_string(),
+                author: None,
+                book_url: None,
+            },
+        ]);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "另一本");
+        assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
+    fn applies_enabled_replace_rules_in_order() {
+        let rules = vec![
+            ReplaceRule {
+                pattern: r"\s+".to_string(),
+                replacement: " ".to_string(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "内部标记".to_string(),
+                replacement: String::new(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "正文".to_string(),
+                replacement: "不应改变".to_string(),
+                enabled: false,
+            },
+        ];
+
+        let content =
+            apply_replace_rules("  正文   内部标记  ", &rules).expect("replace should work");
+        assert_eq!(content, " 正文  ");
+    }
+
+    #[test]
+    fn rejects_invalid_replace_rules() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken replace",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "replaceRules": [{ "pattern": "[", "replacement": "" }]
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("replaceRules[0]")));
+    }
+
+    #[test]
+    fn audits_permission_and_hosts() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Owned fixture",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "permission": {
+                "status": "authorized",
+                "scope": "internal fixture",
+                "reviewedAt": "2026-08-01"
+              }
+            }"#,
+        );
+        assert!(audit.pass, "{:?}", audit.errors);
+        assert_eq!(audit.permission_status, "authorized");
+        assert_eq!(audit.hosts, vec!["example.test"]);
+        assert!(audit
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("permission")));
+    }
+
+    #[test]
+    fn audits_sensitive_headers() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Unsafe fixture",
+              "searchUrl": "https://example.test/search",
+              "headers": { "Cookie": "session=secret" }
+            }"#,
+        );
+        assert!(!audit.pass);
+        assert_eq!(audit.sensitive_headers, vec!["Cookie"]);
+        assert!(audit
+            .errors
+            .iter()
+            .any(|error| error.contains("敏感认证头")));
+    }
+
+    #[test]
+    fn summarizes_chapter_updates() {
+        let previous = vec![
+            SourceChapter {
+                title: "第一章".to_string(),
+                url: "https://example.test/chapter/1".to_string(),
+                index: 0,
+            },
+            SourceChapter {
+                title: "第二章".to_string(),
+                url: "https://example.test/chapter/2".to_string(),
+                index: 1,
+            },
+        ];
+        let current = vec![
+            previous[0].clone(),
+            SourceChapter {
+                title: "第三章".to_string(),
+                url: "https://example.test/chapter/3".to_string(),
+                index: 1,
+            },
+        ];
+
+        let summary = summarize_chapter_update(&previous, &current);
+        assert!(summary.changed);
+        assert_eq!(summary.added, 1);
+        assert_eq!(summary.removed, 1);
+        assert_eq!(summary.retained, 1);
+        assert_eq!(summary.fingerprint, chapter_fingerprint(&current));
+        assert_ne!(chapter_fingerprint(&previous), summary.fingerprint);
+    }
+
+    #[test]
+    fn extracts_json_wildcard_values() {
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let values = engine
+            .extract_json_values(
+                r#"{ "books": [{ "title": "第一本" }, { "title": "第二本" }] }"#,
+                "$.books[*].title",
+            )
+            .expect("json should parse");
+        assert_eq!(values, vec!["第一本", "第二本"]);
+    }
+
+    #[tokio::test]
+    async fn searches_multiple_sources_with_failure_isolation() {
+        let (base_url, server) = spawn_search_fixture_server();
+        let mut valid_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        valid_source.search_url = format!("{}/search?q={{{{keyword}}}}", base_url);
+
+        let broken_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "http://127.0.0.1:1/search?q={{keyword}}",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+
+        let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .search_many(
+                vec![
+                    SourceDefinition {
+                        id: "fixture".to_string(),
+                        name: "Fixture".to_string(),
+                        source: valid_source,
+                    },
+                    SourceDefinition {
+                        id: "broken".to_string(),
+                        name: "Broken".to_string(),
+                        source: broken_source,
+                    },
+                ],
+                "demo",
+            )
+            .await;
+
+        assert_eq!(result.enabled_sources, 2);
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.results[0].title, "测试书");
+        server.join().expect("fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn runs_authorized_fixture_pipeline() {
+        let (base_url, server) = spawn_fixture_server();
+        let mut source: BookSource =
+            serde_json::from_str(include_str!("../fixtures/sample_source.json"))
+                .expect("fixture source should parse");
+        source.search_url = format!("{base_url}/search?q={{{{keyword}}}}");
+        source.book_info_url = Some(format!("{base_url}/book/{{{{bookId}}}}"));
+        source.toc_url = Some(format!("{base_url}/book/{{{{bookId}}}}/toc"));
+        source.content_url = Some(format!("{base_url}/chapter/{{{{chapterId}}}}"));
+
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .run_pipeline(&source, "demo")
+            .await
+            .expect("fixture pipeline should succeed");
+
+        assert_eq!(result.search_results.len(), 1);
+        assert_eq!(result.book_info.title, "测试书");
+        assert_eq!(result.chapters[0].title, "第一章");
+        assert!(result.first_chapter.content.contains("这是正文"));
+        assert_eq!(result.debug_steps.len(), 4);
+        assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
+        server.join().expect("fixture server should stop");
+    }
+
+    fn spawn_search_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else {
+                    r#"<article class="book"><h2><a href="/book/2">意外</a></h2></article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{}", address), server)
+    }
+
+    fn spawn_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(4) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else if path == "/book/1" {
+                    r#"<h1>测试书</h1><div class="author">作者甲</div><p class="intro">一本用于 M4 的公开测试书</p>"#
+                } else if path == "/book/1/toc" {
+                    r#"<ol class="chapters"><li><a href="/chapter/1">第一章</a></li></ol>"#
+                } else {
+                    r#"<article class="content">这是正文，用于验证搜索到正文的完整链路。</article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{address}"), server)
+    }
+}
+) || value.starts_with("json:")
+}
+
+fn normalize_json_path(path: &str) -> Result<String, SourceError> {
+    let trimmed = path.trim();
+    let path = trimmed
+        .strip_prefix("json:")
+        .unwrap_or(trimmed)
+        .trim();
+
+    if path.is_empty() || !path.starts_with('
+    Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
+}
+
+fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
+    let selector = parse_selector(rule.selector())?;
+    let target = element
+        .select(&selector)
+        .next()
+        .ok_or(SourceError::NoMatch)?;
+    extract_selected_element(target, rule)
+}
+
+fn extract_selected_element(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<String, SourceError> {
+    let value = if let Some(attribute) = rule.attr() {
+        element
+            .value()
+            .attr(attribute)
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        element.text().collect::<Vec<_>>().join(" ")
+    };
+
+    apply_regex(value.trim(), rule.regex())
+}
+
+fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError> {
+    let Some(pattern) = pattern else {
+        return Ok(value.to_string());
+    };
+    let regex =
+        Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+    let captures = regex.captures(value).ok_or(SourceError::NoMatch)?;
+    Ok(captures
+        .get(1)
+        .or_else(|| captures.get(0))
+        .map(|capture| capture.as_str().to_string())
+        .unwrap_or_default())
+}
+
+fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceError> {
+    let path = path.trim().trim_start_matches("$.").trim_start_matches('$');
+    if path.is_empty() {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+
+    let mut current = vec![value];
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+
+        let wildcard = segment.ends_with("[*]");
+        let key = segment.trim_end_matches("[*]");
+        let mut next = Vec::new();
+
+        for item in current {
+            if wildcard {
+                let Some(array) = item.get(key).and_then(Value::as_array) else {
+                    continue;
+                };
+                next.extend(array);
+            } else if let Some(child) = item.get(key) {
+                next.push(child);
+            } else if let Ok(index) = key.parse::<usize>() {
+                if let Some(child) = item.get(index) {
+                    next.push(child);
+                }
+            }
+        }
+        current = next;
+    }
+
+    if current.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+
+    Ok(current
+        .into_iter()
+        .map(|item| match item {
+            Value::String(value) => value.clone(),
+            other => other.to_string(),
+        })
+        .collect())
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_the_public_fixture() {
+        let result = validate_source_json(include_str!("../fixtures/sample_source.json"));
+        assert!(result.valid, "{:?}", result.errors);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_selector_and_regex() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "search": {
+                "item": "article[",
+                "title": { "selector": "h2", "regex": "[" }
+              }
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("selector")));
+        assert!(result.errors.iter().any(|error| error.contains("regex")));
+    }
+
+    #[test]
+    fn extracts_html_search_results() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<article class="book"><h2><a href="/book/1">第一本</a></h2><span class="author">作者甲</span></article>"#,
+            )
+            .expect("html should parse");
+
+        assert_eq!(results[0].title, "第一本");
+        assert_eq!(results[0].author.as_deref(), Some("作者甲"));
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn deduplicates_search_results_by_title_and_author() {
+        let results = dedupe_search_results(vec![
+            UnifiedSearchResult {
+                source_id: "source-b".to_string(),
+                source_name: "书源 B".to_string(),
+                title: " 测试 书 ".to_string(),
+                author: Some(" 作者甲 ".to_string()),
+                book_url: Some("https://b.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "测试书".to_string(),
+                author: Some("作者甲".to_string()),
+                book_url: Some("https://a.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "另一本".to_string(),
+                author: None,
+                book_url: None,
+            },
+        ]);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "另一本");
+        assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
+    fn applies_enabled_replace_rules_in_order() {
+        let rules = vec![
+            ReplaceRule {
+                pattern: r"\s+".to_string(),
+                replacement: " ".to_string(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "内部标记".to_string(),
+                replacement: String::new(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "正文".to_string(),
+                replacement: "不应改变".to_string(),
+                enabled: false,
+            },
+        ];
+
+        let content =
+            apply_replace_rules("  正文   内部标记  ", &rules).expect("replace should work");
+        assert_eq!(content, " 正文  ");
+    }
+
+    #[test]
+    fn rejects_invalid_replace_rules() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken replace",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "replaceRules": [{ "pattern": "[", "replacement": "" }]
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("replaceRules[0]")));
+    }
+
+    #[test]
+    fn audits_permission_and_hosts() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Owned fixture",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "permission": {
+                "status": "authorized",
+                "scope": "internal fixture",
+                "reviewedAt": "2026-08-01"
+              }
+            }"#,
+        );
+        assert!(audit.pass, "{:?}", audit.errors);
+        assert_eq!(audit.permission_status, "authorized");
+        assert_eq!(audit.hosts, vec!["example.test"]);
+        assert!(audit
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("permission")));
+    }
+
+    #[test]
+    fn audits_sensitive_headers() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Unsafe fixture",
+              "searchUrl": "https://example.test/search",
+              "headers": { "Cookie": "session=secret" }
+            }"#,
+        );
+        assert!(!audit.pass);
+        assert_eq!(audit.sensitive_headers, vec!["Cookie"]);
+        assert!(audit
+            .errors
+            .iter()
+            .any(|error| error.contains("敏感认证头")));
+    }
+
+    #[test]
+    fn summarizes_chapter_updates() {
+        let previous = vec![
+            SourceChapter {
+                title: "第一章".to_string(),
+                url: "https://example.test/chapter/1".to_string(),
+                index: 0,
+            },
+            SourceChapter {
+                title: "第二章".to_string(),
+                url: "https://example.test/chapter/2".to_string(),
+                index: 1,
+            },
+        ];
+        let current = vec![
+            previous[0].clone(),
+            SourceChapter {
+                title: "第三章".to_string(),
+                url: "https://example.test/chapter/3".to_string(),
+                index: 1,
+            },
+        ];
+
+        let summary = summarize_chapter_update(&previous, &current);
+        assert!(summary.changed);
+        assert_eq!(summary.added, 1);
+        assert_eq!(summary.removed, 1);
+        assert_eq!(summary.retained, 1);
+        assert_eq!(summary.fingerprint, chapter_fingerprint(&current));
+        assert_ne!(chapter_fingerprint(&previous), summary.fingerprint);
+    }
+
+    #[test]
+    fn extracts_json_wildcard_values() {
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let values = engine
+            .extract_json_values(
+                r#"{ "books": [{ "title": "第一本" }, { "title": "第二本" }] }"#,
+                "$.books[*].title",
+            )
+            .expect("json should parse");
+        assert_eq!(values, vec!["第一本", "第二本"]);
+    }
+
+    #[tokio::test]
+    async fn searches_multiple_sources_with_failure_isolation() {
+        let (base_url, server) = spawn_search_fixture_server();
+        let mut valid_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        valid_source.search_url = format!("{}/search?q={{{{keyword}}}}", base_url);
+
+        let broken_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "http://127.0.0.1:1/search?q={{keyword}}",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+
+        let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .search_many(
+                vec![
+                    SourceDefinition {
+                        id: "fixture".to_string(),
+                        name: "Fixture".to_string(),
+                        source: valid_source,
+                    },
+                    SourceDefinition {
+                        id: "broken".to_string(),
+                        name: "Broken".to_string(),
+                        source: broken_source,
+                    },
+                ],
+                "demo",
+            )
+            .await;
+
+        assert_eq!(result.enabled_sources, 2);
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.results[0].title, "测试书");
+        server.join().expect("fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn runs_authorized_fixture_pipeline() {
+        let (base_url, server) = spawn_fixture_server();
+        let mut source: BookSource =
+            serde_json::from_str(include_str!("../fixtures/sample_source.json"))
+                .expect("fixture source should parse");
+        source.search_url = format!("{base_url}/search?q={{{{keyword}}}}");
+        source.book_info_url = Some(format!("{base_url}/book/{{{{bookId}}}}"));
+        source.toc_url = Some(format!("{base_url}/book/{{{{bookId}}}}/toc"));
+        source.content_url = Some(format!("{base_url}/chapter/{{{{chapterId}}}}"));
+
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .run_pipeline(&source, "demo")
+            .await
+            .expect("fixture pipeline should succeed");
+
+        assert_eq!(result.search_results.len(), 1);
+        assert_eq!(result.book_info.title, "测试书");
+        assert_eq!(result.chapters[0].title, "第一章");
+        assert!(result.first_chapter.content.contains("这是正文"));
+        assert_eq!(result.debug_steps.len(), 4);
+        assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
+        server.join().expect("fixture server should stop");
+    }
+
+    fn spawn_search_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else {
+                    r#"<article class="book"><h2><a href="/book/2">意外</a></h2></article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{}", address), server)
+    }
+
+    fn spawn_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(4) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else if path == "/book/1" {
+                    r#"<h1>测试书</h1><div class="author">作者甲</div><p class="intro">一本用于 M4 的公开测试书</p>"#
+                } else if path == "/book/1/toc" {
+                    r#"<ol class="chapters"><li><a href="/chapter/1">第一章</a></li></ol>"#
+                } else {
+                    r#"<article class="content">这是正文，用于验证搜索到正文的完整链路。</article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{address}"), server)
+    }
+}
+) {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+    if path == "$" {
+        return Ok(path.to_string());
+    }
+
+    let relative = path
+        .strip_prefix("$.")
+        .or_else(|| path.strip_prefix('
+    Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
+}
+
+fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
+    let selector = parse_selector(rule.selector())?;
+    let target = element
+        .select(&selector)
+        .next()
+        .ok_or(SourceError::NoMatch)?;
+    extract_selected_element(target, rule)
+}
+
+fn extract_selected_element(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<String, SourceError> {
+    let value = if let Some(attribute) = rule.attr() {
+        element
+            .value()
+            .attr(attribute)
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        element.text().collect::<Vec<_>>().join(" ")
+    };
+
+    apply_regex(value.trim(), rule.regex())
+}
+
+fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError> {
+    let Some(pattern) = pattern else {
+        return Ok(value.to_string());
+    };
+    let regex =
+        Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+    let captures = regex.captures(value).ok_or(SourceError::NoMatch)?;
+    Ok(captures
+        .get(1)
+        .or_else(|| captures.get(0))
+        .map(|capture| capture.as_str().to_string())
+        .unwrap_or_default())
+}
+
+fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceError> {
+    let path = path.trim().trim_start_matches("$.").trim_start_matches('$');
+    if path.is_empty() {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+
+    let mut current = vec![value];
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+
+        let wildcard = segment.ends_with("[*]");
+        let key = segment.trim_end_matches("[*]");
+        let mut next = Vec::new();
+
+        for item in current {
+            if wildcard {
+                let Some(array) = item.get(key).and_then(Value::as_array) else {
+                    continue;
+                };
+                next.extend(array);
+            } else if let Some(child) = item.get(key) {
+                next.push(child);
+            } else if let Ok(index) = key.parse::<usize>() {
+                if let Some(child) = item.get(index) {
+                    next.push(child);
+                }
+            }
+        }
+        current = next;
+    }
+
+    if current.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+
+    Ok(current
+        .into_iter()
+        .map(|item| match item {
+            Value::String(value) => value.clone(),
+            other => other.to_string(),
+        })
+        .collect())
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_the_public_fixture() {
+        let result = validate_source_json(include_str!("../fixtures/sample_source.json"));
+        assert!(result.valid, "{:?}", result.errors);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_selector_and_regex() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "search": {
+                "item": "article[",
+                "title": { "selector": "h2", "regex": "[" }
+              }
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("selector")));
+        assert!(result.errors.iter().any(|error| error.contains("regex")));
+    }
+
+    #[test]
+    fn extracts_html_search_results() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<article class="book"><h2><a href="/book/1">第一本</a></h2><span class="author">作者甲</span></article>"#,
+            )
+            .expect("html should parse");
+
+        assert_eq!(results[0].title, "第一本");
+        assert_eq!(results[0].author.as_deref(), Some("作者甲"));
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn deduplicates_search_results_by_title_and_author() {
+        let results = dedupe_search_results(vec![
+            UnifiedSearchResult {
+                source_id: "source-b".to_string(),
+                source_name: "书源 B".to_string(),
+                title: " 测试 书 ".to_string(),
+                author: Some(" 作者甲 ".to_string()),
+                book_url: Some("https://b.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "测试书".to_string(),
+                author: Some("作者甲".to_string()),
+                book_url: Some("https://a.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "另一本".to_string(),
+                author: None,
+                book_url: None,
+            },
+        ]);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "另一本");
+        assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
+    fn applies_enabled_replace_rules_in_order() {
+        let rules = vec![
+            ReplaceRule {
+                pattern: r"\s+".to_string(),
+                replacement: " ".to_string(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "内部标记".to_string(),
+                replacement: String::new(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "正文".to_string(),
+                replacement: "不应改变".to_string(),
+                enabled: false,
+            },
+        ];
+
+        let content =
+            apply_replace_rules("  正文   内部标记  ", &rules).expect("replace should work");
+        assert_eq!(content, " 正文  ");
+    }
+
+    #[test]
+    fn rejects_invalid_replace_rules() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken replace",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "replaceRules": [{ "pattern": "[", "replacement": "" }]
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("replaceRules[0]")));
+    }
+
+    #[test]
+    fn audits_permission_and_hosts() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Owned fixture",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "permission": {
+                "status": "authorized",
+                "scope": "internal fixture",
+                "reviewedAt": "2026-08-01"
+              }
+            }"#,
+        );
+        assert!(audit.pass, "{:?}", audit.errors);
+        assert_eq!(audit.permission_status, "authorized");
+        assert_eq!(audit.hosts, vec!["example.test"]);
+        assert!(audit
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("permission")));
+    }
+
+    #[test]
+    fn audits_sensitive_headers() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Unsafe fixture",
+              "searchUrl": "https://example.test/search",
+              "headers": { "Cookie": "session=secret" }
+            }"#,
+        );
+        assert!(!audit.pass);
+        assert_eq!(audit.sensitive_headers, vec!["Cookie"]);
+        assert!(audit
+            .errors
+            .iter()
+            .any(|error| error.contains("敏感认证头")));
+    }
+
+    #[test]
+    fn summarizes_chapter_updates() {
+        let previous = vec![
+            SourceChapter {
+                title: "第一章".to_string(),
+                url: "https://example.test/chapter/1".to_string(),
+                index: 0,
+            },
+            SourceChapter {
+                title: "第二章".to_string(),
+                url: "https://example.test/chapter/2".to_string(),
+                index: 1,
+            },
+        ];
+        let current = vec![
+            previous[0].clone(),
+            SourceChapter {
+                title: "第三章".to_string(),
+                url: "https://example.test/chapter/3".to_string(),
+                index: 1,
+            },
+        ];
+
+        let summary = summarize_chapter_update(&previous, &current);
+        assert!(summary.changed);
+        assert_eq!(summary.added, 1);
+        assert_eq!(summary.removed, 1);
+        assert_eq!(summary.retained, 1);
+        assert_eq!(summary.fingerprint, chapter_fingerprint(&current));
+        assert_ne!(chapter_fingerprint(&previous), summary.fingerprint);
+    }
+
+    #[test]
+    fn extracts_json_wildcard_values() {
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let values = engine
+            .extract_json_values(
+                r#"{ "books": [{ "title": "第一本" }, { "title": "第二本" }] }"#,
+                "$.books[*].title",
+            )
+            .expect("json should parse");
+        assert_eq!(values, vec!["第一本", "第二本"]);
+    }
+
+    #[tokio::test]
+    async fn searches_multiple_sources_with_failure_isolation() {
+        let (base_url, server) = spawn_search_fixture_server();
+        let mut valid_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        valid_source.search_url = format!("{}/search?q={{{{keyword}}}}", base_url);
+
+        let broken_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "http://127.0.0.1:1/search?q={{keyword}}",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+
+        let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .search_many(
+                vec![
+                    SourceDefinition {
+                        id: "fixture".to_string(),
+                        name: "Fixture".to_string(),
+                        source: valid_source,
+                    },
+                    SourceDefinition {
+                        id: "broken".to_string(),
+                        name: "Broken".to_string(),
+                        source: broken_source,
+                    },
+                ],
+                "demo",
+            )
+            .await;
+
+        assert_eq!(result.enabled_sources, 2);
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.results[0].title, "测试书");
+        server.join().expect("fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn runs_authorized_fixture_pipeline() {
+        let (base_url, server) = spawn_fixture_server();
+        let mut source: BookSource =
+            serde_json::from_str(include_str!("../fixtures/sample_source.json"))
+                .expect("fixture source should parse");
+        source.search_url = format!("{base_url}/search?q={{{{keyword}}}}");
+        source.book_info_url = Some(format!("{base_url}/book/{{{{bookId}}}}"));
+        source.toc_url = Some(format!("{base_url}/book/{{{{bookId}}}}/toc"));
+        source.content_url = Some(format!("{base_url}/chapter/{{{{chapterId}}}}"));
+
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .run_pipeline(&source, "demo")
+            .await
+            .expect("fixture pipeline should succeed");
+
+        assert_eq!(result.search_results.len(), 1);
+        assert_eq!(result.book_info.title, "测试书");
+        assert_eq!(result.chapters[0].title, "第一章");
+        assert!(result.first_chapter.content.contains("这是正文"));
+        assert_eq!(result.debug_steps.len(), 4);
+        assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
+        server.join().expect("fixture server should stop");
+    }
+
+    fn spawn_search_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else {
+                    r#"<article class="book"><h2><a href="/book/2">意外</a></h2></article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{}", address), server)
+    }
+
+    fn spawn_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(4) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else if path == "/book/1" {
+                    r#"<h1>测试书</h1><div class="author">作者甲</div><p class="intro">一本用于 M4 的公开测试书</p>"#
+                } else if path == "/book/1/toc" {
+                    r#"<ol class="chapters"><li><a href="/chapter/1">第一章</a></li></ol>"#
+                } else {
+                    r#"<article class="content">这是正文，用于验证搜索到正文的完整链路。</article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{address}"), server)
+    }
+}
+))
+        .unwrap_or(path);
+    if relative.is_empty() {
+        return Ok("$".to_string());
+    }
+
+    for segment in relative.split('.') {
+        if segment.is_empty() {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+        if segment == "[*]" {
+            continue;
+        }
+        if segment.ends_with("[*]") {
+            let key = segment.trim_end_matches("[*]");
+            if key.is_empty() || key.contains('[') || key.contains(']') {
+                return Err(SourceError::InvalidJsonPath(path.to_string()));
+            }
+            continue;
+        }
+        if let Some((key, index)) = segment
+            .strip_suffix(']')
+            .and_then(|segment| segment.split_once('['))
+        {
+            if key.is_empty() || index.parse::<usize>().is_err() {
+                return Err(SourceError::InvalidJsonPath(path.to_string()));
+            }
+            continue;
+        }
+        if segment.contains('[') || segment.contains(']') {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+    }
+
+    Ok(path.to_string())
+}
+
+fn validate_json_path(path: &str) -> Result<(), SourceError> {
+    normalize_json_path(path).map(|_| ())
+}
+
+fn extract_json_nodes<'a>(
+    value: &'a Value,
+    path: &str,
+) -> Result<Vec<&'a Value>, SourceError> {
+    let path = normalize_json_path(path)?;
+    if path == "$" {
+        return Ok(vec![value]);
+    }
+
+    let relative = path
+        .strip_prefix("$.")
+        .or_else(|| path.strip_prefix('
+    Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
+}
+
+fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
+    let selector = parse_selector(rule.selector())?;
+    let target = element
+        .select(&selector)
+        .next()
+        .ok_or(SourceError::NoMatch)?;
+    extract_selected_element(target, rule)
+}
+
+fn extract_selected_element(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<String, SourceError> {
+    let value = if let Some(attribute) = rule.attr() {
+        element
+            .value()
+            .attr(attribute)
+            .unwrap_or_default()
+            .to_string()
+    } else {
+        element.text().collect::<Vec<_>>().join(" ")
+    };
+
+    apply_regex(value.trim(), rule.regex())
+}
+
+fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError> {
+    let Some(pattern) = pattern else {
+        return Ok(value.to_string());
+    };
+    let regex =
+        Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+    let captures = regex.captures(value).ok_or(SourceError::NoMatch)?;
+    Ok(captures
+        .get(1)
+        .or_else(|| captures.get(0))
+        .map(|capture| capture.as_str().to_string())
+        .unwrap_or_default())
+}
+
+fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceError> {
+    let path = path.trim().trim_start_matches("$.").trim_start_matches('$');
+    if path.is_empty() {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+
+    let mut current = vec![value];
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+
+        let wildcard = segment.ends_with("[*]");
+        let key = segment.trim_end_matches("[*]");
+        let mut next = Vec::new();
+
+        for item in current {
+            if wildcard {
+                let Some(array) = item.get(key).and_then(Value::as_array) else {
+                    continue;
+                };
+                next.extend(array);
+            } else if let Some(child) = item.get(key) {
+                next.push(child);
+            } else if let Ok(index) = key.parse::<usize>() {
+                if let Some(child) = item.get(index) {
+                    next.push(child);
+                }
+            }
+        }
+        current = next;
+    }
+
+    if current.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+
+    Ok(current
+        .into_iter()
+        .map(|item| match item {
+            Value::String(value) => value.clone(),
+            other => other.to_string(),
+        })
+        .collect())
+}
+
+fn non_empty(value: Option<String>) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_the_public_fixture() {
+        let result = validate_source_json(include_str!("../fixtures/sample_source.json"));
+        assert!(result.valid, "{:?}", result.errors);
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_selector_and_regex() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "search": {
+                "item": "article[",
+                "title": { "selector": "h2", "regex": "[" }
+              }
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("selector")));
+        assert!(result.errors.iter().any(|error| error.contains("regex")));
+    }
+
+    #[test]
+    fn extracts_html_search_results() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<article class="book"><h2><a href="/book/1">第一本</a></h2><span class="author">作者甲</span></article>"#,
+            )
+            .expect("html should parse");
+
+        assert_eq!(results[0].title, "第一本");
+        assert_eq!(results[0].author.as_deref(), Some("作者甲"));
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn deduplicates_search_results_by_title_and_author() {
+        let results = dedupe_search_results(vec![
+            UnifiedSearchResult {
+                source_id: "source-b".to_string(),
+                source_name: "书源 B".to_string(),
+                title: " 测试 书 ".to_string(),
+                author: Some(" 作者甲 ".to_string()),
+                book_url: Some("https://b.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "测试书".to_string(),
+                author: Some("作者甲".to_string()),
+                book_url: Some("https://a.test/book".to_string()),
+            },
+            UnifiedSearchResult {
+                source_id: "source-a".to_string(),
+                source_name: "书源 A".to_string(),
+                title: "另一本".to_string(),
+                author: None,
+                book_url: None,
+            },
+        ]);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "另一本");
+        assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
+    fn applies_enabled_replace_rules_in_order() {
+        let rules = vec![
+            ReplaceRule {
+                pattern: r"\s+".to_string(),
+                replacement: " ".to_string(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "内部标记".to_string(),
+                replacement: String::new(),
+                enabled: true,
+            },
+            ReplaceRule {
+                pattern: "正文".to_string(),
+                replacement: "不应改变".to_string(),
+                enabled: false,
+            },
+        ];
+
+        let content =
+            apply_replace_rules("  正文   内部标记  ", &rules).expect("replace should work");
+        assert_eq!(content, " 正文  ");
+    }
+
+    #[test]
+    fn rejects_invalid_replace_rules() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken replace",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "replaceRules": [{ "pattern": "[", "replacement": "" }]
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("replaceRules[0]")));
+    }
+
+    #[test]
+    fn audits_permission_and_hosts() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Owned fixture",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "permission": {
+                "status": "authorized",
+                "scope": "internal fixture",
+                "reviewedAt": "2026-08-01"
+              }
+            }"#,
+        );
+        assert!(audit.pass, "{:?}", audit.errors);
+        assert_eq!(audit.permission_status, "authorized");
+        assert_eq!(audit.hosts, vec!["example.test"]);
+        assert!(audit
+            .warnings
+            .iter()
+            .all(|warning| !warning.contains("permission")));
+    }
+
+    #[test]
+    fn audits_sensitive_headers() {
+        let audit = audit_source_json(
+            r#"{ 
+              "name": "Unsafe fixture",
+              "searchUrl": "https://example.test/search",
+              "headers": { "Cookie": "session=secret" }
+            }"#,
+        );
+        assert!(!audit.pass);
+        assert_eq!(audit.sensitive_headers, vec!["Cookie"]);
+        assert!(audit
+            .errors
+            .iter()
+            .any(|error| error.contains("敏感认证头")));
+    }
+
+    #[test]
+    fn summarizes_chapter_updates() {
+        let previous = vec![
+            SourceChapter {
+                title: "第一章".to_string(),
+                url: "https://example.test/chapter/1".to_string(),
+                index: 0,
+            },
+            SourceChapter {
+                title: "第二章".to_string(),
+                url: "https://example.test/chapter/2".to_string(),
+                index: 1,
+            },
+        ];
+        let current = vec![
+            previous[0].clone(),
+            SourceChapter {
+                title: "第三章".to_string(),
+                url: "https://example.test/chapter/3".to_string(),
+                index: 1,
+            },
+        ];
+
+        let summary = summarize_chapter_update(&previous, &current);
+        assert!(summary.changed);
+        assert_eq!(summary.added, 1);
+        assert_eq!(summary.removed, 1);
+        assert_eq!(summary.retained, 1);
+        assert_eq!(summary.fingerprint, chapter_fingerprint(&current));
+        assert_ne!(chapter_fingerprint(&previous), summary.fingerprint);
+    }
+
+    #[test]
+    fn extracts_json_wildcard_values() {
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let values = engine
+            .extract_json_values(
+                r#"{ "books": [{ "title": "第一本" }, { "title": "第二本" }] }"#,
+                "$.books[*].title",
+            )
+            .expect("json should parse");
+        assert_eq!(values, vec!["第一本", "第二本"]);
+    }
+
+    #[tokio::test]
+    async fn searches_multiple_sources_with_failure_isolation() {
+        let (base_url, server) = spawn_search_fixture_server();
+        let mut valid_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" },
+                "author": { "selector": ".author" },
+                "url": { "selector": "h2 a", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        valid_source.search_url = format!("{}/search?q={{{{keyword}}}}", base_url);
+
+        let broken_source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Broken",
+              "searchUrl": "http://127.0.0.1:1/search?q={{keyword}}",
+              "search": {
+                "item": "article.book",
+                "title": { "selector": "h2 a" }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+
+        let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .search_many(
+                vec![
+                    SourceDefinition {
+                        id: "fixture".to_string(),
+                        name: "Fixture".to_string(),
+                        source: valid_source,
+                    },
+                    SourceDefinition {
+                        id: "broken".to_string(),
+                        name: "Broken".to_string(),
+                        source: broken_source,
+                    },
+                ],
+                "demo",
+            )
+            .await;
+
+        assert_eq!(result.enabled_sources, 2);
+        assert_eq!(result.results.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+        assert_eq!(result.results[0].title, "测试书");
+        server.join().expect("fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn runs_authorized_fixture_pipeline() {
+        let (base_url, server) = spawn_fixture_server();
+        let mut source: BookSource =
+            serde_json::from_str(include_str!("../fixtures/sample_source.json"))
+                .expect("fixture source should parse");
+        source.search_url = format!("{base_url}/search?q={{{{keyword}}}}");
+        source.book_info_url = Some(format!("{base_url}/book/{{{{bookId}}}}"));
+        source.toc_url = Some(format!("{base_url}/book/{{{{bookId}}}}/toc"));
+        source.content_url = Some(format!("{base_url}/chapter/{{{{chapterId}}}}"));
+
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let result = engine
+            .run_pipeline(&source, "demo")
+            .await
+            .expect("fixture pipeline should succeed");
+
+        assert_eq!(result.search_results.len(), 1);
+        assert_eq!(result.book_info.title, "测试书");
+        assert_eq!(result.chapters[0].title, "第一章");
+        assert!(result.first_chapter.content.contains("这是正文"));
+        assert_eq!(result.debug_steps.len(), 4);
+        assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
+        server.join().expect("fixture server should stop");
+    }
+
+    fn spawn_search_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else {
+                    r#"<article class="book"><h2><a href="/book/2">意外</a></h2></article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{}", address), server)
+    }
+
+    fn spawn_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fixture listener");
+        let address = listener.local_addr().expect("fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(4) {
+                let mut stream = stream.expect("fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream.read(&mut buffer).expect("fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = if path.starts_with("/search") {
+                    r#"<article class="book"><h2><a href="/book/1">测试书</a></h2><span class="author">作者甲</span></article>"#
+                } else if path == "/book/1" {
+                    r#"<h1>测试书</h1><div class="author">作者甲</div><p class="intro">一本用于 M4 的公开测试书</p>"#
+                } else if path == "/book/1/toc" {
+                    r#"<ol class="chapters"><li><a href="/chapter/1">第一章</a></li></ol>"#
+                } else {
+                    r#"<article class="content">这是正文，用于验证搜索到正文的完整链路。</article>"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("fixture response");
+            }
+        });
+
+        (format!("http://{address}"), server)
+    }
+}
+))
+        .unwrap_or(&path);
+    let mut current = vec![value];
+
+    for segment in relative.split('.') {
+        let mut next = Vec::new();
+        for item in current {
+            if segment == "[*]" {
+                if let Some(array) = item.as_array() {
+                    next.extend(array.iter());
+                }
+            } else if let Some(key) = segment.strip_suffix("[*]") {
+                if let Some(array) = item.get(key).and_then(Value::as_array) {
+                    next.extend(array.iter());
+                }
+            } else if let Some((key, raw_index)) = segment
+                .strip_suffix(']')
+                .and_then(|segment| segment.split_once('['))
+            {
+                if let Ok(index) = raw_index.parse::<usize>() {
+                    if let Some(child) = item
+                        .get(key)
+                        .and_then(Value::as_array)
+                        .and_then(|items| items.get(index))
+                    {
+                        next.push(child);
+                    }
+                }
+            } else if let Some(child) = item.get(segment) {
+                next.push(child);
+            } else if let Ok(index) = segment.parse::<usize>() {
+                if let Some(child) = item.get(index) {
+                    next.push(child);
+                }
+            }
+        }
+        current = next;
+    }
+
+    if current.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+
+    Ok(current)
+}
 fn parse_selector(value: &str) -> Result<Selector, SourceError> {
     Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
 }
