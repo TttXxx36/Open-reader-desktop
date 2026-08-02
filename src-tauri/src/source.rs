@@ -411,7 +411,7 @@ impl SourceEngine {
             .await
             .map_err(|error| pipeline_error("search_fetch", error))?;
         let mut results = self
-            .parse_search_html(source, &fetched.body)
+            .parse_search_response(source, &fetched.body)
             .map_err(|error| pipeline_error("search_parse", error))?;
         for result in &mut results {
             if let Some(url) = &result.book_url {
@@ -507,7 +507,7 @@ impl SourceEngine {
             .fetch_stage("search", &search_url, &source.headers, &mut debug_steps)
             .await?;
         let mut search_results = self
-            .parse_search_html(source, &search_body)
+            .parse_search_response(source, &search_body)
             .map_err(|error| pipeline_error("search_parse", error))?;
         for result in &mut search_results {
             if let Some(url) = &result.book_url {
@@ -632,6 +632,9 @@ impl SourceEngine {
             .book_info
             .as_ref()
             .ok_or_else(|| SourceError::InvalidConfig("bookInfo rules are required".to_string()))?;
+        if rules.is_json() {
+            return parse_book_info_json(rules, &body, book_url);
+        }
         let document = Html::parse_document(&body);
 
         Ok(BookInfo {
@@ -668,6 +671,9 @@ impl SourceEngine {
             .toc
             .as_ref()
             .ok_or_else(|| SourceError::InvalidConfig("toc rules are required".to_string()))?;
+        if rules.is_json() {
+            return parse_chapter_list_json(rules, &body, &url);
+        }
         parse_chapter_list(rules, &body, &url)
     }
 
@@ -695,9 +701,13 @@ impl SourceEngine {
             .content
             .as_ref()
             .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
-        let document = Html::parse_document(&body);
-        let content = extract_document_rule(&document, rules.content.as_ref())?
-            .ok_or(SourceError::NoMatch)?;
+        let content = if rules.is_json() {
+            parse_json_rule_document(&body, rules.item.as_deref(), rules.content.as_ref())?
+        } else {
+            let document = Html::parse_document(&body);
+            extract_document_rule(&document, rules.content.as_ref())?
+        }
+        .ok_or(SourceError::NoMatch)?;
         let content = apply_replace_rules(&content, &source.replace_rules)?;
 
         Ok(SourceChapterContent {
