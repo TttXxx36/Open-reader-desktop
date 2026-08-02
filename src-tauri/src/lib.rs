@@ -5,7 +5,7 @@ mod source_import;
 
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceMetadata,
-    SourceSummary,
+    SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
@@ -312,6 +312,31 @@ fn delete_sources(
 }
 
 #[tauri::command]
+fn set_sources_group(
+    database: tauri::State<'_, Database>,
+    source_ids: Vec<String>,
+    group_name: String,
+) -> Result<Vec<SourceSummary>, String> {
+    validate_source_ids(&database, &source_ids)?;
+    let group_name = group_name.trim().to_string();
+    if group_name.len() > 128 {
+        return Err("分组名称不能超过 128 字节".to_string());
+    }
+    for source_id in &source_ids {
+        update_source_metadata_impl(
+            &database,
+            source_id,
+            Some(group_name.clone()),
+            None,
+            None,
+            None,
+            None,
+        )?;
+    }
+    database.list_sources().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn delete_source(database: tauri::State<'_, Database>, source_id: String) -> Result<(), String> {
     database
         .delete_source(&source_id)
@@ -366,11 +391,84 @@ struct RemoteSourceImportPreview {
     preview: source_import::ImportPreview,
 }
 
-fn persist_imported_sources(
+#[derive(Debug, Clone, Serialize)]
+struct SourceImportResult {
+    imported: Vec<SourceSummary>,
+    snapshot_id: String,
+    skipped: usize,
+}
+
+fn export_sources_payload(database: &Database) -> Result<String, String> {
+    let sources = database.list_sources().map_err(|error| error.to_string())?;
+    let bundle = serde_json::json!({
+        "version": 1,
+        "sources": sources
+            .into_iter()
+            .map(|source| serde_json::json!({
+                "id": source.id,
+                "enabled": source.enabled,
+                "config_json": source.config_json,
+                "source_url": source.source_url,
+                "group_name": source.group_name,
+                "source_type": source.source_type,
+                "weight": source.weight,
+                "enabled_explore": source.enabled_explore,
+                "custom_order": source.custom_order,
+                "comment": source.comment,
+                "book_url_pattern": source.book_url_pattern,
+                "explore_url": source.explore_url,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())
+}
+
+fn find_existing_source<'a>(
+    sources: &'a [SourceSummary],
+    source_id: Option<&str>,
+    source: &source::BookSource,
+) -> Option<&'a SourceSummary> {
+    if let Some(source_id) = source_id.filter(|value| !value.trim().is_empty()) {
+        if let Some(found) = sources.iter().find(|item| item.id == source_id) {
+            return Some(found);
+        }
+    }
+    if let Some(source_url) = source.source_url.as_deref().filter(|value| !value.is_empty()) {
+        if let Some(found) = sources
+            .iter()
+            .find(|item| item.source_url.as_deref() == Some(source_url))
+        {
+            return Some(found);
+        }
+    }
+    let matches: Vec<&SourceSummary> = sources
+        .iter()
+        .filter(|item| item.name == source.name)
+        .collect();
+    (matches.len() == 1).then(|| matches[0])
+}
+
+fn generated_import_source_id(index: usize) -> String {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("source-import-{index}-{timestamp}")
+}
+
+fn persist_imported_sources_with_strategy(
     database: &Database,
     bundle: Vec<source_import::ImportedSource>,
-) -> Result<Vec<SourceSummary>, String> {
-    let mut imported = Vec::with_capacity(bundle.len());
+    conflict_strategy: &str,
+) -> Result<SourceImportResult, String> {
+    if !matches!(conflict_strategy, "update" | "skip-existing" | "new") {
+        return Err("不支持的书源冲突策略".to_string());
+    }
+
+    let existing = database.list_sources().map_err(|error| error.to_string())?;
+    let mut writes = Vec::with_capacity(bundle.len());
+    let mut target_ids = Vec::with_capacity(bundle.len());
+    let mut skipped = 0;
 
     for (index, item) in bundle.into_iter().enumerate() {
         let validation = source::validate_source_json(&item.config_json);
@@ -389,22 +487,54 @@ fn persist_imported_sources(
             ));
         }
 
-        let metadata = SourceMetadata::from(&source);
-        let saved = database
-            .save_source(
-                item.id.as_deref(),
-                &source.name,
-                &item.config_json,
-                &metadata,
-            )
-            .map_err(|error| error.to_string())?;
-        let saved = database
-            .set_source_enabled(&saved.id, item.enabled)
-            .map_err(|error| error.to_string())?;
-        imported.push(saved);
+        let existing_source = find_existing_source(&existing, item.id.as_deref(), &source);
+        if conflict_strategy == "skip-existing" && existing_source.is_some() {
+            skipped += 1;
+            continue;
+        }
+
+        let id = if conflict_strategy == "new" {
+            None
+        } else {
+            existing_source
+                .map(|source| source.id.clone())
+                .or(item.id)
+        }
+        .unwrap_or_else(|| generated_import_source_id(index));
+        target_ids.push(id.clone());
+        writes.push(SourceWrite::from_source(
+            id,
+            &source,
+            item.config_json,
+            item.enabled,
+        ));
     }
 
-    Ok(imported)
+    let snapshot_payload = export_sources_payload(database)?;
+    let source_count = existing.len() as i64;
+    let snapshot = database
+        .create_source_snapshot("导入前自动快照", &snapshot_payload, source_count)
+        .map_err(|error| error.to_string())?;
+    let saved = database
+        .apply_sources_atomic(&writes, false)
+        .map_err(|error| format!("书源导入未完成，已保留快照：{error}"))?;
+    let imported = saved
+        .into_iter()
+        .filter(|source| target_ids.iter().any(|id| id == &source.id))
+        .collect();
+
+    Ok(SourceImportResult {
+        imported,
+        snapshot_id: snapshot.id,
+        skipped,
+    })
+}
+
+fn persist_imported_sources(
+    database: &Database,
+    bundle: Vec<source_import::ImportedSource>,
+) -> Result<Vec<SourceSummary>, String> {
+    Ok(persist_imported_sources_with_strategy(database, bundle, "update")?.imported)
 }
 
 fn import_source_payload(database: &Database, payload: &str) -> Result<Vec<SourceSummary>, String> {
@@ -568,39 +698,19 @@ fn import_sources_selected(
     database: tauri::State<'_, Database>,
     bundle_json: String,
     indices: Vec<usize>,
-) -> Result<Vec<SourceSummary>, String> {
+    conflict_strategy: String,
+) -> Result<SourceImportResult, String> {
     if bundle_json.len() > MAX_SOURCE_BUNDLE_BYTES {
         return Err("书源文件超过 2 MB 限制".to_string());
     }
 
     let bundle = source_import::parse_selected_entries(&bundle_json, &indices)?;
-    persist_imported_sources(&database, bundle)
+    persist_imported_sources_with_strategy(&database, bundle, &conflict_strategy)
 }
 
 #[tauri::command]
 fn export_sources(database: tauri::State<'_, Database>) -> Result<String, String> {
-    let sources = database.list_sources().map_err(|error| error.to_string())?;
-    let bundle = serde_json::json!({
-        "version": 1,
-        "sources": sources
-            .into_iter()
-            .map(|source| serde_json::json!({
-                "id": source.id,
-                "enabled": source.enabled,
-                "config_json": source.config_json,
-                "source_url": source.source_url,
-                "group_name": source.group_name,
-                "source_type": source.source_type,
-                "weight": source.weight,
-                "enabled_explore": source.enabled_explore,
-                "custom_order": source.custom_order,
-                "comment": source.comment,
-                "book_url_pattern": source.book_url_pattern,
-                "explore_url": source.explore_url,
-            }))
-            .collect::<Vec<_>>(),
-    });
-    serde_json::to_string_pretty(&bundle).map_err(|error| error.to_string())
+    export_sources_payload(&database)
 }
 
 #[tauri::command]
@@ -609,6 +719,58 @@ fn import_sources(
     bundle_json: String,
 ) -> Result<Vec<SourceSummary>, String> {
     import_source_payload(&database, &bundle_json)
+}
+
+#[tauri::command]
+fn list_source_snapshots(
+    database: tauri::State<'_, Database>,
+) -> Result<Vec<SourceSnapshotSummary>, String> {
+    database
+        .list_source_snapshots()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_source_snapshot(
+    database: tauri::State<'_, Database>,
+    snapshot_id: String,
+) -> Result<Vec<SourceSummary>, String> {
+    let payload = database
+        .get_source_snapshot(&snapshot_id)
+        .map_err(|error| format!("读取书源快照失败：{error}"))?;
+    let bundle = source_import::parse_import_bundle(&payload)?;
+    let mut writes = Vec::with_capacity(bundle.len());
+
+    for (index, item) in bundle.into_iter().enumerate() {
+        let validation = source::validate_source_json(&item.config_json);
+        let source = validation.source.ok_or_else(|| {
+            format!(
+                "快照第 {} 个书源无法解析：{}",
+                index + 1,
+                validation.errors.join("；")
+            )
+        })?;
+        if !validation.valid {
+            return Err(format!(
+                "快照第 {} 个书源校验失败：{}",
+                index + 1,
+                validation.errors.join("；")
+            ));
+        }
+        let id = item
+            .id
+            .unwrap_or_else(|| generated_import_source_id(index));
+        writes.push(SourceWrite::from_source(
+            id,
+            &source,
+            item.config_json,
+            item.enabled,
+        ));
+    }
+
+    database
+        .apply_sources_atomic(&writes, true)
+        .map_err(|error| format!("恢复书源快照失败：{error}"))
 }
 
 #[tauri::command]
@@ -978,12 +1140,15 @@ pub fn run() {
             set_source_explore_enabled,
             set_sources_enabled,
             set_sources_explore_enabled,
+            set_sources_group,
             reorder_sources,
             delete_source,
             delete_sources,
             audit_sources,
             export_sources,
             import_sources,
+            list_source_snapshots,
+            restore_source_snapshot,
             preview_sources,
             import_sources_selected,
             preview_sources_from_url,
