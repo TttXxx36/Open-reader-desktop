@@ -566,7 +566,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
         (3_i64, include_str!("../migrations/0003_sources.sql")),
         (4_i64, include_str!("../migrations/0004_source_cache.sql")),
         (5_i64, include_str!("../migrations/0005_content_format.sql")),
-        (6_i64, include_str!("../migrations/0006_source_metadata.sql")),
+        (
+            6_i64,
+            include_str!("../migrations/0006_source_metadata.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -626,7 +629,9 @@ fn backfill_source_metadata(connection: &Connection) -> Result<(), DbError> {
     let rows = {
         let mut statement = connection.prepare("SELECT id, config_json FROM book_sources")?;
         statement
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect::<Result<Vec<_>, _>>()?
     };
 
@@ -744,7 +749,10 @@ mod tests {
 
         let listed = database.list_sources().expect("sources should list");
         assert_eq!(
-            listed.iter().map(|source| source.id.as_str()).collect::<Vec<_>>(),
+            listed
+                .iter()
+                .map(|source| source.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["source-alpha", "source-beta"]
         );
         assert_eq!(listed[0].group_name, "Alpha");
