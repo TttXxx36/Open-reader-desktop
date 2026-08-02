@@ -807,6 +807,8 @@ struct RemoteBookDetail {
     stale: bool,
     #[serde(default)]
     refresh_error: Option<String>,
+    #[serde(default)]
+    cache_hit: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -819,6 +821,8 @@ struct RemoteChapterContent {
     stale: bool,
     #[serde(default)]
     refresh_error: Option<String>,
+    #[serde(default)]
+    cache_hit: bool,
 }
 
 impl From<source::SourceChapterContent> for RemoteChapterContent {
@@ -829,6 +833,7 @@ impl From<source::SourceChapterContent> for RemoteChapterContent {
             next_url: content.next_url,
             stale: false,
             refresh_error: None,
+            cache_hit: false,
         }
     }
 }
@@ -919,6 +924,17 @@ fn cached_remote_chapter(
     Ok(payload.and_then(|value| serde_json::from_str::<RemoteChapterContent>(&value).ok()))
 }
 
+fn mark_book_cache_hit(detail: &mut RemoteBookDetail) {
+    detail.cache_hit = true;
+    for step in &mut detail.debug_steps {
+        step.cache_hit = true;
+    }
+}
+
+fn mark_chapter_cache_hit(content: &mut RemoteChapterContent) {
+    content.cache_hit = true;
+}
+
 #[tauri::command]
 async fn fetch_source_preview(url: String) -> Result<SourcePreview, String> {
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
@@ -944,7 +960,8 @@ async fn fetch_source_book(
             .get_source_cache(&cache_key)
             .map_err(|error| error.to_string())?
         {
-            if let Ok(cached) = serde_json::from_str::<RemoteBookDetail>(&payload) {
+            if let Ok(mut cached) = serde_json::from_str::<RemoteBookDetail>(&payload) {
+                mark_book_cache_hit(&mut cached);
                 return Ok(cached);
             }
         }
@@ -955,6 +972,7 @@ async fn fetch_source_book(
         Ok(detail) => detail,
         Err(error) => {
             if let Some(mut fallback) = previous.clone() {
+                mark_book_cache_hit(&mut fallback);
                 fallback.stale = true;
                 fallback.refresh_error = Some(error.to_string());
                 fallback.chapter_update = None;
@@ -976,6 +994,7 @@ async fn fetch_source_book(
         chapter_update,
         stale: false,
         refresh_error: None,
+        cache_hit: false,
     };
     let mut cache_result = result.clone();
     cache_result.chapter_update = None;
@@ -1014,7 +1033,8 @@ async fn fetch_source_chapter(
             .get_source_cache(&cache_key)
             .map_err(|error| error.to_string())?
         {
-            if let Ok(cached) = serde_json::from_str::<RemoteChapterContent>(&payload) {
+            if let Ok(mut cached) = serde_json::from_str::<RemoteChapterContent>(&payload) {
+                mark_chapter_cache_hit(&mut cached);
                 return Ok(cached);
             }
         }
@@ -1029,6 +1049,7 @@ async fn fetch_source_chapter(
         Ok(content) => RemoteChapterContent::from(content),
         Err(error) => {
             if let Some(mut fallback) = previous {
+                mark_chapter_cache_hit(&mut fallback);
                 fallback.stale = true;
                 fallback.refresh_error = Some(error.to_string());
                 return Ok(fallback);
@@ -1039,6 +1060,7 @@ async fn fetch_source_chapter(
     let mut cache_result = result.clone();
     cache_result.stale = false;
     cache_result.refresh_error = None;
+    cache_result.cache_hit = false;
     let payload = serde_json::to_string(&cache_result).map_err(|error| error.to_string())?;
     database
         .save_source_cache(
