@@ -949,6 +949,84 @@ mod tests {
     }
 
     #[test]
+    fn snapshots_and_replaces_sources_atomically() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-source-snapshot-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        let first = SourceWrite {
+            id: "source-first".to_string(),
+            name: "First".to_string(),
+            enabled: true,
+            config_json: r#"{"name":"First"}"#.to_string(),
+            source_url: Some("https://first.example.test/".to_string()),
+            group_name: "Test".to_string(),
+            source_type: 0,
+            weight: 1,
+            enabled_explore: false,
+            custom_order: 0,
+            comment: "before".to_string(),
+            book_url_pattern: None,
+            explore_url: None,
+        };
+        database
+            .apply_sources_atomic(&[first], false)
+            .expect("initial source should save");
+
+        let snapshot = database
+            .create_source_snapshot(
+                "test snapshot",
+                r#"{"version":1,"sources":[]}"#,
+                1,
+            )
+            .expect("snapshot should save");
+        assert_eq!(
+            database
+                .list_source_snapshots()
+                .expect("snapshots should list")
+                .first()
+                .map(|item| item.id.as_str()),
+            Some(snapshot.id.as_str())
+        );
+        assert_eq!(
+            database
+                .get_source_snapshot(&snapshot.id)
+                .expect("snapshot payload should read"),
+            r#"{"version":1,"sources":[]}"#
+        );
+
+        let second = SourceWrite {
+            id: "source-second".to_string(),
+            name: "Second".to_string(),
+            enabled: false,
+            config_json: r#"{"name":"Second"}"#.to_string(),
+            source_url: None,
+            group_name: "Restored".to_string(),
+            source_type: 0,
+            weight: 0,
+            enabled_explore: false,
+            custom_order: 0,
+            comment: String::new(),
+            book_url_pattern: None,
+            explore_url: None,
+        };
+        database
+            .apply_sources_atomic(&[second], true)
+            .expect("replacement should be atomic");
+        let listed = database.list_sources().expect("sources should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "source-second");
+        assert_eq!(listed[0].group_name, "Restored");
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn persists_source_configuration_and_enabled_state() {
         let directory = std::env::temp_dir().join(format!(
             "open-reader-db-test-{}",
