@@ -628,11 +628,12 @@ fn source_from_row(row: &Row<'_>) -> rusqlite::Result<SourceSummary> {
 fn backfill_source_metadata(connection: &Connection) -> Result<(), DbError> {
     let rows = {
         let mut statement = connection.prepare("SELECT id, config_json FROM book_sources")?;
-        statement
+        let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
-            .collect::<Result<Vec<_>, _>>()?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
     };
 
     for (id, config_json) in rows {
