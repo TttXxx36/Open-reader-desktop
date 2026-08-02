@@ -310,6 +310,48 @@ mod tests {
     }
 
     #[test]
+    fn covers_common_xpath_fixture_matrix() {
+        let html = r#"
+            <html><body><main>
+                <article class="book"><a href="/book/1">一本书</a></article>
+                <article class="book"><a href="/book/2">第二本</a></article>
+            </main></body></html>
+        "#;
+        let fixtures = [
+            ("//article", true),
+            ("/html/body/main/article", true),
+            ("//article[@class='book']", true),
+            ("//article[1]", true),
+            ("//*[@id=\"content\"]", true),
+            ("//a/@href", true),
+            ("//article[contains(@class,'book')]", false),
+            ("//article/@href/text()", false),
+            ("//article | //a", false),
+            ("//article::a", false),
+            ("//article/../a", false),
+            ("//article[@class!='book']", false),
+        ];
+
+        let mut accepted = 0;
+        for (expression, expected) in fixtures {
+            let analysis = analyze(expression, html);
+            assert_eq!(analysis.accepted, expected, "{expression}: {analysis:?}");
+            if expected {
+                accepted += 1;
+                assert!(analysis.steps <= MAX_XPATH_STEPS);
+                assert!(analysis.estimated_work <= MAX_XPATH_WORK);
+            }
+        }
+        assert_eq!(accepted, 6);
+
+        let dense_html = format!("<main>{}</main>", "<article></article>".repeat(128));
+        let dense = analyze("//article", &dense_html);
+        assert!(dense.accepted);
+        assert!(dense.html_nodes >= 129);
+        assert!(dense.estimated_work > 0);
+    }
+
+    #[test]
     fn enforces_xpath_expression_and_html_budgets() {
         let expression = format!("//{}", "a".repeat(MAX_XPATH_EXPRESSION_BYTES));
         let analysis = analyze(&expression, "<a>demo</a>");
