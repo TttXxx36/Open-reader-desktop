@@ -14,6 +14,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 100;
 const MAX_SOURCE_SEARCH_PAGES: usize = 20;
+const MAX_RULE_CHAIN_LENGTH: usize = 8;
 const MAX_REPLACE_RULES: usize = 32;
 const MAX_REPLACE_PATTERN_BYTES: usize = 512;
 const MAX_REPLACE_REPLACEMENT_BYTES: usize = 4 * 1024;
@@ -169,6 +170,10 @@ pub enum SourceRule {
         #[serde(default)]
         regex: Option<String>,
     },
+    Chain {
+        #[serde(default)]
+        chain: Vec<SourceRule>,
+    },
 }
 
 impl SourceRule {
@@ -177,19 +182,20 @@ impl SourceRule {
             Self::Selector(value) => value,
             Self::Detailed { selector, .. } => selector,
             Self::JsonPath { json_path, .. } => json_path,
+            Self::Chain { chain } => chain.first().map(Self::selector).unwrap_or_default(),
         }
     }
 
     fn attr(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) => None,
+            Self::Selector(_) | Self::Chain { .. } => None,
             Self::Detailed { attr, .. } | Self::JsonPath { attr, .. } => attr.as_deref(),
         }
     }
 
     fn regex(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) => None,
+            Self::Selector(_) | Self::Chain { .. } => None,
             Self::Detailed { regex, .. } | Self::JsonPath { regex, .. } => regex.as_deref(),
         }
     }
@@ -199,12 +205,22 @@ impl SourceRule {
             Self::JsonPath { json_path, .. } => Some(json_path),
             Self::Selector(value) if is_json_rule_path(value) => Some(value),
             Self::Detailed { selector, .. } if is_json_rule_path(selector) => Some(selector),
+            Self::Chain { chain }
+                if !chain.is_empty() && chain.iter().all(Self::is_json_path) =>
+            {
+                chain.first().and_then(Self::json_path)
+            }
             _ => None,
         }
     }
 
     fn is_json_path(&self) -> bool {
-        self.json_path().is_some()
+        match self {
+            Self::Chain { chain } => {
+                !chain.is_empty() && chain.iter().all(Self::is_json_path)
+            }
+            _ => self.json_path().is_some(),
+        }
     }
 }
 
@@ -1109,6 +1125,14 @@ fn extract_document_rule(
     let Some(rule) = rule else {
         return Ok(None);
     };
+    if let SourceRule::Chain { chain } = rule {
+        for child in chain {
+            if let Some(value) = extract_document_rule(document, Some(child))? {
+                return Ok(Some(value));
+            }
+        }
+        return Ok(None);
+    }
     let selector = parse_selector(rule.selector())?;
     let Some(element) = document.select(&selector).next() else {
         return Ok(None);
@@ -1625,23 +1649,48 @@ fn validate_page_rules(
         ("content", rules.content.as_ref()),
     ] {
         if let Some(rule) = rule {
-            if rule.selector().trim().is_empty() {
-                errors.push(format!("{name}.{field} selector 不能为空"));
-                continue;
-            }
-            let result = if let Some(path) = rule.json_path() {
-                validate_json_path(path)
-            } else {
-                parse_selector(rule.selector()).map(|_| ())
-            };
-            if let Err(error) = result {
-                errors.push(format!("{name}.{field}：{error}"));
-            }
-            if let Some(regex) = rule.regex() {
-                if let Err(error) = Regex::new(regex) {
-                    errors.push(format!("{name}.{field} regex：{error}"));
-                }
-            }
+            validate_source_rule(&format!("{name}.{field}"), rule, errors);
+        }
+    }
+}
+
+fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>) {
+    if let SourceRule::Chain { chain } = rule {
+        if chain.is_empty() {
+            errors.push(format!("{name} 链式规则不能为空"));
+            return;
+        }
+        if chain.len() > MAX_RULE_CHAIN_LENGTH {
+            errors.push(format!(
+                "{name} 链式规则最多支持 {} 个候选",
+                MAX_RULE_CHAIN_LENGTH
+            ));
+        }
+        let json_flags = chain.iter().map(SourceRule::is_json_path).collect::<Vec<_>>();
+        if json_flags.iter().any(|flag| *flag) && json_flags.iter().any(|flag| !*flag) {
+            errors.push(format!("{name} 链式规则不能混用 CSS 和 JSONPath"));
+        }
+        for (index, child) in chain.iter().enumerate() {
+            validate_source_rule(&format!("{name}[{index}]"), child, errors);
+        }
+        return;
+    }
+
+    if rule.selector().trim().is_empty() {
+        errors.push(format!("{name} selector 不能为空"));
+        return;
+    }
+    let result = if let Some(path) = rule.json_path() {
+        validate_json_path(path)
+    } else {
+        parse_selector(rule.selector()).map(|_| ())
+    };
+    if let Err(error) = result {
+        errors.push(format!("{name}：{error}"));
+    }
+    if let Some(regex) = rule.regex() {
+        if let Err(error) = Regex::new(regex) {
+            errors.push(format!("{name} regex：{error}"));
         }
     }
 }
@@ -1781,6 +1830,16 @@ fn parse_selector(value: &str) -> Result<Selector, SourceError> {
 }
 
 fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
+    if let SourceRule::Chain { chain } = rule {
+        for child in chain {
+            match extract_from_element(element, child) {
+                Ok(value) => return Ok(value),
+                Err(SourceError::NoMatch) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        return Err(SourceError::NoMatch);
+    }
     let selector = parse_selector(rule.selector())?;
     let target = element
         .select(&selector)
@@ -1834,6 +1893,16 @@ fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceErr
 }
 
 fn extract_json_rule(value: &Value, rule: &SourceRule) -> Result<String, SourceError> {
+    if let SourceRule::Chain { chain } = rule {
+        for child in chain {
+            match extract_json_rule(value, child) {
+                Ok(value) => return Ok(value),
+                Err(SourceError::NoMatch) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        return Err(SourceError::NoMatch);
+    }
     let path = rule.json_path().ok_or_else(|| {
         SourceError::InvalidConfig("JSON 文档中的字段必须使用 JSONPath 规则".to_string())
     })?;
