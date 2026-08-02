@@ -399,7 +399,7 @@ mod tests {
         .concat();
         let book = parse_book_bytes("bom.txt", &bytes).expect("BOM txt should parse");
 
-        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters.len(), 2, "{:?}", book.chapters);
         assert_eq!(book.chapters[0].title, "第一章");
         assert_eq!(book.chapters[0].content, "  首行缩进");
     }
