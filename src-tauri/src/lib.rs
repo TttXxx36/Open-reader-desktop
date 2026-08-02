@@ -134,6 +134,8 @@ fn update_source_metadata_impl(
         .ok_or_else(|| "书源配置必须是 JSON 对象".to_string())?;
 
     if let Some(group_name) = group_name {
+        object.remove("bookSourceGroup");
+        object.remove("book_source_group");
         let group_name = group_name.trim();
         if group_name.is_empty() {
             object.remove("group");
@@ -148,15 +150,19 @@ fn update_source_metadata_impl(
         object.insert("weight".to_string(), serde_json::json!(weight));
     }
     if let Some(custom_order) = custom_order {
+        object.remove("customOrder");
         object.insert("custom_order".to_string(), serde_json::json!(custom_order));
     }
     if let Some(enabled_explore) = enabled_explore {
+        object.remove("enabledExplore");
         object.insert(
             "enabled_explore".to_string(),
             serde_json::json!(enabled_explore),
         );
     }
     if let Some(comment) = comment {
+        object.remove("bookSourceComment");
+        object.remove("book_source_comment");
         let comment = comment.trim();
         if comment.is_empty() {
             object.remove("comment");
