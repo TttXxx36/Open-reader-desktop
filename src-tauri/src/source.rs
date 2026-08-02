@@ -28,6 +28,7 @@ const MAX_PERMISSION_REVIEWED_AT_BYTES: usize = 64;
 const MAX_SOURCE_GROUP_BYTES: usize = 128;
 const MAX_SOURCE_COMMENT_BYTES: usize = 2 * 1024;
 const MAX_BOOK_URL_PATTERN_BYTES: usize = 512;
+const MAX_NEXT_URL_BYTES: usize = 2 * 1024;
 const MAX_SOURCE_WEIGHT: i64 = 1_000_000;
 const MAX_SOURCE_CUSTOM_ORDER: i64 = 1_000_000;
 const MAX_REDIRECTS: usize = 5;
@@ -158,6 +159,14 @@ pub struct PageRules {
     pub intro: Option<SourceRule>,
     #[serde(default)]
     pub content: Option<SourceRule>,
+    #[serde(
+        default,
+        alias = "nextUrl",
+        alias = "next_url",
+        alias = "nextPage",
+        alias = "next_page"
+    )]
+    pub next: Option<SourceRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -238,6 +247,7 @@ impl PageRules {
                 self.url.as_ref(),
                 self.intro.as_ref(),
                 self.content.as_ref(),
+                self.next.as_ref(),
             ]
             .into_iter()
             .flatten()
@@ -1020,7 +1030,7 @@ impl SourceEngine {
             .as_deref()
             .ok_or_else(|| SourceError::InvalidConfig("contentUrl is required".to_string()))?;
         let context = SourceRequestContext::chapter(&chapter.url);
-        let (body, _url) = self
+        let (body, content_url) = self
             .fetch_stage_chain("content", template, &source.headers, &context, debug_steps)
             .await?;
         let rules = source
@@ -1034,12 +1044,30 @@ impl SourceEngine {
             extract_document_rule(&document, rules.content.as_ref())?
         }
         .ok_or(SourceError::NoMatch)?;
+        let next_url = if let Some(next_rule) = rules.next.as_ref() {
+            let next_value = if rules.is_json() {
+                parse_json_rule_document(&body, rules.item.as_deref(), Some(next_rule))?
+            } else {
+                let document = Html::parse_document(&body);
+                extract_document_rule(&document, Some(next_rule))?
+            };
+            next_value
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| {
+                    let absolute = absolutize_url(&content_url, value.trim());
+                    bounded_next_url(&absolute)
+                })
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
         let content = apply_replace_rules(&content, &source.replace_rules)?;
 
         Ok(SourceChapterContent {
             title: chapter.title.clone(),
             content,
-            next_url: None,
+            next_url,
         })
     }
 
@@ -1425,6 +1453,26 @@ fn absolutize_url(base_url: &str, value: &str) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
+fn bounded_next_url(url: &str) -> Result<Option<String>, SourceError> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Ok(None);
+    }
+    if url.len() > MAX_NEXT_URL_BYTES {
+        return Err(SourceError::InvalidUrl(format!(
+            "next URL 不能超过 {} 字节",
+            MAX_NEXT_URL_BYTES
+        )));
+    }
+    if url.contains("||") {
+        return Err(SourceError::InvalidUrl(
+            "next URL 不支持回退链".to_string(),
+        ));
+    }
+    validate_url(url)?;
+    Ok(Some(url.to_string()))
+}
+
 pub fn validate_source_json(input: &str) -> SourceValidation {
     let source = match serde_json::from_str::<BookSource>(input) {
         Ok(source) => source,
@@ -1766,6 +1814,7 @@ fn validate_page_rules(
         ("url", rules.url.as_ref()),
         ("intro", rules.intro.as_ref()),
         ("content", rules.content.as_ref()),
+        ("next", rules.next.as_ref()),
     ] {
         if let Some(rule) = rule {
             validate_source_rule(&format!("{name}.{field}"), rule, errors);
@@ -2700,6 +2749,21 @@ mod tests {
         assert!(debug_steps[0].error.is_some());
         assert!(debug_steps[1].error.is_none());
         server.join().expect("fixture server should stop");
+    }
+
+    #[test]
+    fn validates_bounded_nested_content_url() {
+        assert_eq!(
+            bounded_next_url("https://example.test/chapter/1", "/chapter/2")
+                .expect("next URL should be accepted"),
+            Some("https://example.test/chapter/2".to_string())
+        );
+        assert!(bounded_next_url("https://example.test/chapter/1", "javascript:alert(1)").is_err());
+        assert!(bounded_next_url(
+            "https://example.test/chapter/1",
+            &"https://example.test/".to_string() + &"a".repeat(MAX_NEXT_URL_BYTES)
+        )
+        .is_err());
     }
 
     #[test]
