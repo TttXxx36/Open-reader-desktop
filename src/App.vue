@@ -190,6 +190,7 @@ interface SourceDiagnosticSnapshot {
     request_steps: number;
     failed_steps: number;
     cache_hits: number;
+    cache_events: number;
     total_duration_ms: number;
   };
   cache: SourceCacheStatus | null;
@@ -246,6 +247,7 @@ interface RemoteChapterContent {
   stale: boolean;
   refresh_error: string | null;
   cache_hit: boolean;
+  debug_steps: SourceDebugStep[];
 }
 
 interface SourceSearchDiagnostics {
@@ -1148,48 +1150,88 @@ function sanitizeDiagnosticUrl(value: string) {
   }
 }
 
+function sanitizeDiagnosticStep(step: SourceDebugStep, prefix = ""): SourceDebugStep {
+  return {
+    stage: truncateDiagnostic(prefix + step.stage, 128),
+    url: sanitizeDiagnosticUrl(step.url),
+    duration_ms: Number.isFinite(step.duration_ms) ? Math.max(0, Math.round(step.duration_ms)) : 0,
+    status: typeof step.status === "number" ? step.status : null,
+    bytes: typeof step.bytes === "number" ? Math.max(0, Math.round(step.bytes)) : null,
+    error: step.error ? truncateDiagnostic(step.error, 512) : null,
+    variables: Object.fromEntries(
+      Object.keys(step.variables ?? {})
+        .slice(0, 32)
+        .map((key) => [truncateDiagnostic(key, 64), "<redacted>"]),
+    ),
+    cache_hit: Boolean(step.cache_hit),
+  };
+}
+
+function cacheDiagnosticStep(stage: string, url: string, error: string | null): SourceDebugStep {
+  return {
+    stage,
+    url: sanitizeDiagnosticUrl(url),
+    duration_ms: 0,
+    status: null,
+    bytes: null,
+    error: error ? truncateDiagnostic(error, 512) : null,
+    variables: {},
+    cache_hit: true,
+  };
+}
+
 function exportSourceDiagnostics() {
   const pipeline = sourcePipeline.value;
-  if (!pipeline) {
-    errorMessage.value = "请先运行一次书源调试";
+  if (!pipeline && !remoteBook.value && !remoteChapter.value) {
+    errorMessage.value = "请先运行一次书源调试或打开远端章节";
     return;
   }
 
   const sourceValue = sourceValidation.value?.source;
   const sourceName = isRecord(sourceValue) && typeof sourceValue.name === "string"
     ? truncateDiagnostic(sourceValue.name, 128)
-    : "当前书源";
-  const steps = pipeline.debug_steps
-    .slice(0, MAX_DIAGNOSTIC_STEPS)
-    .map((step): SourceDebugStep => ({
-      stage: truncateDiagnostic(step.stage, 128),
-      url: sanitizeDiagnosticUrl(step.url),
-      duration_ms: Number.isFinite(step.duration_ms) ? Math.max(0, Math.round(step.duration_ms)) : 0,
-      status: typeof step.status === "number" ? step.status : null,
-      bytes: typeof step.bytes === "number" ? Math.max(0, Math.round(step.bytes)) : null,
-      error: step.error ? truncateDiagnostic(step.error, 512) : null,
-      variables: Object.fromEntries(
-        Object.keys(step.variables ?? {})
-          .slice(0, 32)
-          .map((key) => [truncateDiagnostic(key, 64), "<redacted>"]),
-      ),
-      cache_hit: Boolean(step.cache_hit),
-    }));
+    : remoteBook.value?.source_name || "当前书源";
+  const rawSteps = [
+    ...(pipeline?.debug_steps ?? []).map((step) => ({ step, prefix: "pipeline." })),
+    ...(remoteBook.value?.debug_steps ?? []).map((step) => ({ step, prefix: "book." })),
+    ...(remoteChapter.value?.debug_steps ?? []).map((step) => ({ step, prefix: "chapter." })),
+  ];
+  const cacheEvents = [
+    ...(remoteBook.value?.cache_hit || remoteBook.value?.stale
+      ? [cacheDiagnosticStep(
+          remoteBook.value.stale ? "book.stale_fallback" : "book.cache_hit",
+          remoteBook.value.book_info.book_url,
+          remoteBook.value.refresh_error,
+        )]
+      : []),
+    ...(remoteChapter.value?.cache_hit || remoteChapter.value?.stale
+      ? [cacheDiagnosticStep(
+          remoteChapter.value.stale ? "chapter.stale_fallback" : "chapter.cache_hit",
+          remoteChapterRef.value?.url || "",
+          remoteChapter.value.refresh_error,
+        )]
+      : []),
+  ];
+  const steps = [
+    ...rawSteps.map(({ step, prefix }) => sanitizeDiagnosticStep(step, prefix)),
+    ...cacheEvents,
+  ].slice(0, MAX_DIAGNOSTIC_STEPS);
   const snapshot: SourceDiagnosticSnapshot = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
     source_name: sourceName,
     summary: {
-      search_results: pipeline.search_results.length,
-      chapters: pipeline.chapters.length,
+      search_results: pipeline?.search_results.length ?? 0,
+      chapters: pipeline?.chapters.length ?? remoteBook.value?.chapters.length ?? 0,
       request_steps: steps.length,
       failed_steps: steps.filter((step) => Boolean(step.error)).length,
       cache_hits: steps.filter((step) => step.cache_hit).length,
+      cache_events: cacheEvents.length,
       total_duration_ms: steps.reduce((total, step) => total + step.duration_ms, 0),
     },
     cache: sourceCacheStatus.value ? { ...sourceCacheStatus.value } : null,
     steps,
-    truncated_steps: pipeline.debug_steps.length > steps.length,
+    truncated_steps: rawSteps.length + cacheEvents.length > steps.length,
     privacy: [
       "不导出关键词、书籍/章节 ID、请求头、Cookie 或正文",
       "URL 查询参数和片段已移除",
