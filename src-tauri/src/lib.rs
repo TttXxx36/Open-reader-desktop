@@ -2,6 +2,7 @@ mod db;
 mod library;
 mod source;
 mod source_import;
+mod xpath_poc;
 
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceMetadata,
@@ -159,6 +160,11 @@ fn save_progress(
 #[tauri::command]
 fn validate_book_source(config_json: String) -> SourceValidation {
     source::validate_source_json(&config_json)
+}
+
+#[tauri::command]
+fn analyze_xpath_offline(expression: String, html: String) -> xpath_poc::XPathAnalysis {
+    xpath_poc::analyze(&expression, &html)
 }
 
 #[tauri::command]
@@ -1304,6 +1310,7 @@ pub fn run() {
             get_chapter_content,
             save_progress,
             validate_book_source,
+            analyze_xpath_offline,
             list_sources,
             save_source,
             set_source_enabled,
