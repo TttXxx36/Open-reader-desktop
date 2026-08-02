@@ -156,6 +156,44 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
           </div>
           <textarea v-model="sourceJson" spellcheck="false" aria-label="书源 JSON"></textarea>
           <p class="source-hint">支持 searchUrl、bookInfoUrl、tocUrl、contentUrl，以及 search / bookInfo / toc / content 规则别名。</p>
+
+          <section class="source-metadata-panel" aria-label="书源元数据">
+            <div class="source-section-heading">
+              <div>
+                <span class="eyebrow">SOURCE METADATA</span>
+                <h2>书源管理</h2>
+              </div>
+              <span class="source-limit">保存后写入 SQLite</span>
+            </div>
+            <div class="source-meta-grid">
+              <label class="source-meta-field">
+                <span>分组</span>
+                <input v-model="sourceGroupDraft" :disabled="!sourceId" placeholder="例如：公开测试" />
+              </label>
+              <label class="source-meta-field">
+                <span>权重</span>
+                <input v-model="sourceWeightDraft" :disabled="!sourceId" type="number" step="1" />
+              </label>
+              <label class="source-meta-field">
+                <span>自定义顺序</span>
+                <input v-model="sourceOrderDraft" :disabled="!sourceId" type="number" step="1" />
+              </label>
+              <label class="source-meta-field source-meta-checkbox">
+                <input v-model="sourceExploreDraft" :disabled="!sourceId" type="checkbox" />
+                <span>允许进入发现页</span>
+              </label>
+              <label class="source-meta-field source-meta-wide">
+                <span>备注</span>
+                <input v-model="sourceCommentDraft" :disabled="!sourceId" placeholder="记录授权范围或维护说明" />
+              </label>
+            </div>
+            <div class="source-meta-actions">
+              <button class="secondary-button" type="button" :disabled="sourceBusy || !sourceId" @click="saveSourceMetadata">
+                {{ sourceBusy ? "保存中…" : "保存元数据" }}
+              </button>
+              <span>{{ sourceId ? "分组、排序和发现开关会影响下次列表读取。" : "先保存书源配置，再编辑元数据。" }}</span>
+            </div>
+          </section>
         </section>
 
         <section class="source-result" aria-live="polite">
