@@ -168,6 +168,8 @@ interface SourceDebugStep {
   status: number | null;
   bytes: number | null;
   error: string | null;
+  variables: Record<string, string>;
+  cache_hit: boolean;
 }
 
 interface SourcePipelineResult {
