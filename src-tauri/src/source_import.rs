@@ -562,6 +562,10 @@ fn normalize_rule_parts(
         } else {
             parsed_attr
         };
+        if attr.is_none() && regex.is_none() {
+            normalized.push(Value::String(selector));
+            continue;
+        }
         let mut output = Map::new();
         output.insert("selector".to_string(), Value::String(selector));
         if let Some(attr) = attr {
