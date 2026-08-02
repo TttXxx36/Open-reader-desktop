@@ -567,9 +567,11 @@ fn push_html_span(
         return;
     }
 
-    if (*pending_space || leading) && let Some(previous) = spans.last_mut() {
-        if !previous.text.ends_with(' ') {
-            previous.text.push(' ');
+    if *pending_space || leading {
+        if let Some(previous) = spans.last_mut() {
+            if !previous.text.ends_with(' ') {
+                previous.text.push(' ');
+            }
         }
     }
 
