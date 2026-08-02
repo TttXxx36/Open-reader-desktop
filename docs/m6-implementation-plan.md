@@ -64,7 +64,8 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 ### M6.2 阅读内容模型
 
 - [x] TXT 保留段落、缩进和章节标题
-- [ ] EPUB 保留标题、段落、引用和基础强调
+- [x] EPUB 保留标题、段落、引用和基础强调文本（安全纯文本回退，不执行 HTML）
+- [x] EPUB 过滤 script/style/noscript，并将图片转为本地占位文本
 - [ ] 评估图片资源映射和本地缓存
 - [ ] 引入向后兼容的内容格式字段或 JSON 内容块
 - [ ] 为旧版本纯文本章节提供读取回退
@@ -95,6 +96,7 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 - 2026-08-02：新增 `scripts/verify-ui-contract.mjs` 并接入 CI；Rust 适配器包含原生包、Legado CSS 子集、数组、无效文档、不安全规则和未知属性测试。
 - 2026-08-02：新增安全 JSONPath 解析层，支持字符串/对象规则、`jsonPath`/`path` 别名、对象字段、通配数组和数组下标；HTML/CSS 书源路径保持兼容。
 - 2026-08-02：TXT 导入剥离 UTF-8 BOM，并在章节内容裁剪时保留首行缩进与空行段落；新增 BOM/缩进回归测试。
+- 2026-08-02：EPUB 文本提取改为安全块级转换：过滤 script/style/noscript，保留段落、标题和引用边界，图片转为本地占位文本，并扩展常见 HTML 实体；不执行外部资源，图片映射与缓存仍待后续完成。
 - 当前边界：界面导入使用预览和逐条跳过，原有 `import_sources` 命令仍保留整包严格模式供兼容调用；JSONPath 仅支持安全字段/数组遍历，不执行过滤表达式、XPath、JavaScript 或认证逻辑；更多编码和授权夹具仍需后续评估。本轮不在本地构建或安装。
 - CI 验证：运行 [30742621733](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30742621733) 通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 30 个 Rust tests；JSONPath 导入、搜索解析和 TXT BOM/缩进回归测试均包含在本次验证中。
 
