@@ -1471,7 +1471,6 @@ fn bounded_next_url(url: &str) -> Result<Option<String>, SourceError> {
     Ok(Some(url.to_string()))
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NextPagePolicy {
     #[serde(default)]
@@ -1540,7 +1539,11 @@ pub fn evaluate_next_page_policy(
     elapsed_secs: u64,
     visited_urls: &[String],
 ) -> NextPagePolicyDecision {
-    let bounded = |allowed: bool, reason: &str, next_depth: usize, pages_remaining: usize, bytes_remaining: usize| {
+    let bounded = |allowed: bool,
+                   reason: &str,
+                   next_depth: usize,
+                   pages_remaining: usize,
+                   bytes_remaining: usize| {
         NextPagePolicyDecision {
             allowed,
             reason: reason.to_string(),
@@ -1551,13 +1554,25 @@ pub fn evaluate_next_page_policy(
     };
 
     if !policy.enabled {
-        return bounded(false, "disabled", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+        return bounded(
+            false,
+            "disabled",
+            depth,
+            policy.max_pages.saturating_sub(pages_used),
+            policy.max_bytes.saturating_sub(bytes_used),
+        );
     }
     if policy.max_depth == 0 || policy.max_pages == 0 {
         return bounded(false, "quota_zero", depth, 0, 0);
     }
     if depth >= policy.max_depth {
-        return bounded(false, "depth_limit", depth, 0, policy.max_bytes.saturating_sub(bytes_used));
+        return bounded(
+            false,
+            "depth_limit",
+            depth,
+            0,
+            policy.max_bytes.saturating_sub(bytes_used),
+        );
     }
     if pages_used >= policy.max_pages {
         return bounded(false, "page_limit", depth, 0, policy.max_bytes.saturating_sub(bytes_used));
@@ -1570,33 +1585,65 @@ pub fn evaluate_next_page_policy(
     }
 
     let Some(candidate) = bounded_next_url(candidate_url).ok().flatten() else {
-        return bounded(false, "invalid_next_url", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+        return bounded(
+            false,
+            "invalid_next_url",
+            depth,
+            policy.max_pages.saturating_sub(pages_used),
+            policy.max_bytes.saturating_sub(bytes_used),
+        );
     };
     if visited_urls.iter().any(|visited| visited == &candidate) {
-        return bounded(false, "cycle", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+        return bounded(
+            false,
+            "cycle",
+            depth,
+            policy.max_pages.saturating_sub(pages_used),
+            policy.max_bytes.saturating_sub(bytes_used),
+        );
     }
 
     let base = match Url::parse(base_url) {
         Ok(base) => base,
         Err(_) => {
-            return bounded(false, "invalid_base_url", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+            return bounded(
+                false,
+                "invalid_base_url",
+                depth,
+                policy.max_pages.saturating_sub(pages_used),
+                policy.max_bytes.saturating_sub(bytes_used),
+            );
         }
     };
     let candidate = match Url::parse(&candidate) {
         Ok(candidate) => candidate,
         Err(_) => {
-            return bounded(false, "invalid_next_url", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+            return bounded(
+                false,
+                "invalid_next_url",
+                depth,
+                policy.max_pages.saturating_sub(pages_used),
+                policy.max_bytes.saturating_sub(bytes_used),
+            );
         }
     };
     if policy.same_host_only && !same_url_origin(&base, &candidate) {
-        return bounded(false, "same_origin", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+        return bounded(
+            false,
+            "same_origin",
+            depth,
+            policy.max_pages.saturating_sub(pages_used),
+            policy.max_bytes.saturating_sub(bytes_used),
+        );
     }
 
     bounded(
         true,
         "allowed",
         depth.saturating_add(1),
-        policy.max_pages.saturating_sub(pages_used.saturating_add(1)),
+        policy
+            .max_pages
+            .saturating_sub(pages_used.saturating_add(1)),
         policy.max_bytes.saturating_sub(bytes_used),
     )
 }
