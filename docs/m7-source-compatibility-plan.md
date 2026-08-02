@@ -99,11 +99,13 @@
 
 当前已完成安全回退链子集：导入器保留 `||` 候选，CSS 链和 JSONPath 链分别最多 8 项，按顺序尝试直到得到结果；混合 CSS/JSONPath、XPath、JavaScript 和不受支持的表达式会明确拒绝，不静默丢弃。字符串规则与对象规则的兼容形态也保持不变。
 
+请求 URL 也支持每个阶段最多 8 个 `||` 候选；失败候选会进入诊断步骤，首个成功 URL 作为后续相对章节链接的基准。URL 链仅做模板渲染和请求重试，不执行脚本。
+
 书籍/章节缓存响应现在返回 cache_hit；过期刷新失败时保留 stale 与错误原因，阅读器明确提示缓存来源并可手动刷新。基础缓存可见化已完成，导出的诊断快照与重试时间线仍属于后续切片。
 
 有限 JSONPath 已扩展为安全子集：支持对象字段、数组下标、数组/对象通配、连续括号字段别名（`['title']`/`["title"]`）和单字段等值过滤（`[?(@.kind == 'novel')]`）。路径最多 512 字节，字段最多 128 字节，过滤值最多 256 字节，单段最多产生 256 个节点；不等式、逻辑组合、函数、脚本和转义表达式继续拒绝。
 
-远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）；[GitHub Actions run 30763032154](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30763032154)（有限 JSONPath，44 tests）。
+远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）；[GitHub Actions run 30763032154](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30763032154)（有限 JSONPath，44 tests）；[GitHub Actions run 30764314398](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30764314398)（URL 回退链，47 tests）。
 
 后续切片：
 
