@@ -47,6 +47,9 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
         <p v-if="remoteBook.cache_hit || remoteChapter.cache_hit" class="reader-cache-note">
           本次内容来自本地缓存；点击“刷新内容”可重新请求网络。
         </p>
+        <p v-if="remoteChapter.next_url" class="reader-next-note">
+          已检测到正文后续页，链接已安全保留；当前不会自动追链。
+        </p>
         <p v-if="!remoteBook.stale && !remoteChapter.stale && remoteBook.chapter_update" class="reader-update-note">
           {{ remoteBook.chapter_update.changed ? "目录已更新" : "目录未变化" }}：
           新增 {{ remoteBook.chapter_update.added }} 章，移除 {{ remoteBook.chapter_update.removed }} 章，
