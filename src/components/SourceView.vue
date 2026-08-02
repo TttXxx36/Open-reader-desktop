@@ -3,7 +3,7 @@ import { inject } from "vue";
 
 const context = inject<any>("open-reader-context");
 if (!context) throw new Error("Open Reader context is not available.");
-const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
+const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
 </script>
 
 <template>
@@ -73,11 +73,16 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
             class="source-preview-entry"
             :class="{ invalid: !entry.valid }"
           >
-            <strong>{{ entry.index + 1 }}. {{ entry.name || "未命名书源" }}</strong>
-            <span v-if="entry.valid">
-              {{ entry.enabled ? "可导入 · 启用" : "可导入 · 停用" }}
-            </span>
-            <span v-else>跳过 · {{ entry.error || "不兼容" }}</span>
+            <div class="source-preview-main">
+              <strong>{{ entry.index + 1 }}. {{ entry.name || "未命名书源" }}</strong>
+              <small v-if="entry.valid && entry.changed_fields.length">
+                变更：{{ entry.changed_fields.join("、") }}
+              </small>
+            </div>
+            <div class="source-preview-status">
+              <span v-if="entry.valid">{{ entry.action }} · {{ entry.enabled ? "启用" : "停用" }}</span>
+              <span v-else>跳过 · {{ entry.error || "不兼容" }}</span>
+            </div>
           </li>
         </ul>
         <div class="source-preview-actions">
@@ -109,8 +114,19 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
             </div>
             <div class="source-library-actions">
               <input v-model="sourceGroupFilter" aria-label="按分组筛选书源" placeholder="筛选分组" />
+              <button class="source-link-button" type="button" @click="toggleSelectAllSources">
+                {{ allFilteredSourcesSelected ? "取消全选" : "全选当前" }}
+              </button>
               <button class="source-link-button" type="button" @click="newSourceDraft">新建</button>
             </div>
+          </div>
+          <div v-if="selectedSourceIds.length" class="source-batch-bar">
+            <strong>已选 {{ selectedSourceIds.length }} 个</strong>
+            <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('enable')">启用</button>
+            <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('disable')">停用</button>
+            <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('explore-on')">开启发现</button>
+            <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('explore-off')">关闭发现</button>
+            <button class="source-link-button danger" type="button" :disabled="sourceBatchBusy" @click="applySourceBatch('delete')">批量删除</button>
           </div>
           <p v-if="errorMessage" class="source-inline-error">{{ errorMessage }}</p>
           <p v-if="sourceListBusy" class="source-list-empty">正在读取…</p>
@@ -120,10 +136,18 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
               v-for="source in filteredSources"
               :key="source.id"
               class="source-row"
-              :class="{ selected: source.id === sourceId }"
+              :class="{ selected: source.id === sourceId, checked: selectedSourceIds.includes(source.id) }"
               @click="selectSource(source)"
             >
               <div class="source-row-heading">
+                <label class="source-select-control" @click.stop>
+                  <input
+                    type="checkbox"
+                    :checked="selectedSourceIds.includes(source.id)"
+                    :aria-label="`选择书源 ${source.name}`"
+                    @change="toggleSourceSelection(source.id)"
+                  />
+                </label>
                 <strong>{{ source.name }}</strong>
                 <span :class="{ enabled: source.enabled }">{{ source.enabled ? "启用" : "停用" }}</span>
               </div>
@@ -140,6 +164,8 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
                 <button class="source-link-button" type="button" @click.stop="toggleSourceExplore(source)">
                   {{ source.enabled_explore ? "停用发现" : "启用发现" }}
                 </button>
+                <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click.stop="reorderSource(source, 'up')">上移</button>
+                <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click.stop="reorderSource(source, 'down')">下移</button>
                 <button class="source-link-button danger" type="button" @click.stop="deleteSource(source)">删除</button>
               </div>
             </article>
