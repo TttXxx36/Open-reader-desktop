@@ -13,8 +13,92 @@ use source::{
     MultiSourceSearchResult, SourceBookDetail, SourceDefinition, SourceEngine, SourcePreview,
     SourceSearchFailure, SourceValidation,
 };
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
 use tauri::Manager;
+
+#[derive(Default)]
+struct SourceCancellationState {
+    active: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl SourceCancellationState {
+    fn register(&self, operation_id: &str) -> Result<Arc<AtomicBool>, String> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "取消状态不可用".to_string())?;
+        if active.contains_key(operation_id) {
+            return Err("已有同 ID 的书源任务正在运行".to_string());
+        }
+        let token = Arc::new(AtomicBool::new(false));
+        active.insert(operation_id.to_string(), token.clone());
+        Ok(token)
+    }
+
+    fn cancel(&self, operation_id: &str) -> Result<bool, String> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "取消状态不可用".to_string())?;
+        if let Some(token) = active.get(operation_id) {
+            token.store(true, Ordering::Relaxed);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn remove(&self, operation_id: &str) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(operation_id);
+        }
+    }
+}
+
+static NEXT_SOURCE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn normalize_source_operation_id(value: Option<String>) -> Result<String, String> {
+    let value = value
+        .unwrap_or_else(|| {
+            format!(
+                "pipeline-{}",
+                NEXT_SOURCE_OPERATION_ID.fetch_add(1, Ordering::Relaxed)
+            )
+        })
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return Err("书源任务 ID 不能为空".to_string());
+    }
+    if value.len() > 128 {
+        return Err("书源任务 ID 不能超过 128 字节".to_string());
+    }
+    Ok(value)
+}
+
+async fn wait_for_source_cancellation(token: Arc<AtomicBool>) {
+    loop {
+        if token.load(Ordering::Relaxed) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tauri::command]
+fn cancel_source_operation(
+    cancellation: tauri::State<'_, SourceCancellationState>,
+    operation_id: String,
+) -> Result<bool, String> {
+    let operation_id = normalize_source_operation_id(Some(operation_id))?;
+    cancellation.cancel(&operation_id)
+}
 
 #[tauri::command]
 fn list_books(database: tauri::State<'_, Database>) -> Result<Vec<BookSummary>, String> {
@@ -1132,14 +1216,24 @@ async fn search_sources(
 async fn run_source_pipeline(
     config_json: String,
     keyword: String,
+    operation_id: Option<String>,
+    cancellation: tauri::State<'_, SourceCancellationState>,
 ) -> Result<source::SourcePipelineResult, String> {
     let source: source::BookSource =
         serde_json::from_str(&config_json).map_err(|error| format!("JSON 解析失败：{error}"))?;
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
-    engine
-        .run_pipeline(&source, &keyword)
-        .await
-        .map_err(|error| error.to_string())
+    let operation_id = normalize_source_operation_id(operation_id)?;
+    let token = cancellation.register(&operation_id)?;
+    let result = tokio::select! {
+        pipeline = engine.run_pipeline(&source, &keyword) => {
+            pipeline.map_err(|error| error.to_string())
+        }
+        _ = wait_for_source_cancellation(token.clone()) => {
+            Err("书源调试已取消".to_string())
+        }
+    };
+    cancellation.remove(&operation_id);
+    result
 }
 
 pub fn run() {
@@ -1159,6 +1253,7 @@ pub fn run() {
             }
             log_cache_prune(&database, "startup");
             app.manage(database);
+            app.manage(SourceCancellationState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1193,6 +1288,7 @@ pub fn run() {
             fetch_source_book,
             fetch_source_chapter,
             run_source_pipeline,
+            cancel_source_operation,
             get_source_cache_status
         ])
         .run(tauri::generate_context!())
