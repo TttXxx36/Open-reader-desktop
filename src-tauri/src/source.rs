@@ -15,6 +15,7 @@ const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 100;
 const MAX_SOURCE_SEARCH_PAGES: usize = 20;
 const MAX_RULE_CHAIN_LENGTH: usize = 8;
+const MAX_URL_CHAIN_LENGTH: usize = 8;
 const MAX_JSON_PATH_BYTES: usize = 512;
 const MAX_JSON_MATCHES: usize = 256;
 const MAX_JSON_FILTER_FIELD_BYTES: usize = 128;
@@ -728,11 +729,10 @@ impl SourceEngine {
     ) -> Result<SourcePipelineResult, SourceError> {
         let mut debug_steps = Vec::new();
         let search_context = SourceRequestContext::search(keyword, 1);
-        let search_url = render_url_context(&source.search_url, &search_context);
-        let search_body = self
-            .fetch_stage(
+        let (search_body, search_url) = self
+            .fetch_stage_chain(
                 "search",
-                &search_url,
+                &source.search_url,
                 &source.headers,
                 &search_context,
                 &mut debug_steps,
@@ -816,6 +816,38 @@ impl SourceEngine {
         }
     }
 
+    async fn fetch_stage_chain(
+        &self,
+        stage: &str,
+        template: &str,
+        headers: &HashMap<String, String>,
+        context: &SourceRequestContext,
+        debug_steps: &mut Vec<SourceDebugStep>,
+    ) -> Result<(String, String), SourceError> {
+        let urls = render_url_chain(template, context)?;
+        let total = urls.len();
+        let mut last_error = None;
+
+        for (index, url) in urls.iter().enumerate() {
+            let stage_name = if total == 1 {
+                stage.to_string()
+            } else {
+                format!("{stage}[{}]", index + 1)
+            };
+            match self
+                .fetch_stage(&stage_name, url, headers, context, debug_steps)
+                .await
+            {
+                Ok(body) => return Ok((body, url.clone())),
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            SourceError::InvalidUrl("URL 回退链没有可用候选".to_string())
+        }))
+    }
+
     async fn fetch_text(
         &self,
         url: &str,
@@ -856,9 +888,8 @@ impl SourceEngine {
             .as_deref()
             .ok_or_else(|| SourceError::InvalidConfig("bookInfoUrl is required".to_string()))?;
         let context = SourceRequestContext::book(book_url);
-        let url = render_url_context(template, &context);
-        let body = self
-            .fetch_stage("book_info", &url, &source.headers, &context, debug_steps)
+        let (body, _url) = self
+            .fetch_stage_chain("book_info", template, &source.headers, &context, debug_steps)
             .await?;
         let rules = source
             .book_info
@@ -890,9 +921,8 @@ impl SourceEngine {
             .as_deref()
             .ok_or_else(|| SourceError::InvalidConfig("tocUrl is required".to_string()))?;
         let context = SourceRequestContext::book(book_url);
-        let url = render_url_context(template, &context);
-        let body = self
-            .fetch_stage("toc", &url, &source.headers, &context, debug_steps)
+        let (body, url) = self
+            .fetch_stage_chain("toc", template, &source.headers, &context, debug_steps)
             .await?;
         let rules = source
             .toc
@@ -915,9 +945,8 @@ impl SourceEngine {
             .as_deref()
             .ok_or_else(|| SourceError::InvalidConfig("contentUrl is required".to_string()))?;
         let context = SourceRequestContext::chapter(&chapter.url);
-        let url = render_url_context(template, &context);
-        let body = self
-            .fetch_stage("content", &url, &source.headers, &context, debug_steps)
+        let (body, _url) = self
+            .fetch_stage_chain("content", template, &source.headers, &context, debug_steps)
             .await?;
         let rules = source
             .content
@@ -1531,9 +1560,12 @@ fn source_endpoint_hosts(source: &BookSource) -> Vec<String> {
     .into_iter()
     .flatten()
     {
-        if let Ok(parsed) = Url::parse(&expand_url_template(endpoint)) {
-            if let Some(host) = parsed.host_str() {
-                hosts.insert(host.to_string());
+        let candidates = split_url_chain(endpoint).unwrap_or_else(|_| vec![endpoint]);
+        for candidate in candidates {
+            if let Ok(parsed) = Url::parse(&expand_url_template(candidate)) {
+                if let Some(host) = parsed.host_str() {
+                    hosts.insert(host.to_string());
+                }
             }
         }
     }
@@ -1698,13 +1730,42 @@ fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>)
     }
 }
 
-fn validate_url(url: &str) -> Result<(), SourceError> {
-    let parsed = Url::parse(&expand_url_template(url))
-        .map_err(|error| SourceError::InvalidUrl(error.to_string()))?;
-    match parsed.scheme() {
-        "http" | "https" => Ok(()),
-        scheme => Err(SourceError::UnsupportedScheme(scheme.to_string())),
+fn split_url_chain(value: &str) -> Result<Vec<&str>, SourceError> {
+    let parts = value.split("||").map(str::trim).collect::<Vec<_>>();
+    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
+        return Err(SourceError::InvalidUrl(
+            "URL 回退链包含空候选".to_string(),
+        ));
     }
+    if parts.len() > MAX_URL_CHAIN_LENGTH {
+        return Err(SourceError::InvalidUrl(format!(
+            "URL 回退链最多支持 {} 个候选",
+            MAX_URL_CHAIN_LENGTH
+        )));
+    }
+    Ok(parts)
+}
+
+fn render_url_chain(
+    template: &str,
+    context: &SourceRequestContext,
+) -> Result<Vec<String>, SourceError> {
+    Ok(split_url_chain(template)?
+        .into_iter()
+        .map(|candidate| render_url_context(candidate, context))
+        .collect())
+}
+
+fn validate_url(url: &str) -> Result<(), SourceError> {
+    for candidate in split_url_chain(url)? {
+        let parsed = Url::parse(&expand_url_template(candidate))
+            .map_err(|error| SourceError::InvalidUrl(error.to_string()))?;
+        match parsed.scheme() {
+            "http" | "https" => {}
+            scheme => return Err(SourceError::UnsupportedScheme(scheme.to_string())),
+        }
+    }
+    Ok(())
 }
 
 fn expand_url_template(url: &str) -> String {
