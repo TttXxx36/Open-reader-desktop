@@ -323,51 +323,322 @@ fn extract_element_text(xml: &str, name: &str) -> Option<String> {
 }
 
 fn strip_html(html: &str) -> String {
-    let mut text = String::with_capacity(html.len());
-    let mut in_tag = false;
-    let mut tag = String::new();
+    let chars: Vec<char> = html.chars().collect();
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut quote_depth = 0usize;
+    let mut ignored_tag: Option<String> = None;
+    let mut index = 0usize;
 
-    for character in html.chars() {
-        if in_tag {
-            if character == '>' {
-                let normalized = tag.trim().to_ascii_lowercase();
-                if normalized.starts_with("br")
-                    || normalized.starts_with("/p")
-                    || normalized.starts_with("/div")
-                    || normalized.starts_with("/li")
-                    || normalized.starts_with("/h")
-                    || normalized.starts_with("/blockquote")
-                {
-                    text.push('\n');
-                }
-                tag.clear();
-                in_tag = false;
-            } else {
-                tag.push(character);
+    while index < chars.len() {
+        if chars[index] != '<' {
+            if ignored_tag.is_none() {
+                current.push(chars[index]);
             }
-        } else if character == '<' {
-            in_tag = true;
+            index += 1;
+            continue;
+        }
+
+        if ignored_tag.is_none() && is_html_comment_start(&chars, index) {
+            index = skip_html_comment(&chars, index);
+            continue;
+        }
+
+        let Some(tag_end) = find_html_tag_end(&chars, index) else {
+            if ignored_tag.is_none() {
+                current.push(chars[index]);
+            }
+            index += 1;
+            continue;
+        };
+
+        let raw_tag: String = chars[index + 1..tag_end].iter().collect();
+        let (closing, name, self_closing) = parse_html_tag(&raw_tag);
+
+        if let Some(ignored) = ignored_tag.as_deref() {
+            if closing && name == ignored {
+                ignored_tag = None;
+            }
+            index = tag_end + 1;
+            continue;
+        }
+
+        if name.is_empty() {
+            index = tag_end + 1;
+            continue;
+        }
+
+        if closing {
+            if name == "blockquote" {
+                push_html_line(&mut lines, &mut current, quote_depth);
+                quote_depth = quote_depth.saturating_sub(1);
+            } else if is_block_html_tag(&name) {
+                push_html_line(&mut lines, &mut current, quote_depth);
+            }
+        } else if name == "script" || name == "style" || name == "noscript" {
+            if !self_closing {
+                ignored_tag = Some(name);
+            }
+        } else if name == "blockquote" {
+            push_html_line(&mut lines, &mut current, quote_depth);
+            quote_depth = quote_depth.saturating_add(1);
+        } else if name == "img" {
+            push_html_line(&mut lines, &mut current, quote_depth);
+            let alt = extract_html_attribute(&raw_tag, "alt")
+                .map(|value| decode_entities(&value).trim().to_string())
+                .filter(|value| !value.is_empty());
+            let label = alt
+                .map(|value| format!("图片：{value}"))
+                .unwrap_or_else(|| "图片".to_string());
+            let line = format!("[{label}]");
+            lines.push(if quote_depth > 0 {
+                format!("> {line}")
+            } else {
+                line
+            });
+        } else if name == "br" {
+            push_html_line(&mut lines, &mut current, quote_depth);
+        } else if is_block_html_tag(&name) {
+            push_html_line(&mut lines, &mut current, quote_depth);
+        }
+
+        index = tag_end + 1;
+    }
+
+    push_html_line(&mut lines, &mut current, quote_depth);
+    lines.join("\n\n")
+}
+
+fn is_html_comment_start(chars: &[char], index: usize) -> bool {
+    matches!(
+        (
+            chars.get(index),
+            chars.get(index + 1),
+            chars.get(index + 2),
+            chars.get(index + 3)
+        ),
+        (Some('<'), Some('!'), Some('-'), Some('-'))
+    )
+}
+
+fn skip_html_comment(chars: &[char], index: usize) -> usize {
+    let mut cursor = index + 4;
+    while cursor + 2 < chars.len() {
+        if chars[cursor] == '-' && chars[cursor + 1] == '-' && chars[cursor + 2] == '>' {
+            return cursor + 3;
+        }
+        cursor += 1;
+    }
+    chars.len()
+}
+
+fn find_html_tag_end(chars: &[char], start: usize) -> Option<usize> {
+    let mut quote = None;
+    for (index, character) in chars.iter().enumerate().skip(start + 1) {
+        match quote {
+            Some(expected) if *character == expected => quote = None,
+            Some(_) => {}
+            None if *character == '"' || *character == '\'' => quote = Some(*character),
+            None if *character == '>' => return Some(index),
+            None => {}
+        }
+    }
+    None
+}
+
+fn parse_html_tag(raw_tag: &str) -> (bool, String, bool) {
+    let trimmed = raw_tag.trim();
+    let closing = trimmed.starts_with('/');
+    let mut body = if closing {
+        trimmed[1..].trim_start()
+    } else {
+        trimmed
+    };
+    let self_closing = body.ends_with('/');
+    if self_closing {
+        body = body[..body.len() - 1].trim_end();
+    }
+    let name = body
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+    (closing, name, self_closing)
+}
+
+fn is_block_html_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "dd"
+            | "div"
+            | "dl"
+            | "dt"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "li"
+            | "main"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "tbody"
+            | "td"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "tr"
+            | "ul"
+    )
+}
+
+fn push_html_line(lines: &mut Vec<String>, current: &mut String, quote_depth: usize) {
+    let normalized = decode_entities(current)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !normalized.is_empty() {
+        lines.push(if quote_depth > 0 {
+            format!("> {normalized}")
         } else {
-            text.push(character);
+            normalized
+        });
+    }
+    current.clear();
+}
+
+fn extract_html_attribute(tag: &str, name: &str) -> Option<String> {
+    let bytes = tag.as_bytes();
+    let mut cursor = 0usize;
+
+    while cursor < bytes.len() {
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_whitespace() || bytes[cursor] == b'/')
+        {
+            cursor += 1;
+        }
+        let key_start = cursor;
+        while cursor < bytes.len()
+            && !bytes[cursor].is_ascii_whitespace()
+            && bytes[cursor] != b'='
+            && bytes[cursor] != b'/'
+        {
+            cursor += 1;
+        }
+        if key_start == cursor {
+            cursor += 1;
+            continue;
+        }
+        let key = &tag[key_start..cursor];
+
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'=' {
+            while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            continue;
+        }
+
+        cursor += 1;
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        let value = if cursor < bytes.len() && (bytes[cursor] == b'"' || bytes[cursor] == b'\'') {
+            let quote = bytes[cursor];
+            cursor += 1;
+            let value_start = cursor;
+            while cursor < bytes.len() && bytes[cursor] != quote {
+                cursor += 1;
+            }
+            let value = tag[value_start..cursor].to_string();
+            if cursor < bytes.len() {
+                cursor += 1;
+            }
+            value
+        } else {
+            let value_start = cursor;
+            while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            tag[value_start..cursor].to_string()
+        };
+
+        if key.eq_ignore_ascii_case(name) {
+            return Some(value);
         }
     }
 
-    let decoded = decode_entities(&text);
-    decoded
-        .lines()
-        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    None
 }
 
 fn decode_entities(text: &str) -> String {
-    text.replace("&nbsp;", " ")
-        .replace("&amp;", "&")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
+    let mut decoded = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+
+    while cursor < text.len() {
+        let Some(relative_ampersand) = text[cursor..].find('&') else {
+            decoded.push_str(&text[cursor..]);
+            break;
+        };
+        let ampersand = cursor + relative_ampersand;
+        decoded.push_str(&text[cursor..ampersand]);
+
+        let Some(relative_end) = text[ampersand + 1..].find(';') else {
+            decoded.push_str(&text[ampersand..]);
+            break;
+        };
+        let end = ampersand + 1 + relative_end;
+        let entity = &text[ampersand + 1..end];
+        if let Some(value) = decode_entity(entity) {
+            decoded.push(value);
+            cursor = end + 1;
+        } else {
+            decoded.push('&');
+            cursor = ampersand + 1;
+        }
+    }
+
+    decoded
+}
+
+fn decode_entity(entity: &str) -> Option<char> {
+    match entity.to_ascii_lowercase().as_str() {
+        "nbsp" => Some(' '),
+        "amp" => Some('&'),
+        "quot" => Some('"'),
+        "apos" => Some('\''),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "mdash" => Some('—'),
+        "ndash" => Some('–'),
+        "hellip" => Some('…'),
+        "ldquo" => Some('“'),
+        "rdquo" => Some('”'),
+        "lsquo" => Some('‘'),
+        "rsquo" => Some('’'),
+        "middot" => Some('·'),
+        value if value.starts_with("#x") => u32::from_str_radix(&value[2..], 16)
+            .ok()
+            .and_then(char::from_u32),
+        value if value.starts_with('#') => value[1..].parse::<u32>().ok().and_then(char::from_u32),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -411,6 +682,24 @@ mod tests {
         assert_eq!(
             strip_html("<h1>标题</h1><p>第一段</p><p>第二段</p>"),
             "标题\n\n第一段\n\n第二段"
+        );
+    }
+
+    #[test]
+    fn ignores_script_and_style_content() {
+        assert_eq!(
+            strip_html("<script>alert(1)</script><style>.danger{color:red}</style><p>正文</p>"),
+            "正文"
+        );
+    }
+
+    #[test]
+    fn preserves_blockquotes_and_image_placeholders() {
+        assert_eq!(
+            strip_html(
+                "<blockquote><p>引用&nbsp;内容</p></blockquote><p>正文 <strong>重点</strong></p><img alt=\"封面 &amp; 目录\" src=\"https://example.test/cover.jpg\">"
+            ),
+            "> 引用 内容\n\n正文 重点\n\n[图片：封面 & 目录]"
         );
     }
 }
