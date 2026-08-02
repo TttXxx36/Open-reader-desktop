@@ -62,6 +62,8 @@
 
 ### M7 — 书源兼容性 v2（当前开发阶段）
 
+详细执行清单见 [M7 书源兼容性 v2 实施计划](m7-source-compatibility-plan.md)。
+
 目标是“导入信息不丢、能力边界可见、执行行为可测试”，而不是立即复制全部 Android 行为。
 
 - **M7.0 元数据保真（本轮）**：映射并校验 bookSourceUrl、bookSourceGroup、bookSourceType、bookUrlPattern、exploreUrl、enabledExplore、customOrder、weight、bookSourceComment；文本书源以外类型明确拒绝。
