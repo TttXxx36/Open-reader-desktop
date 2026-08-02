@@ -328,7 +328,9 @@ function parseContentBlocks(value: ChapterContent | null): ContentBlock[] {
         level: typeof record.level === "number" ? record.level : null,
         spans,
         alt: typeof record.alt === "string" ? record.alt : null,
-        src: typeof record.src === "string" ? record.src : null,
+        src: typeof record.src === "string" && /^data:image\/(png|jpeg|gif|webp|bmp);base64,/i.test(record.src)
+          ? record.src
+          : null,
       }];
     });
   } catch {
@@ -1495,7 +1497,12 @@ function nextChapter() {
                 role="img"
                 :aria-label="block.alt || '图片'"
               >
-                {{ block.alt ? '[图片：' + block.alt + ']' : '[图片]' }}
+                <img
+                  v-if="block.src"
+                  :src="block.src"
+                  :alt="block.alt || 'EPUB 图片'"
+                />
+                <span v-else>{{ block.alt ? '[图片：' + block.alt + ']' : '[图片]' }}</span>
               </div>
               <component
                 v-else
@@ -2519,6 +2526,14 @@ function nextChapter() {
   color: #9eacc0;
   background: rgba(148, 163, 184, 0.08);
   text-align: center;
+}
+
+.reader-rich-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  margin: 0 auto;
+  object-fit: contain;
 }
 
 .theme-paper .reader-rich-heading {
