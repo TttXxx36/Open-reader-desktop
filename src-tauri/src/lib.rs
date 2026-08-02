@@ -216,15 +216,7 @@ fn set_source_explore_enabled(
     source_id: String,
     enabled: bool,
 ) -> Result<SourceSummary, String> {
-    update_source_metadata_impl(
-        &database,
-        &source_id,
-        None,
-        None,
-        None,
-        Some(enabled),
-        None,
-    )
+    update_source_metadata_impl(&database, &source_id, None, None, None, Some(enabled), None)
 }
 
 #[tauri::command]
@@ -307,7 +299,12 @@ fn persist_imported_sources(
 
         let metadata = SourceMetadata::from(&source);
         let saved = database
-            .save_source(item.id.as_deref(), &source.name, &item.config_json, &metadata)
+            .save_source(
+                item.id.as_deref(),
+                &source.name,
+                &item.config_json,
+                &metadata,
+            )
             .map_err(|error| error.to_string())?;
         let saved = database
             .set_source_enabled(&saved.id, item.enabled)
