@@ -261,12 +261,23 @@ fn merge_wrapper_metadata(wrapper: &Map<String, Value>, config: &mut Value) {
     };
 
     for (target, keys) in [
-        ("source_url", &["sourceUrl", "bookSourceUrl", "source_url"][..]),
+        (
+            "source_url",
+            &["sourceUrl", "bookSourceUrl", "source_url"][..],
+        ),
         (
             "group",
-            &["group", "group_name", "bookSourceGroup", "book_source_group"][..],
+            &[
+                "group",
+                "group_name",
+                "bookSourceGroup",
+                "book_source_group",
+            ][..],
         ),
-        ("source_type", &["source_type", "bookSourceType", "sourceType"][..]),
+        (
+            "source_type",
+            &["source_type", "bookSourceType", "sourceType"][..],
+        ),
         (
             "book_url_pattern",
             &["bookUrlPattern", "book_url_pattern"][..],
