@@ -283,7 +283,7 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
     if let Some(rules) = first_value(object, &["search", "ruleSearch"]) {
         output.insert(
             "search".to_string(),
-            normalize_page_rules(rules, "ruleSearch", &["bookList", "item"])?,
+            normalize_page_rules(rules, "ruleSearch", &["bookList", "book_list", "item"])?,
         );
     }
     if let Some(rules) = first_value(object, &["bookInfo", "ruleBookInfo"]) {
@@ -295,7 +295,7 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
     if let Some(rules) = first_value(object, &["toc", "ruleToc"]) {
         output.insert(
             "toc".to_string(),
-            normalize_page_rules(rules, "ruleToc", &["chapterList", "item"])?,
+            normalize_page_rules(rules, "ruleToc", &["chapterList", "chapter_list", "item"])?,
         );
     }
     if let Some(rules) = first_value(object, &["content", "ruleContent"]) {
@@ -351,11 +351,17 @@ fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Resul
     }
 
     for (target, keys) in [
-        ("title", &["title", "name", "chapterName"][..]),
-        ("author", &["author"][..]),
-        ("url", &["url", "bookUrl", "chapterUrl"][..]),
-        ("intro", &["intro", "desc", "description"][..]),
-        ("content", &["content"][..]),
+        (
+            "title",
+            &["title", "name", "bookName", "bookTitle", "chapterName"][..],
+        ),
+        ("author", &["author", "bookAuthor"][..]),
+        ("url", &["url", "bookUrl", "book_url", "chapterUrl", "chapter_url", "coverUrl", "cover"][..]),
+        (
+            "intro",
+            &["intro", "desc", "description", "bookIntro"][..],
+        ),
+        ("content", &["content", "text", "bookContent"][..]),
     ] {
         if let Some(rule) = first_value(object, keys) {
             output.insert(
@@ -491,17 +497,53 @@ fn normalize_attr(value: &str) -> Option<String> {
 }
 
 fn normalize_headers(value: &Value) -> Result<Value, String> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| "headers/header 目前只支持 JSON 对象".to_string())?;
-    let mut headers = Map::new();
-    for (key, value) in object {
-        let text = value
-            .as_str()
-            .ok_or_else(|| format!("headers.{key} 必须是字符串"))?;
-        headers.insert(key.clone(), Value::String(text.to_string()));
+    match value {
+        Value::Object(object) => {
+            let mut headers = Map::new();
+            for (key, value) in object {
+                let text = value
+                    .as_str()
+                    .ok_or_else(|| format!("headers.{key} 必须是字符串"))?;
+                insert_header(&mut headers, key, text)?;
+            }
+            Ok(Value::Object(headers))
+        }
+        Value::String(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                return Ok(Value::Object(Map::new()));
+            }
+            if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                if parsed.is_object() {
+                    return normalize_headers(&parsed);
+                }
+            }
+
+            let mut headers = Map::new();
+            for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+                let (key, value) = line
+                    .split_once(':')
+                    .ok_or_else(|| "header 字符串必须使用 Name: Value 格式".to_string())?;
+                insert_header(&mut headers, key.trim(), value.trim())?;
+            }
+            if headers.is_empty() {
+                return Err("header 字符串没有可用字段".to_string());
+            }
+            Ok(Value::Object(headers))
+        }
+        _ => Err("headers/header 目前只支持 JSON 对象或 Name: Value 字符串".to_string()),
     }
-    Ok(Value::Object(headers))
+}
+
+fn insert_header(headers: &mut Map<String, Value>, key: &str, value: &str) -> Result<(), String> {
+    if key.is_empty() || value.is_empty() {
+        return Err("header 名称和值不能为空".to_string());
+    }
+    if key.contains(['\\r', '\\n']) || value.contains(['\\r', '\\n']) {
+        return Err("header 不能包含换行符".to_string());
+    }
+    headers.insert(key.to_string(), Value::String(value.to_string()));
+    Ok(())
 }
 
 fn required_text(object: &Map<String, Value>, keys: &[&str], name: &str) -> Result<String, String> {
@@ -533,6 +575,8 @@ fn normalize_url(value: &str) -> String {
         .trim()
         .replace("{{page}}", "1")
         .replace("{{pageNum}}", "1")
+        .replace("{{page+1}}", "2")
+        .replace("{{page-1}}", "0")
 }
 
 #[cfg(test)]
@@ -603,6 +647,51 @@ mod tests {
             source.search.as_ref().and_then(|rules| rules.url.as_ref()),
             Some(SourceRule::Detailed { attr: Some(attr), .. }) if attr == "href"
         ));
+    }
+
+    #[test]
+    fn normalizes_legado_aliases_and_header_string() {
+        let payload = json!({
+            "bookSourceName": "Alias Fixture",
+            "searchUrl": "https://example.test/search?q={{key}}&page={{pageNum}}",
+            "header": "User-Agent: OpenReaderTest\nAccept: text/html",
+            "ruleSearch": {
+                "bookList": "li.book",
+                "bookName": "h2 a@text",
+                "bookAuthor": ".author@text",
+                "bookUrl": "h2 a@href"
+            },
+            "ruleBookInfo": {
+                "bookName": "h1@text",
+                "bookAuthor": ".author@text",
+                "coverUrl": "img.cover@src",
+                "bookIntro": ".intro@text"
+            },
+            "ruleContent": {
+                "text": ".content@text"
+            }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("alias source");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("canonical alias source");
+        assert_eq!(source.name, "Alias Fixture");
+        assert_eq!(
+            source.headers.get("User-Agent").map(String::as_str),
+            Some("OpenReaderTest")
+        );
+        assert!(matches!(
+            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            Some(SourceRule::Detailed { attr: Some(attr), .. }) if attr == "text"
+        ));
+        assert!(matches!(
+            source.book_info.as_ref().and_then(|rules| rules.url.as_ref()),
+            Some(SourceRule::Detailed { attr: Some(attr), .. }) if attr == "src"
+        ));
+        assert!(source
+            .content
+            .as_ref()
+            .and_then(|rules| rules.content.as_ref())
+            .is_some());
     }
 
     #[test]
