@@ -3,7 +3,7 @@ import { inject } from "vue";
 
 const context = inject<any>("open-reader-context");
 if (!context) throw new Error("Open Reader context is not available.");
-const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, toggleSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
+const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
 </script>
 
 <template>
@@ -107,14 +107,17 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
               <span class="eyebrow">SOURCE LIBRARY</span>
               <h2>已保存书源</h2>
             </div>
-            <button class="source-link-button" type="button" @click="newSourceDraft">新建</button>
+            <div class="source-library-actions">
+              <input v-model="sourceGroupFilter" aria-label="按分组筛选书源" placeholder="筛选分组" />
+              <button class="source-link-button" type="button" @click="newSourceDraft">新建</button>
+            </div>
           </div>
           <p v-if="errorMessage" class="source-inline-error">{{ errorMessage }}</p>
           <p v-if="sourceListBusy" class="source-list-empty">正在读取…</p>
-          <p v-else-if="!sources.length" class="source-list-empty">还没有保存书源。</p>
+          <p v-else-if="!filteredSources.length" class="source-list-empty">没有匹配的书源。</p>
           <div v-else class="source-list">
             <article
-              v-for="source in sources"
+              v-for="source in filteredSources"
               :key="source.id"
               class="source-row"
               :class="{ selected: source.id === sourceId }"
@@ -124,9 +127,18 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
                 <strong>{{ source.name }}</strong>
                 <span :class="{ enabled: source.enabled }">{{ source.enabled ? "启用" : "停用" }}</span>
               </div>
+              <div class="source-row-meta">
+                <span>{{ source.group_name || "未分组" }}</span>
+                <span>{{ source.source_type === 0 ? "文本" : "未支持类型" }}</span>
+                <span>权重 {{ source.weight }}</span>
+                <span>{{ source.enabled_explore ? "允许发现" : "仅搜索" }}</span>
+              </div>
               <div class="source-row-actions">
                 <button class="source-link-button" type="button" @click.stop="toggleSource(source)">
                   {{ source.enabled ? "停用" : "启用" }}
+                </button>
+                <button class="source-link-button" type="button" @click.stop="toggleSourceExplore(source)">
+                  {{ source.enabled_explore ? "停用发现" : "启用发现" }}
                 </button>
                 <button class="source-link-button danger" type="button" @click.stop="deleteSource(source)">删除</button>
               </div>
