@@ -1919,7 +1919,8 @@ fn normalize_json_path(path: &str) -> Result<String, SourceError> {
     let trimmed = path.trim();
     let path = trimmed.strip_prefix("json:").unwrap_or(trimmed).trim();
 
-    if path.is_empty() || path.len() > MAX_JSON_PATH_BYTES || !path.starts_with('        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    if path.is_empty() || path.len() > MAX_JSON_PATH_BYTES || path.as_bytes().first() != Some(&36) {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
     }
     if path == "$" {
         return Ok(path.to_string());
