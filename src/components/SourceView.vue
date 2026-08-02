@@ -91,6 +91,10 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
               <div v-if="entry.unsupported_rules.length" class="source-preview-unsupported">
                 <span v-for="rule in entry.unsupported_rules" :key="rule.context + rule.value">
                   不执行 · {{ rule.context }}：{{ rule.value }}（{{ rule.reason }}）
+                  <small>
+                    离线结构：{{ rule.offline_accepted ? "受限语法可解析" : "静态解析拒绝" }} ·
+                    {{ rule.offline_steps }} 步 · {{ rule.offline_estimated_work }} work
+                  </small>
                 </span>
               </div>
             </div>
