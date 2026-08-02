@@ -283,10 +283,7 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
             "book_url_pattern",
             &["bookUrlPattern", "book_url_pattern"][..],
         ),
-        (
-            "explore_url",
-            &["exploreUrl", "explore_url"][..],
-        ),
+        ("explore_url", &["exploreUrl", "explore_url"][..]),
         (
             "comment",
             &["comment", "bookSourceComment", "book_source_comment"][..],
@@ -308,19 +305,13 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
         }
     }
 
-    if let Some(value) = first_value(
-        object,
-        &["source_type", "bookSourceType", "sourceType"][..],
-    ) {
+    if let Some(value) = first_value(object, &["source_type", "bookSourceType", "sourceType"][..]) {
         let source_type = value
             .as_i64()
             .ok_or_else(|| "bookSourceType 必须是数字".to_string())?;
         output.insert("source_type".to_string(), json!(source_type));
     }
-    if let Some(value) = first_value(
-        object,
-        &["enabled_explore", "enabledExplore"][..],
-    ) {
+    if let Some(value) = first_value(object, &["enabled_explore", "enabledExplore"][..]) {
         let enabled_explore = value
             .as_bool()
             .ok_or_else(|| "enabledExplore 必须是布尔值".to_string())?;
@@ -801,15 +792,22 @@ mod tests {
             Some("https://metadata.example.test/")
         );
         let source: BookSource =
-            serde_json::from_str(&imported[0].config_json).expect("canonical metadata source");
-        assert_eq!(source.source_url.as_deref(), Some("https://metadata.example.test/"));
+            serde_json::from_str(&imported[0].config_json)
+                .expect("canonical metadata source");
+        assert_eq!(
+            source.source_url.as_deref(),
+            Some("https://metadata.example.test/")
+        );
         assert_eq!(source.group.as_deref(), Some("公开测试"));
         assert_eq!(source.source_type, 0);
         assert_eq!(
             source.book_url_pattern.as_deref(),
             Some("https://metadata.example.test/book/{{bookId}}")
         );
-        assert_eq!(source.explore_url.as_deref(), Some("https://metadata.example.test/explore"));
+        assert_eq!(
+            source.explore_url.as_deref(),
+            Some("https://metadata.example.test/explore")
+        );
         assert!(source.enabled_explore);
         assert_eq!(source.custom_order, 3);
         assert_eq!(source.weight, 50);
