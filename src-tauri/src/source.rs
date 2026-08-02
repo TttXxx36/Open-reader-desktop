@@ -15,6 +15,10 @@ const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 100;
 const MAX_SOURCE_SEARCH_PAGES: usize = 20;
 const MAX_RULE_CHAIN_LENGTH: usize = 8;
+const MAX_JSON_PATH_BYTES: usize = 512;
+const MAX_JSON_MATCHES: usize = 256;
+const MAX_JSON_FILTER_FIELD_BYTES: usize = 128;
+const MAX_JSON_FILTER_VALUE_BYTES: usize = 256;
 const MAX_REPLACE_RULES: usize = 32;
 const MAX_REPLACE_PATTERN_BYTES: usize = 512;
 const MAX_REPLACE_REPLACEMENT_BYTES: usize = 4 * 1024;
@@ -1717,11 +1721,198 @@ fn is_json_rule_path(value: &str) -> bool {
     value.starts_with('$') || value.starts_with("json:")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum JsonPathSegment {
+    Field(String),
+    ObjectWildcard,
+    ArrayWildcard {
+        key: Option<String>,
+    },
+    ArrayIndex {
+        key: Option<String>,
+        index: usize,
+    },
+    ArrayFilter {
+        key: Option<String>,
+        field: String,
+        expected: String,
+    },
+}
+
+fn split_json_path_segments(path: &str) -> Result<Vec<String>, SourceError> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut bracket_depth = 0usize;
+
+    for character in path.chars() {
+        match character {
+            '[' => {
+                bracket_depth = bracket_depth
+                    .checked_add(1)
+                    .ok_or_else(|| SourceError::InvalidJsonPath(path.to_string()))?;
+                current.push(character);
+            }
+            ']' => {
+                if bracket_depth == 0 {
+                    return Err(SourceError::InvalidJsonPath(path.to_string()));
+                }
+                bracket_depth -= 1;
+                current.push(character);
+            }
+            '.' if bracket_depth == 0 => {
+                if current.is_empty() {
+                    return Err(SourceError::InvalidJsonPath(path.to_string()));
+                }
+                segments.push(std::mem::take(&mut current));
+            }
+            _ => current.push(character),
+        }
+    }
+
+    if bracket_depth != 0 || current.is_empty() {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+    segments.push(current);
+    Ok(segments)
+}
+
+fn validate_json_field(field: &str, path: &str) -> Result<String, SourceError> {
+    let field = field.trim();
+    if field.is_empty()
+        || field.len() > MAX_JSON_FILTER_FIELD_BYTES
+        || field.chars().any(|character| {
+            matches!(
+                character,
+                '[' | ']' | '?' | '(' | ')' | '=' | '!' | '&' | '|' | '\\' | '\'' | '"'
+            )
+        })
+    {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+    Ok(field.to_string())
+}
+
+fn parse_json_filter(inner: &str, path: &str) -> Result<(String, String), SourceError> {
+    let (raw_field, raw_value) = inner
+        .trim()
+        .split_once("==")
+        .ok_or_else(|| SourceError::InvalidJsonPath(path.to_string()))?;
+    if raw_value.contains("==")
+        || raw_value.contains("!=")
+        || raw_value.contains("&&")
+        || raw_value.contains("||")
+        || raw_value.contains('@')
+    {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+
+    let field = raw_field
+        .trim()
+        .strip_prefix("@.")
+        .ok_or_else(|| SourceError::InvalidJsonPath(path.to_string()))?;
+    let field = validate_json_field(field, path)?;
+    let value = raw_value.trim();
+    let quote = value
+        .chars()
+        .next()
+        .filter(|character| *character == '\'' || *character == '"')
+        .ok_or_else(|| SourceError::InvalidJsonPath(path.to_string()))?;
+    if value.len() < 2 || !value.ends_with(quote) {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+    let expected = &value[1..value.len() - 1];
+    if expected.len() > MAX_JSON_FILTER_VALUE_BYTES
+        || expected.contains('\\')
+        || expected.contains('\n')
+        || expected.contains('\r')
+    {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+    Ok((field, expected.to_string()))
+}
+
+fn parse_json_bracket(
+    bracket: &str,
+    key: Option<String>,
+    path: &str,
+) -> Result<JsonPathSegment, SourceError> {
+    if bracket == "[*]" {
+        return Ok(JsonPathSegment::ArrayWildcard { key });
+    }
+
+    let inner = bracket
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .ok_or_else(|| SourceError::InvalidJsonPath(path.to_string()))?
+        .trim();
+
+    if let Ok(index) = inner.parse::<usize>() {
+        return Ok(JsonPathSegment::ArrayIndex { key, index });
+    }
+
+    if let Some(filter) = inner.strip_prefix("?(").and_then(|value| value.strip_suffix(')')) {
+        let (field, expected) = parse_json_filter(filter, path)?;
+        return Ok(JsonPathSegment::ArrayFilter {
+            key,
+            field,
+            expected,
+        });
+    }
+
+    if key.is_none()
+        && inner.len() >= 2
+        && ((inner.starts_with('\'') && inner.ends_with('\''))
+            || (inner.starts_with('"') && inner.ends_with('"')))
+    {
+        let field = validate_json_field(&inner[1..inner.len() - 1], path)?;
+        return Ok(JsonPathSegment::Field(field));
+    }
+
+    Err(SourceError::InvalidJsonPath(path.to_string()))
+}
+
+fn parse_json_path_segment(segment: &str, path: &str) -> Result<JsonPathSegment, SourceError> {
+    if segment == "*" {
+        return Ok(JsonPathSegment::ObjectWildcard);
+    }
+    if segment == "[*]" {
+        return Ok(JsonPathSegment::ArrayWildcard { key: None });
+    }
+
+    if let Some(open) = segment.find('[') {
+        let base = &segment[..open];
+        let bracket = &segment[open..];
+        if !bracket.ends_with(']') || bracket.contains('[') && bracket[1..].contains('[') {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+        let key = if base.is_empty() {
+            None
+        } else {
+            Some(validate_json_field(base, path)?)
+        };
+        return parse_json_bracket(bracket, key, path);
+    }
+
+    if let Ok(index) = segment.parse::<usize>() {
+        return Ok(JsonPathSegment::ArrayIndex { key: None, index });
+    }
+
+    Ok(JsonPathSegment::Field(validate_json_field(segment, path)?))
+}
+
+fn is_json_rule_path(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with('$') || value.starts_with("json:")
+}
+
 fn normalize_json_path(path: &str) -> Result<String, SourceError> {
     let trimmed = path.trim();
     let path = trimmed.strip_prefix("json:").unwrap_or(trimmed).trim();
 
-    if path.is_empty() || !path.starts_with('$') {
+    if path.is_empty()
+        || path.len() > MAX_JSON_PATH_BYTES
+        || !path.starts_with('$')
+    {
         return Err(SourceError::InvalidJsonPath(path.to_string()));
     }
     if path == "$" {
@@ -1736,32 +1927,8 @@ fn normalize_json_path(path: &str) -> Result<String, SourceError> {
         return Ok("$".to_string());
     }
 
-    for segment in relative.split('.') {
-        if segment.is_empty() {
-            return Err(SourceError::InvalidJsonPath(path.to_string()));
-        }
-        if segment == "[*]" {
-            continue;
-        }
-        if segment.ends_with("[*]") {
-            let key = segment.trim_end_matches("[*]");
-            if key.is_empty() || key.contains('[') || key.contains(']') {
-                return Err(SourceError::InvalidJsonPath(path.to_string()));
-            }
-            continue;
-        }
-        if let Some((key, index)) = segment
-            .strip_suffix(']')
-            .and_then(|segment| segment.split_once('['))
-        {
-            if key.is_empty() || index.parse::<usize>().is_err() {
-                return Err(SourceError::InvalidJsonPath(path.to_string()));
-            }
-            continue;
-        }
-        if segment.contains('[') || segment.contains(']') {
-            return Err(SourceError::InvalidJsonPath(path.to_string()));
-        }
+    for segment in split_json_path_segments(relative)? {
+        parse_json_path_segment(&segment, path)?;
     }
 
     Ok(path.to_string())
@@ -1781,39 +1948,69 @@ fn extract_json_nodes<'a>(value: &'a Value, path: &str) -> Result<Vec<&'a Value>
         .strip_prefix("$.")
         .or_else(|| path.strip_prefix('$'))
         .unwrap_or(&path);
+    let segments = split_json_path_segments(relative)?
+        .into_iter()
+        .map(|segment| parse_json_path_segment(&segment, &path))
+        .collect::<Result<Vec<_>, _>>()?;
     let mut current = vec![value];
 
-    for segment in relative.split('.') {
+    for segment in segments {
         let mut next = Vec::new();
         for item in current {
-            if segment == "[*]" {
-                if let Some(array) = item.as_array() {
-                    next.extend(array.iter());
-                }
-            } else if let Some(key) = segment.strip_suffix("[*]") {
-                if let Some(array) = item.get(key).and_then(Value::as_array) {
-                    next.extend(array.iter());
-                }
-            } else if let Some((key, raw_index)) = segment
-                .strip_suffix(']')
-                .and_then(|segment| segment.split_once('['))
-            {
-                if let Ok(index) = raw_index.parse::<usize>() {
-                    if let Some(child) = item
-                        .get(key)
-                        .and_then(Value::as_array)
-                        .and_then(|items| items.get(index))
-                    {
+            match &segment {
+                JsonPathSegment::Field(key) => {
+                    if let Some(child) = item.get(key) {
                         next.push(child);
                     }
                 }
-            } else if let Some(child) = item.get(segment) {
-                next.push(child);
-            } else if let Ok(index) = segment.parse::<usize>() {
-                if let Some(child) = item.get(index) {
-                    next.push(child);
+                JsonPathSegment::ObjectWildcard => match item {
+                    Value::Object(object) => next.extend(object.values()),
+                    Value::Array(array) => next.extend(array.iter()),
+                    Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+                },
+                JsonPathSegment::ArrayWildcard { key } => {
+                    let candidate = key
+                        .as_deref()
+                        .and_then(|key| item.get(key))
+                        .unwrap_or(item);
+                    if let Some(array) = candidate.as_array() {
+                        next.extend(array.iter());
+                    }
+                }
+                JsonPathSegment::ArrayIndex { key, index } => {
+                    let candidate = key
+                        .as_deref()
+                        .and_then(|key| item.get(key))
+                        .unwrap_or(item);
+                    if let Some(child) = candidate.as_array().and_then(|array| array.get(*index)) {
+                        next.push(child);
+                    }
+                }
+                JsonPathSegment::ArrayFilter {
+                    key,
+                    field,
+                    expected,
+                } => {
+                    let candidate = key
+                        .as_deref()
+                        .and_then(|key| item.get(key))
+                        .unwrap_or(item);
+                    if let Some(array) = candidate.as_array() {
+                        next.extend(array.iter().filter(|entry| {
+                            entry
+                                .get(field)
+                                .map(|value| json_value_to_text(value) == *expected)
+                                .unwrap_or(false)
+                        }));
+                    }
                 }
             }
+        }
+        if next.len() > MAX_JSON_MATCHES {
+            return Err(SourceError::InvalidJsonPath(format!(
+                "JSONPath 匹配结果超过 {} 项上限",
+                MAX_JSON_MATCHES
+            )));
         }
         current = next;
     }
@@ -1824,6 +2021,7 @@ fn extract_json_nodes<'a>(value: &'a Value, path: &str) -> Result<Vec<&'a Value>
 
     Ok(current)
 }
+
 fn parse_selector(value: &str) -> Result<Selector, SourceError> {
     Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
 }
