@@ -2270,8 +2270,7 @@ mod tests {
         assert_eq!(result.debug_steps.len(), 4);
         assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
         assert_eq!(
-            result
-                .debug_steps[0]
+            result.debug_steps[0]
                 .variables
                 .get("page")
                 .map(String::as_str),
