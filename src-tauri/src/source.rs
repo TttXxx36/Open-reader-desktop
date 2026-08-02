@@ -1553,9 +1553,9 @@ pub fn evaluate_next_page_policy(
         }
     };
 
-    let max_depth = max_depth.min(default_next_page_depth());
-    let max_pages = max_pages.min(default_next_page_count());
-    let max_bytes = max_bytes.min(default_next_page_bytes());
+    let max_depth = policy.max_depth.min(default_next_page_depth());
+    let max_pages = policy.max_pages.min(default_next_page_count());
+    let max_bytes = policy.max_bytes.min(default_next_page_bytes());
     let max_duration_secs = policy
         .max_duration_secs
         .min(default_next_page_duration());
@@ -1648,9 +1648,7 @@ pub fn evaluate_next_page_policy(
         true,
         "allowed",
         depth.saturating_add(1),
-        policy
-            .max_pages
-            .saturating_sub(pages_used.saturating_add(1)),
+        max_pages.saturating_sub(pages_used.saturating_add(1)),
         max_bytes.saturating_sub(bytes_used),
     )
 }
