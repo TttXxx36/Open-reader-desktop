@@ -1,16 +1,25 @@
-use crate::source::BookSource;
+use crate::source::{validate_source_json, BookSource};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 
 const MAX_RULE_CHAIN_LENGTH: usize = 8;
 const MAX_URL_CHAIN_LENGTH: usize = 8;
+const MAX_UNSUPPORTED_RULES: usize = 8;
+const MAX_UNSUPPORTED_RULE_BYTES: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct ImportedSource {
     pub id: Option<String>,
     pub enabled: bool,
     pub config_json: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnsupportedImportRule {
+    pub context: String,
+    pub value: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,6 +32,7 @@ pub struct ImportPreviewEntry {
     pub action: String,
     pub existing_id: Option<String>,
     pub changed_fields: Vec<String>,
+    pub unsupported_rules: Vec<UnsupportedImportRule>,
     #[serde(skip)]
     pub source_id: Option<String>,
     #[serde(skip)]
@@ -57,11 +67,24 @@ pub fn preview_import_bundle(input: &str) -> Result<ImportPreview, String> {
     let mut preview_entries = Vec::with_capacity(entries.len());
     let mut valid_count = 0;
     for (index, entry) in entries.iter().enumerate() {
+        let unsupported_rules = collect_unsupported_rules(entry);
         let parsed = parse_entry(entry, index);
         let (valid, error, source_id, config_json) = match parsed {
             Ok(source) => {
-                valid_count += 1;
-                (true, None, source.id, Some(source.config_json))
+                let source_id = source.id.clone();
+                let config_json = source.config_json;
+                let validation = validate_source_json(&config_json);
+                if validation.valid {
+                    valid_count += 1;
+                    (true, None, source_id, Some(config_json))
+                } else {
+                    (
+                        false,
+                        Some(validation.errors.join("；")),
+                        source_id,
+                        Some(config_json),
+                    )
+                }
             }
             Err(error) => (false, Some(error), None, None),
         };
@@ -74,6 +97,7 @@ pub fn preview_import_bundle(input: &str) -> Result<ImportPreview, String> {
             action: "新增".to_string(),
             existing_id: None,
             changed_fields: Vec::new(),
+            unsupported_rules,
             source_id,
             config_json,
         });
@@ -212,6 +236,115 @@ fn entry_name(value: &Value) -> Option<String> {
         }
     }
     None
+}
+
+
+fn collect_unsupported_rules(value: &Value) -> Vec<UnsupportedImportRule> {
+    let mut findings = Vec::new();
+    collect_unsupported_rules_at(value, "$", false, &mut findings);
+    findings
+}
+
+fn collect_unsupported_rules_at(
+    value: &Value,
+    path: &str,
+    in_rule_context: bool,
+    findings: &mut Vec<UnsupportedImportRule>,
+) {
+    if findings.len() >= MAX_UNSUPPORTED_RULES {
+        return;
+    }
+
+    match value {
+        Value::String(raw) if in_rule_context && is_xpath_expression(raw) => {
+            findings.push(UnsupportedImportRule {
+                context: path.to_string(),
+                value: truncate_preview_text(raw),
+                reason: "XPath 规则仅用于只读兼容性评估，当前不执行".to_string(),
+            });
+        }
+        Value::Array(entries) => {
+            for (index, entry) in entries.iter().enumerate() {
+                collect_unsupported_rules_at(
+                    entry,
+                    &format!("{path}[{index}]"),
+                    in_rule_context,
+                    findings,
+                );
+                if findings.len() >= MAX_UNSUPPORTED_RULES {
+                    break;
+                }
+            }
+        }
+        Value::Object(object) => {
+            for (key, child) in object {
+                let child_path = format!("{path}.{key}");
+                if key.eq_ignore_ascii_case("config_json")
+                    || key.eq_ignore_ascii_case("configJson")
+                {
+                    if let Some(raw) = child.as_str() {
+                        if let Ok(nested) =
+                            serde_json::from_str::<Value>(raw.trim_start_matches('\u{feff}'))
+                        {
+                            collect_unsupported_rules_at(
+                                &nested,
+                                &child_path,
+                                in_rule_context,
+                                findings,
+                            );
+                        }
+                    }
+                    continue;
+                }
+
+                let child_context = in_rule_context || is_rule_container_key(key);
+                collect_unsupported_rules_at(child, &child_path, child_context, findings);
+                if findings.len() >= MAX_UNSUPPORTED_RULES {
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_rule_container_key(key: &str) -> bool {
+    matches!(
+        key.trim().to_ascii_lowercase().as_str(),
+        "search"
+            | "rulesearch"
+            | "bookinfo"
+            | "rulebookinfo"
+            | "toc"
+            | "ruletoc"
+            | "content"
+            | "rulecontent"
+            | "next"
+            | "nexturl"
+            | "next_url"
+            | "nextpage"
+            | "next_page"
+    )
+}
+
+fn is_xpath_expression(value: &str) -> bool {
+    let lowered = value.trim().to_ascii_lowercase();
+    lowered.starts_with("//")
+        || lowered.starts_with("xpath:")
+        || lowered.starts_with("xpath=")
+        || lowered.contains("@xpath")
+}
+
+fn truncate_preview_text(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.trim().chars() {
+        if output.len() + character.len_utf8() > MAX_UNSUPPORTED_RULE_BYTES {
+            output.push('…');
+            break;
+        }
+        output.push(character);
+    }
+    output
 }
 
 fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
