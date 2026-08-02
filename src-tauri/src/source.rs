@@ -1370,6 +1370,124 @@ fn expand_url_template(url: &str) -> String {
         .replace("{{page-1}}", "0")
 }
 
+fn is_json_rule_path(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with('$') || value.starts_with("json:")
+}
+
+fn normalize_json_path(path: &str) -> Result<String, SourceError> {
+    let trimmed = path.trim();
+    let path = trimmed
+        .strip_prefix("json:")
+        .unwrap_or(trimmed)
+        .trim();
+
+    if path.is_empty() || !path.starts_with('$') {
+        return Err(SourceError::InvalidJsonPath(path.to_string()));
+    }
+    if path == "$" {
+        return Ok(path.to_string());
+    }
+
+    let relative = path
+        .strip_prefix("$.")
+        .or_else(|| path.strip_prefix('$'))
+        .unwrap_or(path);
+    if relative.is_empty() {
+        return Ok("$".to_string());
+    }
+
+    for segment in relative.split('.') {
+        if segment.is_empty() {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+        if segment == "[*]" {
+            continue;
+        }
+        if segment.ends_with("[*]") {
+            let key = segment.trim_end_matches("[*]");
+            if key.is_empty() || key.contains('[') || key.contains(']') {
+                return Err(SourceError::InvalidJsonPath(path.to_string()));
+            }
+            continue;
+        }
+        if let Some((key, index)) = segment
+            .strip_suffix(']')
+            .and_then(|segment| segment.split_once('['))
+        {
+            if key.is_empty() || index.parse::<usize>().is_err() {
+                return Err(SourceError::InvalidJsonPath(path.to_string()));
+            }
+            continue;
+        }
+        if segment.contains('[') || segment.contains(']') {
+            return Err(SourceError::InvalidJsonPath(path.to_string()));
+        }
+    }
+
+    Ok(path.to_string())
+}
+
+fn validate_json_path(path: &str) -> Result<(), SourceError> {
+    normalize_json_path(path).map(|_| ())
+}
+
+fn extract_json_nodes<'a>(
+    value: &'a Value,
+    path: &str,
+) -> Result<Vec<&'a Value>, SourceError> {
+    let path = normalize_json_path(path)?;
+    if path == "$" {
+        return Ok(vec![value]);
+    }
+
+    let relative = path
+        .strip_prefix("$.")
+        .or_else(|| path.strip_prefix('$'))
+        .unwrap_or(&path);
+    let mut current = vec![value];
+
+    for segment in relative.split('.') {
+        let mut next = Vec::new();
+        for item in current {
+            if segment == "[*]" {
+                if let Some(array) = item.as_array() {
+                    next.extend(array.iter());
+                }
+            } else if let Some(key) = segment.strip_suffix("[*]") {
+                if let Some(array) = item.get(key).and_then(Value::as_array) {
+                    next.extend(array.iter());
+                }
+            } else if let Some((key, raw_index)) = segment
+                .strip_suffix(']')
+                .and_then(|segment| segment.split_once('['))
+            {
+                if let Ok(index) = raw_index.parse::<usize>() {
+                    if let Some(child) = item
+                        .get(key)
+                        .and_then(Value::as_array)
+                        .and_then(|items| items.get(index))
+                    {
+                        next.push(child);
+                    }
+                }
+            } else if let Some(child) = item.get(segment) {
+                next.push(child);
+            } else if let Ok(index) = segment.parse::<usize>() {
+                if let Some(child) = item.get(index) {
+                    next.push(child);
+                }
+            }
+        }
+        current = next;
+    }
+
+    if current.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+
+    Ok(current)
+}
 fn parse_selector(value: &str) -> Result<Selector, SourceError> {
     Selector::parse(value).map_err(|error| SourceError::InvalidSelector(format!("{error:?}")))
 }
