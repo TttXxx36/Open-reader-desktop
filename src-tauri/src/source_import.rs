@@ -1,4 +1,5 @@
 use crate::source::{validate_source_json, BookSource};
+use crate::xpath_poc;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
@@ -20,6 +21,10 @@ pub struct UnsupportedImportRule {
     pub context: String,
     pub value: String,
     pub reason: String,
+    pub offline_accepted: bool,
+    pub offline_syntax: String,
+    pub offline_steps: usize,
+    pub offline_estimated_work: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -256,10 +261,15 @@ fn collect_unsupported_rules_at(
 
     match value {
         Value::String(raw) if in_rule_context && is_xpath_expression(raw) => {
+            let offline = xpath_poc::analyze(raw, "<html></html>");
             findings.push(UnsupportedImportRule {
                 context: path.to_string(),
                 value: truncate_preview_text(raw),
                 reason: "XPath 规则仅用于只读兼容性评估，当前不执行".to_string(),
+                offline_accepted: offline.accepted,
+                offline_syntax: offline.syntax,
+                offline_steps: offline.steps,
+                offline_estimated_work: offline.estimated_work,
             });
         }
         Value::Array(entries) => {
