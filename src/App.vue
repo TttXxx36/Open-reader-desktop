@@ -1607,6 +1607,26 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   white-space: nowrap;
 }
 
+.source-preview-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.source-preview-main small {
+  overflow: hidden;
+  color: #8391a6;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-preview-status {
+  flex: 0 0 auto;
+  color: #b9f6dd;
+  text-align: right;
+}
+
 .source-preview-entry span {
   color: #b9f6dd;
   text-align: right;
@@ -1707,7 +1727,24 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   gap: 8px;
 }
 
+.source-select-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.source-select-control input {
+  width: 14px;
+  height: 14px;
+  accent-color: #86dfc2;
+}
+
+.source-row.checked {
+  border-color: rgba(134, 223, 194, 0.52);
+}
+
 .source-row-heading strong {
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1727,6 +1764,24 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.source-batch-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 15px;
+  padding: 9px 11px;
+  border: 1px solid rgba(121, 201, 255, 0.22);
+  border-radius: 9px;
+  color: #aebbd0;
+  background: rgba(20, 44, 63, 0.45);
+  font-size: 11px;
+}
+
+.source-batch-bar strong {
+  color: #dce7f7;
 }
 
 .source-library-actions input {
