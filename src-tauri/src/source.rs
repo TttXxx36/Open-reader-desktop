@@ -1743,8 +1743,9 @@ fn split_json_path_segments(path: &str) -> Result<Vec<String>, SourceError> {
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut bracket_depth = 0usize;
+    let mut characters = path.chars().peekable();
 
-    for character in path.chars() {
+    while let Some(character) = characters.next() {
         match character {
             '[' => {
                 bracket_depth = bracket_depth
@@ -1758,6 +1759,12 @@ fn split_json_path_segments(path: &str) -> Result<Vec<String>, SourceError> {
                 }
                 bracket_depth -= 1;
                 current.push(character);
+                if bracket_depth == 0 && characters.peek() == Some(&'[') {
+                    if current.is_empty() {
+                        return Err(SourceError::InvalidJsonPath(path.to_string()));
+                    }
+                    segments.push(std::mem::take(&mut current));
+                }
             }
             '.' if bracket_depth == 0 => {
                 if current.is_empty() {
