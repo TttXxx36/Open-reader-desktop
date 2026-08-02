@@ -1471,6 +1471,142 @@ fn bounded_next_url(url: &str) -> Result<Option<String>, SourceError> {
     Ok(Some(url.to_string()))
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NextPagePolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_next_page_depth")]
+    pub max_depth: usize,
+    #[serde(default = "default_next_page_count")]
+    pub max_pages: usize,
+    #[serde(default = "default_next_page_bytes")]
+    pub max_bytes: usize,
+    #[serde(default = "default_next_page_duration")]
+    pub max_duration_secs: u64,
+    #[serde(default = "default_next_page_same_host")]
+    pub same_host_only: bool,
+}
+
+fn default_next_page_depth() -> usize {
+    2
+}
+
+fn default_next_page_count() -> usize {
+    3
+}
+
+fn default_next_page_bytes() -> usize {
+    2 * 1024 * 1024
+}
+
+fn default_next_page_duration() -> u64 {
+    15
+}
+
+fn default_next_page_same_host() -> bool {
+    true
+}
+
+impl Default for NextPagePolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_depth: default_next_page_depth(),
+            max_pages: default_next_page_count(),
+            max_bytes: default_next_page_bytes(),
+            max_duration_secs: default_next_page_duration(),
+            same_host_only: default_next_page_same_host(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NextPagePolicyDecision {
+    pub allowed: bool,
+    pub reason: String,
+    pub next_depth: usize,
+    pub pages_remaining: usize,
+    pub bytes_remaining: usize,
+}
+
+pub fn evaluate_next_page_policy(
+    policy: &NextPagePolicy,
+    base_url: &str,
+    candidate_url: &str,
+    depth: usize,
+    pages_used: usize,
+    bytes_used: usize,
+    elapsed_secs: u64,
+    visited_urls: &[String],
+) -> NextPagePolicyDecision {
+    let bounded = |allowed: bool, reason: &str, next_depth: usize, pages_remaining: usize, bytes_remaining: usize| {
+        NextPagePolicyDecision {
+            allowed,
+            reason: reason.to_string(),
+            next_depth,
+            pages_remaining,
+            bytes_remaining,
+        }
+    };
+
+    if !policy.enabled {
+        return bounded(false, "disabled", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+    }
+    if policy.max_depth == 0 || policy.max_pages == 0 {
+        return bounded(false, "quota_zero", depth, 0, 0);
+    }
+    if depth >= policy.max_depth {
+        return bounded(false, "depth_limit", depth, 0, policy.max_bytes.saturating_sub(bytes_used));
+    }
+    if pages_used >= policy.max_pages {
+        return bounded(false, "page_limit", depth, 0, policy.max_bytes.saturating_sub(bytes_used));
+    }
+    if bytes_used >= policy.max_bytes {
+        return bounded(false, "byte_limit", depth, policy.max_pages.saturating_sub(pages_used), 0);
+    }
+    if elapsed_secs >= policy.max_duration_secs {
+        return bounded(false, "time_limit", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+    }
+
+    let Some(candidate) = bounded_next_url(candidate_url).ok().flatten() else {
+        return bounded(false, "invalid_next_url", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+    };
+    if visited_urls.iter().any(|visited| visited == &candidate) {
+        return bounded(false, "cycle", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+    }
+
+    let base = match Url::parse(base_url) {
+        Ok(base) => base,
+        Err(_) => {
+            return bounded(false, "invalid_base_url", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+        }
+    };
+    let candidate = match Url::parse(&candidate) {
+        Ok(candidate) => candidate,
+        Err(_) => {
+            return bounded(false, "invalid_next_url", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+        }
+    };
+    if policy.same_host_only && !same_url_origin(&base, &candidate) {
+        return bounded(false, "same_origin", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+    }
+
+    bounded(
+        true,
+        "allowed",
+        depth.saturating_add(1),
+        policy.max_pages.saturating_sub(pages_used.saturating_add(1)),
+        policy.max_bytes.saturating_sub(bytes_used),
+    )
+}
+
+fn same_url_origin(left: &Url, right: &Url) -> bool {
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
+}
+
 pub fn validate_source_json(input: &str) -> SourceValidation {
     let source = match serde_json::from_str::<BookSource>(input) {
         Ok(source) => source,
