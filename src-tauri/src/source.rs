@@ -2886,6 +2886,92 @@ mod tests {
     }
 
     #[test]
+    fn keeps_next_page_policy_disabled_by_default() {
+        let policy = NextPagePolicy::default();
+        let decision = evaluate_next_page_policy(
+            &policy,
+            "https://example.test/chapter/1",
+            "https://example.test/chapter/2",
+            0,
+            1,
+            0,
+            0,
+            &[],
+        );
+        assert!(!decision.allowed);
+        assert_eq!(decision.reason, "disabled");
+    }
+
+    #[test]
+    fn allows_same_origin_next_page_with_remaining_budget() {
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let decision = evaluate_next_page_policy(
+            &policy,
+            "https://example.test/chapter/1",
+            "https://example.test/chapter/2",
+            0,
+            1,
+            100,
+            1,
+            &["https://example.test/chapter/1".to_string()],
+        );
+        assert!(decision.allowed);
+        assert_eq!(decision.reason, "allowed");
+        assert_eq!(decision.next_depth, 1);
+        assert_eq!(decision.pages_remaining, 1);
+        assert_eq!(decision.bytes_remaining, policy.max_bytes - 100);
+    }
+
+    #[test]
+    fn rejects_next_page_policy_limits_cycles_and_cross_origin() {
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let cross_origin = evaluate_next_page_policy(
+            &policy,
+            "https://example.test/chapter/1",
+            "https://other.test/chapter/2",
+            0,
+            1,
+            0,
+            0,
+            &[],
+        );
+        assert!(!cross_origin.allowed);
+        assert_eq!(cross_origin.reason, "same_origin");
+
+        let depth_limit = evaluate_next_page_policy(
+            &policy,
+            "https://example.test/chapter/1",
+            "https://example.test/chapter/2",
+            policy.max_depth,
+            1,
+            0,
+            0,
+            &[],
+        );
+        assert!(!depth_limit.allowed);
+        assert_eq!(depth_limit.reason, "depth_limit");
+
+        let cycle = evaluate_next_page_policy(
+            &policy,
+            "https://example.test/chapter/1",
+            "https://example.test/chapter/2",
+            0,
+            1,
+            0,
+            0,
+            &["https://example.test/chapter/2".to_string()],
+        );
+        assert!(!cycle.allowed);
+        assert_eq!(cycle.reason, "cycle");
+    }
+
+    #[test]
     fn validates_bounded_nested_content_url() {
         assert_eq!(
             bounded_next_url("https://example.test/chapter/2")
