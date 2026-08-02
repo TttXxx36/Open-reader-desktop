@@ -3,6 +3,8 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 
+const MAX_RULE_CHAIN_LENGTH: usize = 8;
+
 #[derive(Debug, Clone)]
 pub struct ImportedSource {
     pub id: Option<String>,
@@ -504,53 +506,98 @@ fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Resul
 
 fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
     match value {
-        Value::String(raw) => {
-            let (selector, attr) = parse_legado_rule(raw, context)?;
-            if let Some(attr) = attr {
-                Ok(json!({ "selector": selector, "attr": attr }))
-            } else {
-                Ok(Value::String(selector))
-            }
-        }
+        Value::String(raw) => normalize_rule_parts(raw, context, None, None),
         Value::Object(object) => {
+            if let Some(chain) = object.get("chain") {
+                let entries = chain
+                    .as_array()
+                    .ok_or_else(|| format!("{context}.chain 必须是数组"))?;
+                if entries.is_empty() || entries.len() > MAX_RULE_CHAIN_LENGTH {
+                    return Err(format!(
+                        "{context}.chain 必须包含 1-{} 个候选",
+                        MAX_RULE_CHAIN_LENGTH
+                    ));
+                }
+                let normalized = entries
+                    .iter()
+                    .map(|entry| normalize_rule(entry, context))
+                    .collect::<Result<Vec<_>, _>>()?;
+                return Ok(json!({ "chain": normalized }));
+            }
+
             let raw_selector =
                 first_value(object, &["selector", "rule", "value", "jsonPath", "path"])
                     .and_then(Value::as_str)
                     .ok_or_else(|| format!("{context} 缺少 selector 或 JSONPath"))?;
-            let (selector, parsed_attr) = parse_legado_rule(raw_selector, context)?;
-            let attr = if let Some(raw_attr) = object.get("attr").and_then(Value::as_str) {
-                let normalized = raw_attr.trim().to_ascii_lowercase();
-                if !matches!(
-                    normalized.as_str(),
-                    "text" | "content" | "href" | "src" | "title" | "alt" | "data-src"
-                ) {
-                    return Err(format!(
-                        "{context} 的属性后缀 @{} 不在安全子集内",
-                        raw_attr.trim()
-                    ));
-                }
-                normalize_attr(raw_attr)
-            } else {
-                parsed_attr
-            };
-            let mut output = Map::new();
-            output.insert("selector".to_string(), Value::String(selector));
-            if let Some(attr) = attr {
-                output.insert("attr".to_string(), Value::String(attr));
-            }
-            if let Some(regex) = object.get("regex").and_then(Value::as_str) {
-                output.insert("regex".to_string(), Value::String(regex.to_string()));
-            }
-            Ok(Value::Object(output))
+            let attr = object.get("attr").and_then(Value::as_str);
+            let regex = object.get("regex").and_then(Value::as_str);
+            normalize_rule_parts(raw_selector, context, attr, regex)
         }
         _ => Err(format!("{context} 必须是字符串或规则对象")),
     }
 }
 
+fn normalize_rule_parts(
+    raw_selector: &str,
+    context: &str,
+    override_attr: Option<&str>,
+    regex: Option<&str>,
+) -> Result<Value, String> {
+    let parts = split_rule_chain(raw_selector, context)?;
+    let mut normalized = Vec::with_capacity(parts.len());
+    for part in parts {
+        let (selector, parsed_attr) = parse_legado_rule(part, context)?;
+        let attr = if let Some(raw_attr) = override_attr {
+            let normalized = raw_attr.trim().to_ascii_lowercase();
+            if !matches!(
+                normalized.as_str(),
+                "text" | "content" | "href" | "src" | "title" | "alt" | "data-src"
+            ) {
+                return Err(format!(
+                    "{context} 的属性后缀 @{} 不在安全子集内",
+                    raw_attr.trim()
+                ));
+            }
+            normalize_attr(raw_attr)
+        } else {
+            parsed_attr
+        };
+        let mut output = Map::new();
+        output.insert("selector".to_string(), Value::String(selector));
+        if let Some(attr) = attr {
+            output.insert("attr".to_string(), Value::String(attr));
+        }
+        if let Some(regex) = regex {
+            output.insert("regex".to_string(), Value::String(regex.to_string()));
+        }
+        normalized.push(Value::Object(output));
+    }
+
+    if normalized.len() == 1 {
+        Ok(normalized.remove(0))
+    } else {
+        Ok(json!({ "chain": normalized }))
+    }
+}
+
+fn split_rule_chain<'a>(raw: &'a str, context: &str) -> Result<Vec<&'a str>, String> {
+    let parts = raw.split("||").map(str::trim).collect::<Vec<_>>();
+    if parts.iter().any(|part| part.is_empty()) {
+        return Err(format!("{context} 链式规则包含空候选"));
+    }
+    if parts.len() > MAX_RULE_CHAIN_LENGTH {
+        return Err(format!(
+            "{context} 链式规则最多支持 {} 个候选",
+            MAX_RULE_CHAIN_LENGTH
+        ));
+    }
+    Ok(parts)
+}
+
 fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>), String> {
-    let first = raw.split("||").next().unwrap_or_default().trim();
+    let first = raw.trim();
     if first.is_empty() {
-        return Err(format!("{context} 不能为空"));
+        return Err(format!("{context} 不能为空");
     }
     let lowered = first.to_ascii_lowercase();
     if lowered.starts_with("//")
@@ -831,6 +878,26 @@ mod tests {
             .as_ref()
             .and_then(|rules| rules.content.as_ref())
             .is_some());
+    }
+
+    #[test]
+    fn normalizes_and_preserves_fallback_chain() {
+        let payload = json!({
+            "bookSourceName": "Chain Fixture",
+            "searchUrl": "https://chain.example.test/search?q={{key}}",
+            "ruleSearch": {
+                "bookList": "li.book",
+                "bookName": "h2 a@text||.title@text",
+                "bookUrl": "h2 a@href||a@data-src"
+            }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("chain source");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("canonical chain source");
+        match source.search.as_ref().and_then(|rules| rules.title.as_ref()) {
+            Some(SourceRule::Chain { chain }) => assert_eq!(chain.len(), 2),
+            other => panic!("expected chain rule, got {other:?}"),
+        }
     }
 
     #[test]
