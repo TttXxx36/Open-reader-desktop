@@ -1251,6 +1251,13 @@ mod tests {
             .unsupported_rules
             .iter()
             .any(|rule| rule.value == "//article"));
+        assert!(entry.unsupported_rules.iter().any(|rule| {
+            rule.value == "//article" && rule.offline_accepted && rule.offline_steps == 1
+        }));
+        assert!(entry
+            .unsupported_rules
+            .iter()
+            .any(|rule| rule.value == "@xpath=//h2" && !rule.offline_accepted));
         assert!(entry
             .unsupported_rules
             .iter()
