@@ -174,7 +174,7 @@ fn parse_expression(expression: &str) -> Result<Vec<XPathStep>, String> {
             return Err("XPath 路径包含空步骤".to_string());
         }
         let step = parse_step(axis, raw_step)?;
-        if matches!(step.node, XPathNode::Attribute(_)) && end < remaining.len() {
+        if matches!(&step.node, XPathNode::Attribute(_)) && end < remaining.len() {
             return Err("XPath 属性读取必须是最后一步".to_string());
         }
         steps.push(step);
