@@ -93,11 +93,22 @@
 - 空库/旧 M5 数据库升级失败回滚、重复来源 URL 冲突和非法枚举专项夹具。
 - 跨分组拖拽、批量元数据编辑、快照清理策略和 Windows 手工恢复流程。
 
-## M7.2 规则执行增强（分页诊断与安全回退链已完成）
+## M7.2 规则执行增强（分页诊断、安全回退链与缓存诊断已完成）
 
 分页/模板变量首个切片已接入真实 pipeline：支持 page、pageNum、pageIndex、page+1、page-1、keyword/key、bookUrl/bookId、chapterId；多页搜索有 20 页硬上限，并在空页或无新增结果时停止。随后补齐了统一的每源诊断模型（扫描页数、解析数量、终止原因、请求失败）和前端展示；调试步骤携带变量名快照（关键词、URL 和 ID 脱敏）与 cache_hit 字段。
 
-当前已完成安全回退链子集：导入器保留 
+当前已完成安全回退链子集：导入器保留 `||` 候选，CSS 链和 JSONPath 链分别最多 8 项，按顺序尝试直到得到结果；混合 CSS/JSONPath、XPath、JavaScript 和不受支持的表达式会明确拒绝，不静默丢弃。字符串规则与对象规则的兼容形态也保持不变。
+
+书籍/章节缓存响应现在返回 cache_hit；过期刷新失败时保留 stale 与错误原因，阅读器明确提示缓存来源并可手动刷新。基础缓存可见化已完成，导出的诊断快照与重试时间线仍属于后续切片。
+
+远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）。
+
+后续切片：
+
+1. 将缓存命中、失败回退和重试记录合并到可导出的诊断快照。
+2. 扩展有限 JSONPath 的数组过滤/字段别名，并为每项能力补授权夹具和拒绝用例。
+3. 在不执行脚本的前提下补多级 URL 中间模型，限制深度、响应数和总耗时。
+4. 为链式规则增加请求级取消、超时预算和 UI 中的候选命中说明。
 
 ## M7.3 XPath 评估闸门
 
