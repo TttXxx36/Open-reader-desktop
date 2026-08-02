@@ -548,9 +548,6 @@ fn extract_html_attribute(tag: &str, name: &str) -> Option<String> {
             cursor += 1;
         }
         if cursor >= bytes.len() || bytes[cursor] != b'=' {
-            while cursor < bytes.len() && !bytes[cursor].is_ascii_whitespace() {
-                cursor += 1;
-            }
             continue;
         }
 
