@@ -894,7 +894,11 @@ mod tests {
         let imported = parse_import_bundle(&payload.to_string()).expect("chain source");
         let source: BookSource =
             serde_json::from_str(&imported[0].config_json).expect("canonical chain source");
-        match source.search.as_ref().and_then(|rules| rules.title.as_ref()) {
+        match source
+            .search
+            .as_ref()
+            .and_then(|rules| rules.title.as_ref())
+        {
             Some(SourceRule::Chain { chain }) => assert_eq!(chain.len(), 2),
             other => panic!("expected chain rule, got {other:?}"),
         }
