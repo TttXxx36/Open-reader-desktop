@@ -597,7 +597,7 @@ fn split_rule_chain<'a>(raw: &'a str, context: &str) -> Result<Vec<&'a str>, Str
 fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>), String> {
     let first = raw.trim();
     if first.is_empty() {
-        return Err(format!("{context} 不能为空");
+        return Err(format!("{context} 不能为空"));
     }
     let lowered = first.to_ascii_lowercase();
     if lowered.starts_with("//")
