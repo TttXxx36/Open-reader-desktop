@@ -1313,7 +1313,12 @@ fn validate_page_rules(
     };
 
     if let Some(item) = &rules.item {
-        if let Err(error) = parse_selector(item) {
+        let result = if is_json_rule_path(item) {
+            validate_json_path(item)
+        } else {
+            parse_selector(item).map(|_| ())
+        };
+        if let Err(error) = result {
             errors.push(format!("{name}.item：{error}"));
         }
     }
@@ -1330,7 +1335,12 @@ fn validate_page_rules(
                 errors.push(format!("{name}.{field} selector 不能为空"));
                 continue;
             }
-            if let Err(error) = parse_selector(rule.selector()) {
+            let result = if let Some(path) = rule.json_path() {
+                validate_json_path(path)
+            } else {
+                parse_selector(rule.selector()).map(|_| ())
+            };
+            if let Err(error) = result {
                 errors.push(format!("{name}.{field}：{error}"));
             }
             if let Some(regex) = rule.regex() {
