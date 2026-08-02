@@ -2752,13 +2752,13 @@ mod tests {
     #[test]
     fn validates_bounded_nested_content_url() {
         assert_eq!(
-            bounded_next_url("https://example.test/chapter/1", "/chapter/2")
+            bounded_next_url("https://example.test/chapter/2")
                 .expect("next URL should be accepted"),
             Some("https://example.test/chapter/2".to_string())
         );
-        assert!(bounded_next_url("https://example.test/chapter/1", "javascript:alert(1)").is_err());
+        assert!(bounded_next_url("javascript:alert(1)").is_err());
         let oversized = format!("https://example.test/{}", "a".repeat(MAX_NEXT_URL_BYTES));
-        assert!(bounded_next_url("https://example.test/chapter/1", &oversized).is_err());
+        assert!(bounded_next_url(&oversized).is_err());
     }
 
     #[test]
