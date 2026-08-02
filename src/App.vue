@@ -1213,7 +1213,7 @@ function sanitizeDiagnosticStep(step: SourceDebugStep, prefix = ""): SourceDebug
 
 function sanitizeDiagnosticMessage(value: string) {
   return truncateDiagnostic(
-    value.replace(/https?:\\/\\/[^\\s]+/g, (match) => sanitizeDiagnosticUrl(match)),
+    value.replace(/https?:\/\/[^\s]+/g, (match) => sanitizeDiagnosticUrl(match)),
     512,
   );
 }
