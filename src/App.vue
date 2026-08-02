@@ -33,8 +33,24 @@ interface ChapterContent {
   id: string;
   title: string;
   content: string;
+  content_format?: string;
   index: number;
   total: number;
+}
+
+type ContentBlockKind = "paragraph" | "heading" | "quote" | "image";
+
+interface ContentSpan {
+  text: string;
+  emphasis?: "strong" | "em" | null;
+}
+
+interface ContentBlock {
+  kind: ContentBlockKind;
+  level?: number | null;
+  spans: ContentSpan[];
+  alt?: string | null;
+  src?: string | null;
 }
 
 interface ReaderSettings {
@@ -247,6 +263,7 @@ const sourceJson = ref(`{
 const chapterParagraphs = computed(() =>
   chapter.value?.content.split(/\n{2,}/).filter(Boolean) ?? [],
 );
+const chapterBlocks = computed(() => parseContentBlocks(chapter.value));
 const remoteChapterParagraphs = computed(() =>
   remoteChapter.value?.content.split(/\n{2,}/).filter(Boolean) ?? [],
 );
@@ -274,6 +291,56 @@ onMounted(loadBooks);
 watch(settings, (value) => {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(value));
 }, { deep: true });
+
+function parseContentBlocks(value: ChapterContent | null): ContentBlock[] {
+  if (!value || value.content_format !== "blocks-v1") return [];
+
+  try {
+    const parsed = JSON.parse(value.content) as {
+      version?: unknown;
+      blocks?: unknown;
+    };
+    if (parsed.version !== 1 || !Array.isArray(parsed.blocks)) return [];
+
+    return parsed.blocks.flatMap((candidate) => {
+      if (!candidate || typeof candidate !== "object") return [];
+      const record = candidate as Record<string, unknown>;
+      const kind = record.kind;
+      if (kind !== "paragraph" && kind !== "heading" && kind !== "quote" && kind !== "image") {
+        return [];
+      }
+
+      const spans = Array.isArray(record.spans)
+        ? record.spans.flatMap((span) => {
+            if (!span || typeof span !== "object") return [];
+            const item = span as Record<string, unknown>;
+            if (typeof item.text !== "string" || !item.text) return [];
+            const emphasis = item.emphasis === "strong" || item.emphasis === "em"
+              ? item.emphasis
+              : null;
+            return [{ text: item.text, emphasis }];
+          })
+        : [];
+
+      return [{
+        kind,
+        level: typeof record.level === "number" ? record.level : null,
+        spans,
+        alt: typeof record.alt === "string" ? record.alt : null,
+        src: typeof record.src === "string" ? record.src : null,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function contentBlockTag(block: ContentBlock): string {
+  if (block.kind === "quote") return "blockquote";
+  if (block.kind !== "heading") return "p";
+  const level = Math.min(Math.max(Math.round(block.level ?? 3), 2), 6);
+  return "h" + level;
+}
 
 function loadSettings(): ReaderSettings {
   try {
@@ -1300,7 +1367,7 @@ function nextChapter() {
           </label>
         </div>
 
-        <p class="settings-note">这些设置先作为全局默认值保存到本机；按书籍独立设置和 EPUB 富文本排版将在后续 M6.2/M6.3 完成。</p>
+        <p class="settings-note">这些设置先作为全局默认值保存到本机；TXT 保持纯文本回退，EPUB 内容块会保留标题、引用和基础强调。</p>
       </section>
     </section>
 
@@ -1419,7 +1486,33 @@ function nextChapter() {
         <article class="reader-page">
           <div class="reader-meta">{{ chapter.index + 1 }} / {{ chapter.total }} · {{ detail.book.format.toUpperCase() }}</div>
           <h2>{{ chapter.title }}</h2>
-          <p v-for="(paragraph, index) in chapterParagraphs" :key="index">{{ paragraph }}</p>
+          <template v-if="chapterBlocks.length">
+            <template v-for="(block, index) in chapterBlocks" :key="index">
+              <div
+                v-if="block.kind === 'image'"
+                class="reader-rich-image"
+                role="img"
+                :aria-label="block.alt || '图片'"
+              >
+                {{ block.alt ? '[图片：' + block.alt + ']' : '[图片]' }}
+              </div>
+              <component
+                v-else
+                :is="contentBlockTag(block)"
+                class="reader-rich-block"
+                :class="'reader-rich-' + block.kind"
+              >
+                <template v-for="(span, spanIndex) in block.spans" :key="spanIndex">
+                  <strong v-if="span.emphasis === 'strong'">{{ span.text }}</strong>
+                  <em v-else-if="span.emphasis === 'em'">{{ span.text }}</em>
+                  <span v-else>{{ span.text }}</span>
+                </template>
+              </component>
+            </template>
+          </template>
+          <template v-else>
+            <p v-for="(paragraph, index) in chapterParagraphs" :key="index">{{ paragraph }}</p>
+          </template>
 
           <footer class="chapter-navigation">
             <button class="toolbar-button" type="button" :disabled="currentChapterIndex() <= 0" @click="previousChapter">
@@ -2393,6 +2486,57 @@ function nextChapter() {
   margin: 0 0 var(--reader-paragraph-spacing);
   text-indent: var(--reader-text-indent);
   white-space: pre-wrap;
+}
+
+.reader-rich-block {
+  margin: 0 0 var(--reader-paragraph-spacing);
+  text-indent: var(--reader-text-indent);
+  white-space: pre-wrap;
+}
+
+.reader-rich-heading {
+  margin-top: 1.1em;
+  color: #f5f8ff;
+  font-size: 1.18em;
+  font-weight: 700;
+  line-height: 1.45;
+  text-indent: 0;
+}
+
+.reader-rich-quote {
+  padding: 0.45em 1em;
+  border-left: 3px solid rgba(121, 201, 255, 0.55);
+  color: #afbdd0;
+  text-indent: 0;
+}
+
+.reader-rich-image {
+  margin: 0 0 var(--reader-paragraph-spacing);
+  padding: 0.72em 1em;
+  border: 1px dashed rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  color: #9eacc0;
+  background: rgba(148, 163, 184, 0.08);
+  text-align: center;
+}
+
+.theme-paper .reader-rich-heading {
+  color: #3f3a34;
+}
+
+.theme-paper .reader-rich-quote,
+.theme-paper .reader-rich-image {
+  color: #756b5e;
+  border-color: rgba(91, 76, 57, 0.35);
+}
+
+.theme-sepia .reader-rich-heading {
+  color: #f3e7ce;
+}
+
+.theme-sepia .reader-rich-quote,
+.theme-sepia .reader-rich-image {
+  color: #d2c2a4;
 }
 
 .reader-meta {
