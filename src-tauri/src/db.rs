@@ -978,11 +978,7 @@ mod tests {
             .expect("initial source should save");
 
         let snapshot = database
-            .create_source_snapshot(
-                "test snapshot",
-                r#"{"version":1,"sources":[]}"#,
-                1,
-            )
+            .create_source_snapshot("test snapshot", r#"{"version":1,"sources":[]}"#, 1)
             .expect("snapshot should save");
         assert_eq!(
             database
