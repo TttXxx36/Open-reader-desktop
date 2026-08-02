@@ -882,6 +882,9 @@ async function cancelSearch() {
 }
 
 function clearSearch() {
+  searchResult.value = null;
+  searchKeyword.value = "";
+}
 
 async function finishSourceImport(result: SourceImportResult, label: string) {
   await loadSources();
