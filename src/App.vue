@@ -361,6 +361,7 @@ const sourcePipeline = ref<SourcePipelineResult | null>(null);
 const searchKeyword = ref("");
 const searchPageLimit = ref(1);
 const searchBusy = ref(false);
+const searchOperationId = ref<string | null>(null);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
 const sourceTransferBusy = ref(false);
 const sourceTransferMessage = ref("");
@@ -373,6 +374,7 @@ const sourceAudit = ref<SourceAuditReport[] | null>(null);
 const sourceCacheBusy = ref(false);
 const sourceCacheStatus = ref<SourceCacheStatus | null>(null);
 const remoteBusy = ref(false);
+const remoteOperationId = ref<string | null>(null);
 const remoteBook = ref<RemoteBookDetail | null>(null);
 const remoteChapter = ref<RemoteChapterContent | null>(null);
 const remoteChapterRef = ref<RemoteChapter | null>(null);
@@ -836,29 +838,50 @@ async function deleteSource(source: SourceSummary) {
 
 async function searchSources() {
   const keyword = searchKeyword.value.trim();
-  if (!keyword) return;
+  if (!keyword || searchBusy.value) return;
 
   const maxPages = Math.min(20, Math.max(1, Math.trunc(searchPageLimit.value || 1)));
   searchPageLimit.value = maxPages;
+  const operationId = "search-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  searchOperationId.value = operationId;
   searchBusy.value = true;
   searchResult.value = null;
+  sourceTransferMessage.value = "";
   errorMessage.value = "";
   try {
     searchResult.value = await invoke<MultiSourceSearchResult>("search_sources", {
       keyword,
       maxPages,
+      operationId,
     });
   } catch (error) {
-    errorMessage.value = String(error);
+    const message = String(error);
+    if (message.includes("已取消")) {
+      sourceTransferMessage.value = "多源搜索已取消";
+    } else {
+      errorMessage.value = message;
+    }
   } finally {
+    if (searchOperationId.value === operationId) {
+      searchOperationId.value = null;
+    }
     searchBusy.value = false;
   }
 }
 
-function clearSearch() {
-  searchResult.value = null;
-  searchKeyword.value = "";
+async function cancelSearch() {
+  const operationId = searchOperationId.value;
+  if (!operationId) return;
+
+  try {
+    await invoke<boolean>("cancel_source_operation", { operationId });
+    sourceTransferMessage.value = "正在取消多源搜索…";
+  } catch (error) {
+    errorMessage.value = String(error);
+  }
 }
+
+function clearSearch() {
 
 async function finishSourceImport(result: SourceImportResult, label: string) {
   await loadSources();
@@ -1021,6 +1044,8 @@ async function importSourceFile(event: Event) {
 async function openRemoteBook(item: UnifiedSearchItem) {
   if (!item.book_url || remoteBusy.value) return;
 
+  const operationId = "remote-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  remoteOperationId.value = operationId;
   remoteBusy.value = true;
   errorMessage.value = "";
   remoteBook.value = null;
@@ -1032,6 +1057,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
       sourceId: item.source_id,
       bookUrl: item.book_url,
       forceRefresh: false,
+      operationId,
     });
     const firstChapter = loaded.chapters[0];
     if (!firstChapter) {
@@ -1042,6 +1068,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
       sourceId: loaded.source_id,
       chapter: firstChapter,
       forceRefresh: false,
+      operationId,
     });
     remoteBook.value = loaded;
     remoteChapterRef.value = firstChapter;
@@ -1049,11 +1076,19 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     searchResult.value = null;
     view.value = "reader";
   } catch (error) {
-    errorMessage.value = String(error);
+    const message = String(error);
+    if (message.includes("已取消")) {
+      sourceTransferMessage.value = "远端打开已取消";
+    } else {
+      errorMessage.value = message;
+    }
     remoteBook.value = null;
     remoteChapter.value = null;
     remoteChapterRef.value = null;
   } finally {
+    if (remoteOperationId.value === operationId) {
+      remoteOperationId.value = null;
+    }
     remoteBusy.value = false;
   }
 }
@@ -1061,6 +1096,8 @@ async function openRemoteBook(item: UnifiedSearchItem) {
 async function loadRemoteChapter(chapterItem: RemoteChapter, forceRefresh = false) {
   if (!remoteBook.value || remoteBusy.value) return;
 
+  const operationId = "chapter-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  remoteOperationId.value = operationId;
   remoteBusy.value = true;
   errorMessage.value = "";
   try {
@@ -1068,11 +1105,20 @@ async function loadRemoteChapter(chapterItem: RemoteChapter, forceRefresh = fals
       sourceId: remoteBook.value.source_id,
       chapter: chapterItem,
       forceRefresh,
+      operationId,
     });
     remoteChapterRef.value = chapterItem;
   } catch (error) {
-    errorMessage.value = String(error);
+    const message = String(error);
+    if (message.includes("已取消")) {
+      sourceTransferMessage.value = "章节加载已取消";
+    } else {
+      errorMessage.value = message;
+    }
   } finally {
+    if (remoteOperationId.value === operationId) {
+      remoteOperationId.value = null;
+    }
     remoteBusy.value = false;
   }
 }
@@ -1080,6 +1126,8 @@ async function loadRemoteChapter(chapterItem: RemoteChapter, forceRefresh = fals
 async function refreshRemoteBook() {
   if (!remoteBook.value || remoteBusy.value) return;
 
+  const operationId = "refresh-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  remoteOperationId.value = operationId;
   const currentUrl = remoteChapterRef.value?.url;
   remoteBusy.value = true;
   errorMessage.value = "";
@@ -1088,6 +1136,7 @@ async function refreshRemoteBook() {
       sourceId: remoteBook.value.source_id,
       bookUrl: remoteBook.value.book_info.book_url,
       forceRefresh: true,
+      operationId,
     });
     const currentIndex = remoteChapterIndex();
     const target = loaded.chapters.find((item) => item.url === currentUrl)
@@ -1101,18 +1150,41 @@ async function refreshRemoteBook() {
       sourceId: loaded.source_id,
       chapter: target,
       forceRefresh: true,
+      operationId,
     });
     remoteBook.value = loaded;
     remoteChapterRef.value = target;
     remoteChapter.value = content;
   } catch (error) {
-    errorMessage.value = String(error);
+    const message = String(error);
+    if (message.includes("已取消")) {
+      sourceTransferMessage.value = "远端刷新已取消";
+    } else {
+      errorMessage.value = message;
+    }
   } finally {
+    if (remoteOperationId.value === operationId) {
+      remoteOperationId.value = null;
+    }
     remoteBusy.value = false;
   }
 }
 
+async function cancelRemoteOperation() {
+  const operationId = remoteOperationId.value;
+  if (!operationId) return;
+
+  try {
+    await invoke<boolean>("cancel_source_operation", { operationId });
+    sourceTransferMessage.value = "正在取消远端请求…";
+  } catch (error) {
+    errorMessage.value = String(error);
+  }
+}
+
 function remoteChapterIndex() {
+
+
   if (!remoteBook.value || !remoteChapterRef.value) return -1;
   return remoteBook.value.chapters.findIndex((item) => item.url === remoteChapterRef.value?.url);
 }
@@ -1512,7 +1584,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
