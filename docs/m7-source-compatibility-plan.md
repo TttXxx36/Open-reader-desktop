@@ -23,10 +23,12 @@
 ### 验收证据
 
 - Rust 元数据解析、别名映射、音频类型拒绝和来源 URL ID 回归测试。
-- GitHub Actions CI：Frontend checks、UI contract、Rust fmt、Cargo check、Rust tests 均通过；本轮 Rust tests 为 37 passed。
+- GitHub Actions CI：Frontend checks、UI contract、Rust fmt、Cargo check、Rust tests 均通过；本轮 Rust tests 为 38 passed（新增 M7.1 元数据重启持久化测试）。
 - 本地不构建、不安装；真实网络只使用授权或合成夹具。
 
-## M7.1 书源管理基础（下一步）
+## M7.1 书源管理基础（已完成 M7.1a 基础切片，增强项待续）
+
+本轮已完成 SQLite 元数据迁移、旧配置回填、按分组/自定义顺序/权重排序，以及书源列表的分组筛选、发现开关和元数据编辑。远程 CI 已验证前端构建、UI 契约、Rust 检查和 38 个测试。批量操作、拖拽重排和导入差异预览仍保留为 M7.1b，不提前宣称整个 M7.1 完成。
 
 ### 数据库
 
@@ -45,11 +47,18 @@
 
 ### Rust 命令
 
+已完成：
+
 - list_sources：返回元数据并按“分组 → customOrder → weight → name”排序。
 - save_source：从校验后的 BookSource 一次性写入 JSON 与元数据，避免两套状态漂移。
 - set_source_enabled、set_source_explore_enabled：分别控制搜索和发现开关。
-- reorder_sources、set_source_group：支持单项和批量操作。
-- export_sources：导出版本号、元数据和配置；导入预览显示字段差异。
+- update_source_metadata：以一次事务式更新同步 JSON 别名和 SQLite 元数据。
+- export_sources：导出配置时携带元数据字段。
+
+待续（M7.1b）：
+
+- reorder_sources、set_source_group：支持拖拽/上下移动、单项和批量操作。
+- 导入预览：显示字段差异、冲突策略和可回滚快照。
 
 ### Vue 界面
 
@@ -60,9 +69,18 @@
 
 ### 验收
 
-- 迁移测试：空库、旧 M5 数据库、重复来源 URL、非法枚举和回滚失败。
-- UI 契约：列表排序、分组筛选、启用/发现开关、键盘 Tab 和窄窗口。
-- Rust 测试：保存后重启仍保持元数据，导出再导入不丢字段。
+已完成本轮：
+
+- SQLite 0006 迁移、默认值和旧 JSON 元数据回填。
+- 列表排序、分组筛选、搜索/发现开关、权重/顺序/备注编辑。
+- 保存后重启仍保持元数据；前端 typecheck/build/UI contract、Rust fmt/check/test 全部通过。
+
+远程证据：[GitHub Actions run 30755061447](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30755061447)。
+
+待续验收：
+
+- 空库/旧 M5 数据库升级失败回滚、重复来源 URL 冲突和非法枚举专项夹具。
+- 批量操作、拖拽重排、导出再导入字段 diff 与回滚。
 
 ## M7.2 规则执行增强
 
