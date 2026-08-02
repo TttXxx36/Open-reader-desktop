@@ -2575,7 +2575,7 @@ mod tests {
         let (base_url, server) = spawn_search_fixture_server();
         let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
         let context = SourceRequestContext::search("demo", 1);
-        let template = format!("http://127.0.0.1:1/unreachable||{base_url}/search?q={{keyword}}");
+        let template = format!("http://127.0.0.1:1/unreachable||{base_url}/search?q={{{{keyword}}}}");
         let mut debug_steps = Vec::new();
 
         let (body, successful_url) = engine
