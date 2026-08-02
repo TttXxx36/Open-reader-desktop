@@ -1910,11 +1910,6 @@ fn parse_json_path_segment(segment: &str, path: &str) -> Result<JsonPathSegment,
     Ok(JsonPathSegment::Field(validate_json_field(segment, path)?))
 }
 
-fn is_json_rule_path(value: &str) -> bool {
-    let value = value.trim();
-    value.starts_with('$') || value.starts_with("json:")
-}
-
 fn normalize_json_path(path: &str) -> Result<String, SourceError> {
     let trimmed = path.trim();
     let path = trimmed.strip_prefix("json:").unwrap_or(trimmed).trim();
