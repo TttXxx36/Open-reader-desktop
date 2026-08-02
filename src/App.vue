@@ -315,9 +315,10 @@ function parseContentBlocks(value: ChapterContent | null): ContentBlock[] {
             if (!span || typeof span !== "object") return [];
             const item = span as Record<string, unknown>;
             if (typeof item.text !== "string" || !item.text) return [];
-            const emphasis = item.emphasis === "strong" || item.emphasis === "em"
-              ? item.emphasis
-              : null;
+            const emphasis: ContentSpan["emphasis"] =
+              item.emphasis === "strong" || item.emphasis === "em"
+                ? item.emphasis
+                : null;
             return [{ text: item.text, emphasis }];
           })
         : [];
