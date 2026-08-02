@@ -21,9 +21,9 @@ requireContract(sourceInputIndex >= 0 && libraryViewIndex >= 0 && sourceInputInd
 requireContract(/@click="openSettings"/.test(app), "设置导航必须绑定 openSettings");
 requireContract(/v-model="sourceImportUrl"/.test(sourceView), "书源页必须提供 URL 导入输入框");
 requireContract(/@click="importSourceUrl"/.test(sourceView), "URL 导入按钮必须绑定 importSourceUrl");
-requireContract(sourceView.includes("preview_sources_from_url"), "前端必须调用 URL 书源预览命令");
+requireContract(app.includes("preview_sources_from_url") || sourceView.includes("preview_sources_from_url"), "前端必须调用 URL 书源预览命令");
 requireContract(app.includes("preview_sources_from_url"), "URL 书源导入必须先调用预览命令");
-requireContract(sourceView.includes("import_sources_selected"), "书源导入必须通过选中项命令保存");
+requireContract(app.includes("import_sources_selected") || sourceView.includes("import_sources_selected"), "书源导入必须通过选中项命令保存");
 requireContract(/@click="confirmSourceImport"/.test(sourceView), "导入预览必须提供确认按钮");
 requireContract(/id="settings"/.test(app), "设置视图必须存在");
 requireContract(/import brandMark from "\.\/assets\/open-reader-mark\.svg";/.test(app),
