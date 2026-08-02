@@ -1349,6 +1349,41 @@ impl SourceEngine {
     }
 }
 
+fn parse_chapter_page(
+    rules: &PageRules,
+    body: &str,
+    content_url: &str,
+) -> Result<(String, Option<String>), SourceError> {
+    let content = if rules.is_json() {
+        parse_json_rule_document(body, rules.item.as_deref(), rules.content.as_ref())?
+    } else {
+        let document = Html::parse_document(body);
+        extract_document_rule(&document, rules.content.as_ref())?
+    }
+    .ok_or(SourceError::NoMatch)?;
+
+    let next_url = if let Some(next_rule) = rules.next.as_ref() {
+        let next_value = if rules.is_json() {
+            parse_json_rule_document(body, rules.item.as_deref(), Some(next_rule))?
+        } else {
+            let document = Html::parse_document(body);
+            extract_document_rule(&document, Some(next_rule))?
+        };
+        next_value
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| {
+                let absolute = absolutize_url(content_url, value.trim());
+                bounded_next_url(&absolute)
+            })
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+
+    Ok((content, next_url))
+}
+
 fn dedupe_search_results(mut results: Vec<UnifiedSearchResult>) -> Vec<UnifiedSearchResult> {
     results.sort_by(|left, right| {
         (
