@@ -657,6 +657,7 @@ fn source_diff_fields(existing: &serde_json::Value, incoming: &serde_json::Value
         "book_info",
         "toc",
         "content",
+        "next",
         "permission",
         "headers",
         "replace_rules",
