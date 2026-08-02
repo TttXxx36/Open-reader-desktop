@@ -2570,6 +2570,34 @@ mod tests {
         assert_eq!(values, vec!["第一本", "第二本"]);
     }
 
+    #[tokio::test]
+    async fn retries_url_chain_after_failed_candidate() {
+        let (base_url, server) = spawn_search_fixture_server();
+        let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
+        let context = SourceRequestContext::search("demo", 1);
+        let template =
+            format!("http://127.0.0.1:1/unreachable||{base_url}/search?q={{keyword}}");
+        let mut debug_steps = Vec::new();
+
+        let (body, successful_url) = engine
+            .fetch_stage_chain(
+                "search",
+                &template,
+                &HashMap::new(),
+                &context,
+                &mut debug_steps,
+            )
+            .await
+            .expect("second URL candidate should succeed");
+
+        assert!(body.contains("测试书"));
+        assert_eq!(successful_url, format!("{base_url}/search?q=demo"));
+        assert_eq!(debug_steps.len(), 2);
+        assert!(debug_steps[0].error.is_some());
+        assert!(debug_steps[1].error.is_none());
+        server.join().expect("fixture server should stop");
+    }
+
     #[test]
     fn validates_bounded_url_fallback_chain() {
         let context = SourceRequestContext::search("demo", 2);
