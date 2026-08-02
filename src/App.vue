@@ -1646,6 +1646,9 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <button class="secondary-button" type="button" :disabled="searchBusy || !searchKeyword.trim()" @click="searchSources">
             {{ searchBusy ? "搜索中…" : "搜索书源" }}
           </button>
+          <button v-if="searchBusy" class="secondary-button" type="button" @click="cancelSearch">
+            取消搜索
+          </button>
           <button class="import-button" type="button" :disabled="isImporting" @click="openFilePicker">
             {{ isImporting ? "解析中…" : "导入 TXT / EPUB" }}
           </button>
