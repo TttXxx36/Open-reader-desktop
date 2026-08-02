@@ -506,6 +506,9 @@ async function loadSources() {
   sourceListBusy.value = true;
   try {
     sources.value = await invoke<SourceSummary[]>("list_sources");
+    selectedSourceIds.value = selectedSourceIds.value.filter((id) =>
+      sources.value.some((source) => source.id === id),
+    );
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
