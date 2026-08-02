@@ -99,7 +99,7 @@
 
 当前已完成安全回退链子集：导入器保留 `||` 候选，CSS 链和 JSONPath 链分别最多 8 项，按顺序尝试直到得到结果；混合 CSS/JSONPath、XPath、JavaScript 和不受支持的表达式会明确拒绝，不静默丢弃。字符串规则与对象规则的兼容形态也保持不变。
 
-请求 URL 也支持每个阶段最多 8 个 `||` 候选；失败候选会进入诊断步骤，首个成功 URL 作为后续相对章节链接的基准。URL 链仅做模板渲染和请求重试，不执行脚本。
+请求 URL 也支持每个阶段最多 8 个 `||` 候选；失败候选会进入诊断步骤，首个成功 URL 作为后续相对章节链接的基准。URL 链仅做模板渲染和请求重试，不执行脚本。每个阶段共享受限时间预算（最多 60 秒，按客户端请求超时和候选数量计算）；预算耗尽会取消当前请求、记录超时诊断并停止继续尝试，显式用户取消和嵌套 URL 中间模型仍待补齐。
 
 书籍/章节缓存响应现在返回 cache_hit；过期刷新失败时保留 stale 与错误原因，阅读器明确提示缓存来源并可手动刷新。基础缓存可见化与脱敏诊断快照导出已完成；统一的书籍/章节请求步骤和缓存回退事件已纳入快照，可排序时间戳与更细的重试元数据仍属于后续切片。
 
@@ -107,13 +107,13 @@
 
 书源调试页提供脱敏诊断快照导出：只写入阶段名、脱敏 URL、状态、耗时、响应大小、失败原因、变量名和 cache_hit 汇总，不写入正文、关键词、书籍/章节 ID、Cookie 或请求头；快照最多 256 个步骤且文件不超过 256 KB。远端章节响应也保留请求步骤，导出时按 pipeline、书籍、章节顺序合并，并追加缓存命中或 stale 回退事件。
 
-远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）；[GitHub Actions run 30763032154](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30763032154)（有限 JSONPath，44 tests）；[GitHub Actions run 30764314398](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30764314398)（URL 回退链，47 tests）；[GitHub Actions run 30764884266](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30764884266)（脱敏诊断快照导出，47 tests）；[GitHub Actions run 30765352024](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30765352024)（书籍/章节统一请求时间线，47 tests）。
+远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）；[GitHub Actions run 30763032154](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30763032154)（有限 JSONPath，44 tests）；[GitHub Actions run 30764314398](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30764314398)（URL 回退链，47 tests）；[GitHub Actions run 30764884266](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30764884266)（脱敏诊断快照导出，47 tests）；[GitHub Actions run 30765352024](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30765352024)（书籍/章节统一请求时间线，47 tests）；[GitHub Actions run 30765823280](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30765823280)（URL 阶段超时预算，48 tests）。
 
 后续切片：
 
 1. 为已合并的书籍/章节诊断事件补充稳定时间戳、可排序重试时间线和跨请求耗时统计。
 2. 保持复杂 JSONPath（函数、脚本、逻辑组合）拒绝，并根据授权夹具补充有限数字/布尔值过滤。
-3. 在不执行脚本的前提下补多级 URL 中间模型，限制深度、响应数和总耗时。
+3. 在不执行脚本的前提下补多级 URL 中间模型，限制深度和响应数；将阶段预算扩展为可观测的 pipeline 总耗时，并评估显式用户取消。
 4. 为链式规则增加请求级取消、超时预算和 UI 中的候选命中说明。
 
 ## M7.3 XPath 评估闸门
