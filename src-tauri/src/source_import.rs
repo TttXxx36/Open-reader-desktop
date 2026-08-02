@@ -792,8 +792,7 @@ mod tests {
             Some("https://metadata.example.test/")
         );
         let source: BookSource =
-            serde_json::from_str(&imported[0].config_json)
-                .expect("canonical metadata source");
+            serde_json::from_str(&imported[0].config_json).expect("canonical metadata source");
         assert_eq!(
             source.source_url.as_deref(),
             Some("https://metadata.example.test/")
