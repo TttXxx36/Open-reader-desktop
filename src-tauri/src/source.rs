@@ -1377,10 +1377,7 @@ fn is_json_rule_path(value: &str) -> bool {
 
 fn normalize_json_path(path: &str) -> Result<String, SourceError> {
     let trimmed = path.trim();
-    let path = trimmed
-        .strip_prefix("json:")
-        .unwrap_or(trimmed)
-        .trim();
+    let path = trimmed.strip_prefix("json:").unwrap_or(trimmed).trim();
 
     if path.is_empty() || !path.starts_with('$') {
         return Err(SourceError::InvalidJsonPath(path.to_string()));
@@ -1432,10 +1429,7 @@ fn validate_json_path(path: &str) -> Result<(), SourceError> {
     normalize_json_path(path).map(|_| ())
 }
 
-fn extract_json_nodes<'a>(
-    value: &'a Value,
-    path: &str,
-) -> Result<Vec<&'a Value>, SourceError> {
+fn extract_json_nodes<'a>(value: &'a Value, path: &str) -> Result<Vec<&'a Value>, SourceError> {
     let path = normalize_json_path(path)?;
     if path == "$" {
         return Ok(vec![value]);
@@ -1554,9 +1548,7 @@ fn extract_json_rule(value: &Value, rule: &SourceRule) -> Result<String, SourceE
         .next()
         .ok_or(SourceError::NoMatch)?;
     let selected = if let Some(attribute) = rule.attr() {
-        selected
-            .get(attribute)
-            .ok_or(SourceError::NoMatch)?
+        selected.get(attribute).ok_or(SourceError::NoMatch)?
     } else {
         selected
     };
@@ -1593,8 +1585,8 @@ fn parse_json_rule_document(
     item_path: Option<&str>,
     rule: Option<&SourceRule>,
 ) -> Result<Option<String>, SourceError> {
-    let value: Value = serde_json::from_str(body)
-        .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+    let value: Value =
+        serde_json::from_str(body).map_err(|error| SourceError::InvalidJson(error.to_string()))?;
     let context = first_json_context(&value, item_path)?;
     extract_json_rule_optional(context, rule)
 }
@@ -1604,8 +1596,8 @@ fn parse_book_info_json(
     body: &str,
     book_url: &str,
 ) -> Result<BookInfo, SourceError> {
-    let value: Value = serde_json::from_str(body)
-        .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+    let value: Value =
+        serde_json::from_str(body).map_err(|error| SourceError::InvalidJson(error.to_string()))?;
     let context = first_json_context(&value, rules.item.as_deref())?;
     Ok(BookInfo {
         title: extract_json_rule_optional(context, rules.title.as_ref())?
@@ -1622,8 +1614,8 @@ fn parse_chapter_list_json(
     body: &str,
     base_url: &str,
 ) -> Result<Vec<SourceChapter>, SourceError> {
-    let value: Value = serde_json::from_str(body)
-        .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+    let value: Value =
+        serde_json::from_str(body).map_err(|error| SourceError::InvalidJson(error.to_string()))?;
     let items = extract_json_nodes(&value, rules.item.as_deref().unwrap_or("$"))?;
     let mut chapters = Vec::new();
 
