@@ -199,6 +199,17 @@ interface SourceDiagnosticSnapshot {
     cache_events: number;
     total_duration_ms: number;
   };
+  multi_source: {
+    enabled_sources: number;
+    result_count: number;
+    failures: Array<{ source_name: string; message: string }>;
+    diagnostics: Array<{
+      source_name: string;
+      pages_scanned: number;
+      parsed_items: number;
+      stop_reason: string;
+    }>;
+  } | null;
   cache: SourceCacheStatus | null;
   steps: ExportedDiagnosticStep[];
   truncated_steps: boolean;
@@ -1200,6 +1211,13 @@ function sanitizeDiagnosticStep(step: SourceDebugStep, prefix = ""): SourceDebug
   };
 }
 
+function sanitizeDiagnosticMessage(value: string) {
+  return truncateDiagnostic(
+    value.replace(/https?:\\/\\/[^\\s]+/g, (match) => sanitizeDiagnosticUrl(match)),
+    512,
+  );
+}
+
 function cacheDiagnosticStep(stage: string, url: string, error: string | null): SourceDebugStep {
   return {
     stage,
@@ -1207,23 +1225,43 @@ function cacheDiagnosticStep(stage: string, url: string, error: string | null): 
     duration_ms: 0,
     status: null,
     bytes: null,
-    error: error ? truncateDiagnostic(error, 512) : null,
+    error: error ? sanitizeDiagnosticMessage(error) : null,
     variables: {},
     cache_hit: true,
   };
 }
 
+function failureDiagnosticStep(stage: string, message: string): SourceDebugStep {
+  return {
+    stage: truncateDiagnostic(stage, 128),
+    url: "",
+    duration_ms: 0,
+    status: null,
+    bytes: null,
+    error: sanitizeDiagnosticMessage(message),
+    variables: {},
+    cache_hit: false,
+  };
+}
+
 function exportSourceDiagnostics() {
   const pipeline = sourcePipeline.value;
-  if (!pipeline && !remoteBook.value && !remoteChapter.value) {
-    errorMessage.value = "请先运行一次书源调试或打开远端章节";
+  if (!pipeline && !remoteBook.value && !remoteChapter.value && !searchResult.value) {
+    errorMessage.value = "请先运行书源调试、搜索或打开远端章节";
     return;
   }
 
   const sourceValue = sourceValidation.value?.source;
   const sourceName = isRecord(sourceValue) && typeof sourceValue.name === "string"
     ? truncateDiagnostic(sourceValue.name, 128)
-    : remoteBook.value?.source_name || "当前书源";
+    : remoteBook.value?.source_name
+      || (searchResult.value ? "多源搜索" : "当前书源");
+  const searchFailureEvents = (searchResult.value?.failures ?? [])
+    .slice(0, 64)
+    .map((failure) => failureDiagnosticStep(
+      "search." + truncateDiagnostic(failure.source_name, 96) + ".failure",
+      failure.message,
+    ));
   const rawSteps = [
     ...(pipeline?.debug_steps ?? []).map((step) => ({ step, prefix: "pipeline." })),
     ...(remoteBook.value?.debug_steps ?? []).map((step) => ({ step, prefix: "book." })),
@@ -1246,6 +1284,7 @@ function exportSourceDiagnostics() {
       : []),
   ];
   const sanitizedSteps = [
+    ...searchFailureEvents,
     ...rawSteps.map(({ step, prefix }) => sanitizeDiagnosticStep(step, prefix)),
     ...cacheEvents,
   ];
@@ -1267,7 +1306,7 @@ function exportSourceDiagnostics() {
     source_name: sourceName,
     timeline_basis: "relative_monotonic_ms",
     summary: {
-      search_results: pipeline?.search_results.length ?? 0,
+      search_results: pipeline?.search_results.length ?? searchResult.value?.results.length ?? 0,
       chapters: pipeline?.chapters.length ?? remoteBook.value?.chapters.length ?? 0,
       request_steps: steps.length,
       failed_steps: steps.filter((step) => Boolean(step.error)).length,
@@ -1275,6 +1314,20 @@ function exportSourceDiagnostics() {
       cache_events: cacheEvents.length,
       total_duration_ms: steps.reduce((total, step) => total + step.duration_ms, 0),
     },
+    multi_source: searchResult.value ? {
+      enabled_sources: searchResult.value.enabled_sources,
+      result_count: searchResult.value.results.length,
+      failures: searchResult.value.failures.slice(0, 64).map((failure) => ({
+        source_name: truncateDiagnostic(failure.source_name, 128),
+        message: sanitizeDiagnosticMessage(failure.message),
+      })),
+      diagnostics: searchResult.value.diagnostics.slice(0, 64).map((diagnostic) => ({
+        source_name: truncateDiagnostic(diagnostic.source_name, 128),
+        pages_scanned: Math.max(0, Math.round(diagnostic.pages_scanned)),
+        parsed_items: Math.max(0, Math.round(diagnostic.parsed_items)),
+        stop_reason: truncateDiagnostic(diagnostic.stop_reason, 64),
+      })),
+    } : null,
     cache: sourceCacheStatus.value ? { ...sourceCacheStatus.value } : null,
     steps,
     truncated_steps: sanitizedSteps.length > steps.length,
@@ -1282,6 +1335,7 @@ function exportSourceDiagnostics() {
       "不导出关键词、书籍/章节 ID、请求头、Cookie 或正文",
       "URL 查询参数和片段已移除",
       "变量值统一替换为 <redacted>",
+      "多源搜索只导出失败原因与停止统计，不导出搜索关键词",
     ],
   };
   const payload = JSON.stringify(snapshot, null, 2);
