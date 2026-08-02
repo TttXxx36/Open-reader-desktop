@@ -823,6 +823,8 @@ struct RemoteChapterContent {
     refresh_error: Option<String>,
     #[serde(default)]
     cache_hit: bool,
+    #[serde(default)]
+    debug_steps: Vec<source::SourceDebugStep>,
 }
 
 impl From<source::SourceChapterContent> for RemoteChapterContent {
@@ -834,6 +836,7 @@ impl From<source::SourceChapterContent> for RemoteChapterContent {
             stale: false,
             refresh_error: None,
             cache_hit: false,
+            debug_steps: Vec::new(),
         }
     }
 }
@@ -1046,12 +1049,19 @@ async fn fetch_source_chapter(
         .fetch_chapter_content(&source, &chapter, &mut debug_steps)
         .await
     {
-        Ok(content) => RemoteChapterContent::from(content),
+        Ok(content) => {
+            let mut result = RemoteChapterContent::from(content);
+            result.debug_steps = debug_steps;
+            result
+        }
         Err(error) => {
             if let Some(mut fallback) = previous {
                 mark_chapter_cache_hit(&mut fallback);
                 fallback.stale = true;
                 fallback.refresh_error = Some(error.to_string());
+                if !debug_steps.is_empty() {
+                    fallback.debug_steps = debug_steps;
+                }
                 return Ok(fallback);
             }
             return Err(error.to_string());
