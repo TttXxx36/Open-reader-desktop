@@ -180,10 +180,16 @@ interface SourcePipelineResult {
   debug_steps: SourceDebugStep[];
 }
 
+interface ExportedDiagnosticStep extends SourceDebugStep {
+  order: number;
+  start_ms: number;
+}
+
 interface SourceDiagnosticSnapshot {
   schema_version: 1;
   generated_at: string;
   source_name: string;
+  timeline_basis: "relative_monotonic_ms";
   summary: {
     search_results: number;
     chapters: number;
@@ -194,7 +200,7 @@ interface SourceDiagnosticSnapshot {
     total_duration_ms: number;
   };
   cache: SourceCacheStatus | null;
-  steps: SourceDebugStep[];
+  steps: ExportedDiagnosticStep[];
   truncated_steps: boolean;
   privacy: string[];
 }
@@ -1212,14 +1218,27 @@ function exportSourceDiagnostics() {
         )]
       : []),
   ];
-  const steps = [
+  const sanitizedSteps = [
     ...rawSteps.map(({ step, prefix }) => sanitizeDiagnosticStep(step, prefix)),
     ...cacheEvents,
-  ].slice(0, MAX_DIAGNOSTIC_STEPS);
+  ];
+  let elapsedMs = 0;
+  const steps: ExportedDiagnosticStep[] = sanitizedSteps
+    .slice(0, MAX_DIAGNOSTIC_STEPS)
+    .map((step, index) => {
+      const positioned: ExportedDiagnosticStep = {
+        ...step,
+        order: index + 1,
+        start_ms: elapsedMs,
+      };
+      elapsedMs += step.duration_ms;
+      return positioned;
+    });
   const snapshot: SourceDiagnosticSnapshot = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
     source_name: sourceName,
+    timeline_basis: "relative_monotonic_ms",
     summary: {
       search_results: pipeline?.search_results.length ?? 0,
       chapters: pipeline?.chapters.length ?? remoteBook.value?.chapters.length ?? 0,
@@ -1231,7 +1250,7 @@ function exportSourceDiagnostics() {
     },
     cache: sourceCacheStatus.value ? { ...sourceCacheStatus.value } : null,
     steps,
-    truncated_steps: rawSteps.length + cacheEvents.length > steps.length,
+    truncated_steps: sanitizedSteps.length > steps.length,
     privacy: [
       "不导出关键词、书籍/章节 ID、请求头、Cookie 或正文",
       "URL 查询参数和片段已移除",
