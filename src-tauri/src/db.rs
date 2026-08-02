@@ -1,4 +1,4 @@
-use crate::library::ParsedBook;
+use crate::{library::ParsedBook, source::BookSource};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::Serialize;
 use std::{
@@ -57,6 +57,44 @@ pub struct SourceSummary {
     pub enabled: bool,
     pub config_json: String,
     pub updated_at: String,
+    pub source_url: Option<String>,
+    pub group_name: String,
+    pub source_type: i64,
+    pub weight: i64,
+    pub enabled_explore: bool,
+    pub custom_order: i64,
+    pub comment: String,
+    pub book_url_pattern: Option<String>,
+    pub explore_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SourceMetadata {
+    source_url: Option<String>,
+    group_name: String,
+    source_type: i64,
+    weight: i64,
+    enabled_explore: bool,
+    custom_order: i64,
+    comment: String,
+    book_url_pattern: Option<String>,
+    explore_url: Option<String>,
+}
+
+impl From<&BookSource> for SourceMetadata {
+    fn from(source: &BookSource) -> Self {
+        Self {
+            source_url: source.source_url.clone(),
+            group_name: source.group.clone().unwrap_or_default(),
+            source_type: source.source_type,
+            weight: source.weight,
+            enabled_explore: source.enabled_explore,
+            custom_order: source.custom_order,
+            comment: source.comment.clone().unwrap_or_default(),
+            book_url_pattern: source.book_url_pattern.clone(),
+            explore_url: source.explore_url.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -83,6 +121,7 @@ impl Database {
         let database_path: PathBuf = app_data_dir.join("open-reader.db");
         let mut connection = Connection::open(database_path)?;
         apply_migrations(&mut connection)?;
+        backfill_source_metadata(&connection)?;
 
         Ok(Self {
             connection: Mutex::new(connection),
@@ -159,9 +198,11 @@ impl Database {
     pub fn list_sources(&self) -> Result<Vec<SourceSummary>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let mut statement = connection.prepare(
-            "SELECT id, name, enabled, config_json, updated_at
+            "SELECT id, name, enabled, config_json, updated_at,
+                    source_url, group_name, source_type, weight,
+                    enabled_explore, custom_order, comment, book_url_pattern, explore_url
              FROM book_sources
-             ORDER BY name COLLATE NOCASE",
+             ORDER BY group_name COLLATE NOCASE, custom_order, weight DESC, name COLLATE NOCASE",
         )?;
         let rows = statement.query_map([], source_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
@@ -172,6 +213,7 @@ impl Database {
         source_id: Option<&str>,
         name: &str,
         config_json: &str,
+        metadata: &SourceMetadata,
     ) -> Result<SourceSummary, DbError> {
         let id = source_id
             .filter(|value| !value.trim().is_empty())
@@ -179,17 +221,44 @@ impl Database {
             .unwrap_or_else(|| generated_id("source"));
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         connection.execute(
-            "INSERT INTO book_sources (id, name, config_json)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO book_sources (
+               id, name, config_json, source_url, group_name, source_type, weight,
+               enabled_explore, custom_order, comment, book_url_pattern, explore_url
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
                name = excluded.name,
                config_json = excluded.config_json,
+               source_url = excluded.source_url,
+               group_name = excluded.group_name,
+               source_type = excluded.source_type,
+               weight = excluded.weight,
+               enabled_explore = excluded.enabled_explore,
+               custom_order = excluded.custom_order,
+               comment = excluded.comment,
+               book_url_pattern = excluded.book_url_pattern,
+               explore_url = excluded.explore_url,
                updated_at = CURRENT_TIMESTAMP",
-            params![id, name, config_json],
+            params![
+                id,
+                name,
+                config_json,
+                metadata.source_url.as_deref(),
+                metadata.group_name,
+                metadata.source_type,
+                metadata.weight,
+                metadata.enabled_explore,
+                metadata.custom_order,
+                metadata.comment,
+                metadata.book_url_pattern.as_deref(),
+                metadata.explore_url.as_deref()
+            ],
         )?;
         connection
             .query_row(
-                "SELECT id, name, enabled, config_json, updated_at
+                "SELECT id, name, enabled, config_json, updated_at,
+                    source_url, group_name, source_type, weight,
+                    enabled_explore, custom_order, comment, book_url_pattern, explore_url
                  FROM book_sources
                  WHERE id = ?1",
                 params![id],
@@ -215,7 +284,9 @@ impl Database {
         }
         connection
             .query_row(
-                "SELECT id, name, enabled, config_json, updated_at
+                "SELECT id, name, enabled, config_json, updated_at,
+                    source_url, group_name, source_type, weight,
+                    enabled_explore, custom_order, comment, book_url_pattern, explore_url
                  FROM book_sources
                  WHERE id = ?1",
                 params![source_id],
@@ -495,6 +566,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
         (3_i64, include_str!("../migrations/0003_sources.sql")),
         (4_i64, include_str!("../migrations/0004_source_cache.sql")),
         (5_i64, include_str!("../migrations/0005_content_format.sql")),
+        (6_i64, include_str!("../migrations/0006_source_metadata.sql")),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -538,7 +610,58 @@ fn source_from_row(row: &Row<'_>) -> rusqlite::Result<SourceSummary> {
         enabled: row.get::<_, i64>(2)? != 0,
         config_json: row.get(3)?,
         updated_at: row.get(4)?,
+        source_url: row.get(5)?,
+        group_name: row.get(6)?,
+        source_type: row.get(7)?,
+        weight: row.get(8)?,
+        enabled_explore: row.get::<_, i64>(9)? != 0,
+        custom_order: row.get(10)?,
+        comment: row.get(11)?,
+        book_url_pattern: row.get(12)?,
+        explore_url: row.get(13)?,
     })
+}
+
+fn backfill_source_metadata(connection: &Connection) -> Result<(), DbError> {
+    let rows = {
+        let mut statement = connection.prepare("SELECT id, config_json FROM book_sources")?;
+        statement
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+
+    for (id, config_json) in rows {
+        let Ok(source) = serde_json::from_str::<BookSource>(&config_json) else {
+            continue;
+        };
+        let metadata = SourceMetadata::from(&source);
+        connection.execute(
+            "UPDATE book_sources
+             SET source_url = ?1,
+                 group_name = ?2,
+                 source_type = ?3,
+                 weight = ?4,
+                 enabled_explore = ?5,
+                 custom_order = ?6,
+                 comment = ?7,
+                 book_url_pattern = ?8,
+                 explore_url = ?9
+             WHERE id = ?10",
+            params![
+                metadata.source_url.as_deref(),
+                metadata.group_name,
+                metadata.source_type,
+                metadata.weight,
+                metadata.enabled_explore,
+                metadata.custom_order,
+                metadata.comment,
+                metadata.book_url_pattern.as_deref(),
+                metadata.explore_url.as_deref(),
+                id
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 fn unix_timestamp() -> i64 {
@@ -574,7 +697,12 @@ mod tests {
         ));
         let database = Database::open(&directory).expect("database should open");
         let saved = database
-            .save_source(None, "Fixture", r#"{"name":"Fixture"}"#)
+            .save_source(
+                None,
+                "Fixture",
+                r#"{"name":"Fixture"}"#,
+                &SourceMetadata::default(),
+            )
             .expect("source should save");
         assert!(saved.enabled);
         assert_eq!(
