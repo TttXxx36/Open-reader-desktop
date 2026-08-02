@@ -59,6 +59,7 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 - [x] 对 URL 长度（2 KB）和响应体大小（2 MB）设置上限，不携带 Cookie 或认证头
 - [x] 导入前显示预览，自动跳过不兼容条目；仅保存通过校验的条目
 - [x] 使用合成夹具覆盖原生包、数组、包装对象、字符串包装和常见 Legado 别名；授权来源夹具仍需后续补充
+- [x] 支持安全 JSONPath/API 规则：搜索、书籍信息、目录和正文均可按 `$.items[*]`、数组下标和 `json:` 前缀提取
 
 ### M6.2 阅读内容模型
 
@@ -92,8 +93,9 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 - 2026-08-02：新增导入预览和逐项结果：本地文件与 URL 都先展示可导入/跳过原因，确认后只保存通过校验的条目；原始脚本、XPath 和敏感认证头仍不会执行或带入请求。
 - 2026-08-02：补齐常见 Legado 别名（`bookName`、`bookAuthor`、`coverUrl`）、多行/JSON 字符串 `header` 解析及 `pageNum/page±1` 占位符回归测试；敏感认证头仍由校验拒绝。
 - 2026-08-02：新增 `scripts/verify-ui-contract.mjs` 并接入 CI；Rust 适配器包含原生包、Legado CSS 子集、数组、无效文档、不安全规则和未知属性测试。
-- 当前边界：界面导入使用预览和逐条跳过，原有 `import_sources` 命令仍保留整包严格模式供兼容调用；JSON API 规则、更多编码和授权夹具仍需后续 M6.1/M6.2 评估。本轮不在本地构建或安装。
-- CI 验证：运行 [30710780902](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30710780902) 在提交 `43c6fdf` 上通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 Rust tests；预览、URL 预取和选中项导入均包含在本次验证中。
+- 2026-08-02：新增安全 JSONPath 解析层，支持字符串/对象规则、`jsonPath`/`path` 别名、对象字段、通配数组和数组下标；HTML/CSS 书源路径保持兼容。
+- 当前边界：界面导入使用预览和逐条跳过，原有 `import_sources` 命令仍保留整包严格模式供兼容调用；JSONPath 仅支持安全字段/数组遍历，不执行过滤表达式、XPath、JavaScript 或认证逻辑；更多编码和授权夹具仍需后续评估。本轮不在本地构建或安装。
+- CI 验证：运行 [30741525350](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30741525350) 通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 29 个 Rust tests；JSONPath 导入和搜索解析回归测试均包含在本次验证中。
 
 ## 四、测试与验收
 
