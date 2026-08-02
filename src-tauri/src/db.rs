@@ -68,6 +68,57 @@ pub struct SourceSummary {
     pub explore_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceSnapshotSummary {
+    pub id: String,
+    pub label: String,
+    pub source_count: i64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SourceWrite {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub config_json: String,
+    pub source_url: Option<String>,
+    pub group_name: String,
+    pub source_type: i64,
+    pub weight: i64,
+    pub enabled_explore: bool,
+    pub custom_order: i64,
+    pub comment: String,
+    pub book_url_pattern: Option<String>,
+    pub explore_url: Option<String>,
+}
+
+impl SourceWrite {
+    pub fn from_source(
+        id: String,
+        source: &BookSource,
+        config_json: String,
+        enabled: bool,
+    ) -> Self {
+        let metadata = SourceMetadata::from(source);
+        Self {
+            id,
+            name: source.name.clone(),
+            enabled,
+            config_json,
+            source_url: metadata.source_url,
+            group_name: metadata.group_name,
+            source_type: metadata.source_type,
+            weight: metadata.weight,
+            enabled_explore: metadata.enabled_explore,
+            custom_order: metadata.custom_order,
+            comment: metadata.comment,
+            book_url_pattern: metadata.book_url_pattern,
+            explore_url: metadata.explore_url,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SourceMetadata {
     source_url: Option<String>,
@@ -265,6 +316,124 @@ impl Database {
                 source_from_row,
             )
             .map_err(DbError::from)
+    }
+
+    pub fn apply_sources_atomic(
+        &self,
+        writes: &[SourceWrite],
+        replace_all: bool,
+    ) -> Result<Vec<SourceSummary>, DbError> {
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+
+        if replace_all {
+            transaction.execute_batch("DELETE FROM source_cache; DELETE FROM book_sources;")?;
+        }
+
+        for write in writes {
+            transaction.execute(
+                "INSERT INTO book_sources (
+                   id, name, enabled, config_json, source_url, group_name, source_type, weight,
+                   enabled_explore, custom_order, comment, book_url_pattern, explore_url
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                 ON CONFLICT(id) DO UPDATE SET
+                   name = excluded.name,
+                   enabled = excluded.enabled,
+                   config_json = excluded.config_json,
+                   source_url = excluded.source_url,
+                   group_name = excluded.group_name,
+                   source_type = excluded.source_type,
+                   weight = excluded.weight,
+                   enabled_explore = excluded.enabled_explore,
+                   custom_order = excluded.custom_order,
+                   comment = excluded.comment,
+                   book_url_pattern = excluded.book_url_pattern,
+                   explore_url = excluded.explore_url,
+                   updated_at = CURRENT_TIMESTAMP",
+                params![
+                    write.id,
+                    write.name,
+                    write.enabled,
+                    write.config_json,
+                    write.source_url.as_deref(),
+                    write.group_name,
+                    write.source_type,
+                    write.weight,
+                    write.enabled_explore,
+                    write.custom_order,
+                    write.comment,
+                    write.book_url_pattern.as_deref(),
+                    write.explore_url.as_deref(),
+                ],
+            )?;
+        }
+
+        transaction.commit()?;
+        drop(connection);
+        self.list_sources()
+    }
+
+    pub fn create_source_snapshot(
+        &self,
+        label: &str,
+        payload_json: &str,
+        source_count: i64,
+    ) -> Result<SourceSnapshotSummary, DbError> {
+        let id = generated_id("source-snapshot");
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection.execute(
+            "INSERT INTO source_snapshots (id, label, payload_json, source_count)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![id, label, payload_json, source_count],
+        )?;
+        connection
+            .query_row(
+                "SELECT id, label, source_count, created_at
+                 FROM source_snapshots
+                 WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(SourceSnapshotSummary {
+                        id: row.get(0)?,
+                        label: row.get(1)?,
+                        source_count: row.get(2)?,
+                        created_at: row.get(3)?,
+                    })
+                },
+            )
+            .map_err(DbError::from)
+    }
+
+    pub fn list_source_snapshots(&self) -> Result<Vec<SourceSnapshotSummary>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let mut statement = connection.prepare(
+            "SELECT id, label, source_count, created_at
+             FROM source_snapshots
+             ORDER BY created_at DESC, id DESC
+             LIMIT 20",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(SourceSnapshotSummary {
+                id: row.get(0)?,
+                label: row.get(1)?,
+                source_count: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn get_source_snapshot(&self, snapshot_id: &str) -> Result<String, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection
+            .query_row(
+                "SELECT payload_json FROM source_snapshots WHERE id = ?1",
+                params![snapshot_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)
     }
 
     pub fn set_source_enabled(
@@ -569,6 +738,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
         (
             6_i64,
             include_str!("../migrations/0006_source_metadata.sql"),
+        ),
+        (
+            7_i64,
+            include_str!("../migrations/0007_source_snapshots.sql"),
         ),
     ] {
         let applied: Option<i64> = connection
