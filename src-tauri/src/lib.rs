@@ -433,7 +433,11 @@ fn find_existing_source<'a>(
             return Some(found);
         }
     }
-    if let Some(source_url) = source.source_url.as_deref().filter(|value| !value.is_empty()) {
+    if let Some(source_url) = source
+        .source_url
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
         if let Some(found) = sources
             .iter()
             .find(|item| item.source_url.as_deref() == Some(source_url))
@@ -496,9 +500,7 @@ fn persist_imported_sources_with_strategy(
         let id = if conflict_strategy == "new" {
             None
         } else {
-            existing_source
-                .map(|source| source.id.clone())
-                .or(item.id)
+            existing_source.map(|source| source.id.clone()).or(item.id)
         }
         .unwrap_or_else(|| generated_import_source_id(index));
         target_ids.push(id.clone());
@@ -757,9 +759,7 @@ fn restore_source_snapshot(
                 validation.errors.join("；")
             ));
         }
-        let id = item
-            .id
-            .unwrap_or_else(|| generated_import_source_id(index));
+        let id = item.id.unwrap_or_else(|| generated_import_source_id(index));
         writes.push(SourceWrite::from_source(
             id,
             &source,
