@@ -64,6 +64,7 @@ pub struct ChapterContent {
     pub id: String,
     pub title: String,
     pub content: String,
+    pub content_format: String,
     pub index: i64,
     pub total: i64,
 }
@@ -137,14 +138,15 @@ impl Database {
         for (index, chapter) in chapters.into_iter().enumerate() {
             let chapter_id = format!("{book_id}-chapter-{index}");
             transaction.execute(
-                "INSERT INTO chapters (id, book_id, chapter_index, title, content)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO chapters (id, book_id, chapter_index, title, content, content_format)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     chapter_id,
                     book_id,
                     index as i64,
                     chapter.title,
-                    chapter.content
+                    chapter.content,
+                    chapter.content_format
                 ],
             )?;
         }
@@ -417,7 +419,7 @@ impl Database {
         )?;
         connection
             .query_row(
-                "SELECT id, title, content, chapter_index
+                "SELECT id, title, content, content_format, chapter_index
                  FROM chapters
                  WHERE book_id = ?1 AND id = ?2",
                 params![book_id, chapter_id],
@@ -426,7 +428,8 @@ impl Database {
                         id: row.get(0)?,
                         title: row.get(1)?,
                         content: row.get(2)?,
-                        index: row.get(3)?,
+                        content_format: row.get(3)?,
+                        index: row.get(4)?,
                         total,
                     })
                 },
@@ -491,6 +494,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
         (2_i64, include_str!("../migrations/0002_library.sql")),
         (3_i64, include_str!("../migrations/0003_sources.sql")),
         (4_i64, include_str!("../migrations/0004_source_cache.sql")),
+        (5_i64, include_str!("../migrations/0005_content_format.sql")),
     ] {
         let applied: Option<i64> = connection
             .query_row(
