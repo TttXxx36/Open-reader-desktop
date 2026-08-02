@@ -394,7 +394,9 @@ mod tests {
     fn strips_utf8_bom_and_preserves_indentation() {
         let bytes = [
             vec![0xEF, 0xBB, 0xBF],
-            "第一章\n  首行缩进\n\n第二章\n第二段内容".as_bytes().to_vec(),
+            "第一章\n  首行缩进\n\n第二章\n第二段内容"
+                .as_bytes()
+                .to_vec(),
         ]
         .concat();
         let book = parse_book_bytes("bom.txt", &bytes).expect("BOM txt should parse");
