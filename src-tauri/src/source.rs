@@ -276,9 +276,27 @@ pub struct SourceSearchFailure {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SourceSearchDiagnostics {
+    pub source_id: String,
+    pub source_name: String,
+    pub pages_scanned: usize,
+    pub parsed_items: usize,
+    pub stop_reason: String,
+}
+
+#[derive(Debug, Clone)]
+struct PagedSearchResult {
+    results: Vec<SearchResult>,
+    pages_scanned: usize,
+    parsed_items: usize,
+    stop_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct MultiSourceSearchResult {
     pub results: Vec<UnifiedSearchResult>,
     pub failures: Vec<SourceSearchFailure>,
+    pub diagnostics: Vec<SourceSearchDiagnostics>,
     pub enabled_sources: usize,
 }
 
@@ -529,14 +547,34 @@ impl SourceEngine {
         keyword: &str,
         requested_pages: usize,
     ) -> Result<Vec<SearchResult>, SourceError> {
+        Ok(self
+            .search_pages_with_diagnostics(source, keyword, requested_pages)
+            .await?
+            .results)
+    }
+
+    async fn search_pages_with_diagnostics(
+        &self,
+        source: &BookSource,
+        keyword: &str,
+        requested_pages: usize,
+    ) -> Result<PagedSearchResult, SourceError> {
+        let limit = bounded_search_pages(requested_pages);
         let mut results = Vec::new();
         let mut seen = HashSet::new();
-        for page in 1..=bounded_search_pages(requested_pages) {
+        let mut pages_scanned = 0;
+        let mut parsed_items = 0;
+        let mut stop_reason = "max_pages";
+
+        for page in 1..=limit {
+            pages_scanned += 1;
             let page_results = self.search_page(source, keyword, page).await?;
             if page_results.is_empty() {
+                stop_reason = "empty_page";
                 break;
             }
 
+            parsed_items += page_results.len();
             let mut added = 0;
             for item in page_results {
                 if seen.insert(search_result_identity(&item)) {
@@ -545,10 +583,17 @@ impl SourceEngine {
                 }
             }
             if added == 0 {
+                stop_reason = "no_new_results";
                 break;
             }
         }
-        Ok(results)
+
+        Ok(PagedSearchResult {
+            results,
+            pages_scanned,
+            parsed_items,
+            stop_reason: stop_reason.to_string(),
+        })
     }
 
     pub async fn search_many(
@@ -573,7 +618,7 @@ impl SourceEngine {
             let keyword = keyword.to_string();
             tasks.spawn(async move {
                 let result = engine
-                    .search_pages(&definition.source, &keyword, max_pages)
+                    .search_pages_with_diagnostics(&definition.source, &keyword, max_pages)
                     .await;
                 (definition, result)
             });
@@ -581,11 +626,19 @@ impl SourceEngine {
 
         let mut results = Vec::new();
         let mut failures = Vec::new();
+        let mut diagnostics = Vec::new();
 
         while let Some(joined) = tasks.join_next().await {
             match joined {
-                Ok((definition, Ok(items))) => {
-                    results.extend(items.into_iter().map(|item| UnifiedSearchResult {
+                Ok((definition, Ok(paged))) => {
+                    diagnostics.push(SourceSearchDiagnostics {
+                        source_id: definition.id.clone(),
+                        source_name: definition.name.clone(),
+                        pages_scanned: paged.pages_scanned,
+                        parsed_items: paged.parsed_items,
+                        stop_reason: paged.stop_reason,
+                    });
+                    results.extend(paged.results.into_iter().map(|item| UnifiedSearchResult {
                         source_id: definition.id.clone(),
                         source_name: definition.name.clone(),
                         title: item.title,
@@ -593,11 +646,20 @@ impl SourceEngine {
                         book_url: item.book_url,
                     }));
                 }
-                Ok((definition, Err(error))) => failures.push(SourceSearchFailure {
-                    source_id: definition.id,
-                    source_name: definition.name,
-                    message: error.to_string(),
-                }),
+                Ok((definition, Err(error))) => {
+                    diagnostics.push(SourceSearchDiagnostics {
+                        source_id: definition.id.clone(),
+                        source_name: definition.name.clone(),
+                        pages_scanned: 0,
+                        parsed_items: 0,
+                        stop_reason: "request_failed".to_string(),
+                    });
+                    failures.push(SourceSearchFailure {
+                        source_id: definition.id,
+                        source_name: definition.name,
+                        message: error.to_string(),
+                    });
+                }
                 Err(error) => failures.push(SourceSearchFailure {
                     source_id: "unknown".to_string(),
                     source_name: "未知书源".to_string(),
@@ -611,10 +673,16 @@ impl SourceEngine {
                 .cmp(&right.source_name)
                 .then_with(|| left.source_id.cmp(&right.source_id))
         });
+        diagnostics.sort_by(|left, right| {
+            left.source_name
+                .cmp(&right.source_name)
+                .then_with(|| left.source_id.cmp(&right.source_id))
+        });
 
         MultiSourceSearchResult {
             results: dedupe_search_results(results),
             failures,
+            diagnostics,
             enabled_sources,
         }
     }
@@ -2254,6 +2322,23 @@ mod tests {
         assert_eq!(result.results.len(), 1);
         assert_eq!(result.failures.len(), 1);
         assert_eq!(result.results[0].title, "测试书");
+        assert_eq!(result.diagnostics.len(), 2);
+        assert_eq!(
+            result
+                .diagnostics
+                .iter()
+                .find(|item| item.source_id == "fixture")
+                .map(|item| item.stop_reason.as_str()),
+            Some("max_pages")
+        );
+        assert_eq!(
+            result
+                .diagnostics
+                .iter()
+                .find(|item| item.source_id == "broken")
+                .map(|item| item.stop_reason.as_str()),
+            Some("request_failed")
+        );
         server.join().expect("fixture server should stop");
     }
 
