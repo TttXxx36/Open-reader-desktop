@@ -3040,6 +3040,116 @@ mod tests {
     }
 
     #[test]
+    fn covers_next_page_policy_stop_reason_matrix() {
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let cases = [
+            (
+                "page_limit",
+                "https://example.test/chapter/2",
+                "https://example.test/chapter/1",
+                0,
+                policy.max_pages,
+                0,
+                0,
+            ),
+            (
+                "byte_limit",
+                "https://example.test/chapter/2",
+                "https://example.test/chapter/1",
+                0,
+                1,
+                policy.max_bytes,
+                0,
+            ),
+            (
+                "time_limit",
+                "https://example.test/chapter/2",
+                "https://example.test/chapter/1",
+                0,
+                1,
+                0,
+                policy.max_duration_secs,
+            ),
+            (
+                "invalid_next_url",
+                "javascript:alert(1)",
+                "https://example.test/chapter/1",
+                0,
+                1,
+                0,
+                0,
+            ),
+            (
+                "invalid_base_url",
+                "https://example.test/chapter/2",
+                "not-a-url",
+                0,
+                1,
+                0,
+                0,
+            ),
+        ];
+
+        for (reason, candidate, base, depth, pages, bytes, elapsed) in cases {
+            let decision = evaluate_next_page_policy(
+                &policy,
+                base,
+                candidate,
+                depth,
+                pages,
+                bytes,
+                elapsed,
+                &[],
+            );
+            assert_eq!(decision.reason, reason, "{reason}: {decision:?}");
+            assert!(!decision.allowed);
+        }
+
+        let zero_quota = NextPagePolicy {
+            enabled: true,
+            max_depth: 0,
+            ..NextPagePolicy::default()
+        };
+        let decision = evaluate_next_page_policy(
+            &zero_quota,
+            "https://example.test/chapter/1",
+            "https://example.test/chapter/2",
+            0,
+            1,
+            0,
+            0,
+            &[],
+        );
+        assert_eq!(decision.reason, "quota_zero");
+
+        let unbounded = NextPagePolicy {
+            enabled: true,
+            max_depth: usize::MAX,
+            max_pages: usize::MAX,
+            max_bytes: usize::MAX,
+            max_duration_secs: u64::MAX,
+            ..NextPagePolicy::default()
+        };
+        let decision = evaluate_next_page_policy(
+            &unbounded,
+            "https://example.test/chapter/1",
+            "https://example.test/chapter/2",
+            0,
+            1,
+            0,
+            0,
+            &[],
+        );
+        assert!(decision.allowed);
+        assert_eq!(decision.next_depth, 1);
+        assert_eq!(decision.pages_remaining, default_next_page_count() - 2);
+        assert_eq!(decision.bytes_remaining, default_next_page_bytes());
+    }
+
+    #[test]
     fn validates_bounded_nested_content_url() {
         assert_eq!(
             bounded_next_url("https://example.test/chapter/2")
