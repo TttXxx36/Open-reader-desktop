@@ -2134,7 +2134,7 @@ mod tests {
     }
 
     #[test]
-    fn extracts_json_wildcard_values {
+    fn extracts_json_wildcard_values() {
         let engine = SourceEngine::new(1, 1024).expect("engine should build");
         let values = engine
             .extract_json_values(
