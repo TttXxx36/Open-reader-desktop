@@ -89,23 +89,13 @@ pub fn analyze(expression: &str, html: &str) -> XPathAnalysis {
                     html_nodes: 0,
                     estimated_work: 0,
                     elapsed_us: 0,
-                    reason: Some(format!(
-                        "离线 HTML 超过 {} 字节上限",
-                        MAX_XPATH_HTML_BYTES
-                    )),
+                    reason: Some(format!("离线 HTML 超过 {} 字节上限", MAX_XPATH_HTML_BYTES)),
                 }
             } else {
                 let html_nodes = count_html_nodes(html);
-                let estimated_work = steps
-                    .len()
-                    .saturating_mul(html_nodes)
-                    .min(MAX_XPATH_WORK);
-                let reason = (html_nodes > MAX_XPATH_NODE_BUDGET).then(|| {
-                    format!(
-                        "离线 HTML 节点数超过 {} 项上限",
-                        MAX_XPATH_NODE_BUDGET
-                    )
-                });
+                let estimated_work = steps.len().saturating_mul(html_nodes).min(MAX_XPATH_WORK);
+                let reason = (html_nodes > MAX_XPATH_NODE_BUDGET)
+                    .then(|| format!("离线 HTML 节点数超过 {} 项上限", MAX_XPATH_NODE_BUDGET));
 
                 XPathAnalysis {
                     expression: display_expression,
@@ -179,10 +169,7 @@ fn parse_expression(expression: &str) -> Result<Vec<XPathStep>, String> {
         }
         steps.push(step);
         if steps.len() > MAX_XPATH_STEPS {
-            return Err(format!(
-                "XPath 步骤不能超过 {} 项",
-                MAX_XPATH_STEPS
-            ));
+            return Err(format!("XPath 步骤不能超过 {} 项", MAX_XPATH_STEPS));
         }
         remaining = &remaining[end..];
     }
@@ -202,10 +189,7 @@ fn parse_step(axis: XPathAxis, raw_step: &str) -> Result<XPathStep, String> {
                 MAX_XPATH_PREDICATE_BYTES
             ));
         }
-        (
-            &raw_step[..open],
-            Some(parse_predicate(predicate_text)?),
-        )
+        (&raw_step[..open], Some(parse_predicate(predicate_text)?))
     } else {
         (raw_step, None)
     };
@@ -272,9 +256,8 @@ fn parse_name(value: &str) -> Result<String, String> {
         return Err("XPath 节点名不能为空".to_string());
     };
     if !(first.is_ascii_alphabetic() || first == '_')
-        || !characters.all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
-        })
+        || !characters
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
     {
         return Err("XPath 节点名只支持 ASCII 字母、数字、下划线和短横线".to_string());
     }
@@ -314,7 +297,12 @@ mod tests {
 
     #[test]
     fn rejects_xpath_functions_axes_and_union() {
-        for expression in ["//article/text()", "//article/../a", "//article | //a", "//article::a"] {
+        for expression in [
+            "//article/text()",
+            "//article/../a",
+            "//article | //a",
+            "//article::a",
+        ] {
             let analysis = analyze(expression, "<article><a>demo</a></article>");
             assert!(!analysis.accepted, "{expression}: {analysis:?}");
             assert!(analysis.reason.is_some());
@@ -339,7 +327,11 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_predicates() {
-        for expression in ["//article[@class]", "//article[@class!='book']", "//article[foo]"] {
+        for expression in [
+            "//article[@class]",
+            "//article[@class!='book']",
+            "//article[foo]",
+        ] {
             let analysis = analyze(expression, "<article>demo</article>");
             assert!(!analysis.accepted, "{expression}: {analysis:?}");
         }
