@@ -319,7 +319,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
             <button
               class="secondary-button"
               type="button"
-              :disabled="sourcePipelineBusy || !sourcePipeline"
+              :disabled="sourcePipelineBusy || (!sourcePipeline && !searchResult)"
               @click="exportSourceDiagnostics"
             >
               导出诊断
