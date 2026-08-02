@@ -455,7 +455,7 @@ fn source_diff_fields(existing: &serde_json::Value, incoming: &serde_json::Value
     ];
     FIELDS
         .iter()
-        .filter(|field| existing.get(**field) != incoming.get(**field))
+        .filter(|field| existing.get(*field) != incoming.get(*field))
         .map(|field| (*field).to_string())
         .collect()
 }
