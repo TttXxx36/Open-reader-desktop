@@ -2108,6 +2108,35 @@ mod tests {
     }
 
     #[test]
+    fn extracts_html_fallback_chain() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Chain Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "article.book",
+                "title": {
+                  "chain": [
+                    { "selector": "h2 a" },
+                    { "selector": ".title" }
+                  ]
+                }
+              }
+            }"#,
+        )
+        .expect("source should parse");
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<article class="book"><span class="title">备用标题</span></article>"#,
+            )
+            .expect("html should parse");
+
+        assert_eq!(results[0].title, "备用标题");
+    }
+
+    #[test]
     fn deduplicates_search_results_by_title_and_author() {
         let results = dedupe_search_results(vec![
             UnifiedSearchResult {
