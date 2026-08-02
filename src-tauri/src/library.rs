@@ -1086,11 +1086,7 @@ mod tests {
             "data:image/jpeg;base64,AAAA".to_string(),
         );
 
-        resolve_epub_images(
-            &mut document,
-            "OPS/Text/chapter.xhtml",
-            &image_sources,
-        );
+        resolve_epub_images(&mut document, "OPS/Text/chapter.xhtml", &image_sources);
 
         assert_eq!(
             document.blocks[0].src.as_deref(),
