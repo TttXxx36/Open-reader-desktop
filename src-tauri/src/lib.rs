@@ -9,11 +9,11 @@ use db::{
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use source::{
     MultiSourceSearchResult, SourceBookDetail, SourceDefinition, SourceEngine, SourcePreview,
     SourceSearchFailure, SourceValidation,
 };
+use std::collections::HashSet;
 use tauri::Manager;
 
 #[tauri::command]
@@ -272,15 +272,7 @@ fn set_sources_explore_enabled(
 ) -> Result<Vec<SourceSummary>, String> {
     validate_source_ids(&database, &source_ids)?;
     for source_id in &source_ids {
-        update_source_metadata_impl(
-            &database,
-            source_id,
-            None,
-            None,
-            None,
-            Some(enabled),
-            None,
-        )?;
+        update_source_metadata_impl(&database, source_id, None, None, None, Some(enabled), None)?;
     }
     database.list_sources().map_err(|error| error.to_string())
 }
