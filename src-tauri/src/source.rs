@@ -1110,13 +1110,7 @@ impl SourceEngine {
                 format!("content.next.depth-{depth}")
             };
             let fetched = match self
-                .fetch_stage_chain(
-                    &stage,
-                    template,
-                    &source.headers,
-                    &context,
-                    debug_steps,
-                )
+                .fetch_stage_chain(&stage, template, &source.headers, &context, debug_steps)
                 .await
             {
                 Ok(fetched) => fetched,
