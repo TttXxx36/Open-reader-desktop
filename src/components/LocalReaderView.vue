@@ -8,7 +8,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
 
 <template>
 <section
-      v-else-if="detail && chapter"
+      v-if="detail && chapter"
       class="content reader-content"
       :class="[`theme-${settings.theme}`, `reading-${settings.readingMode}`]"
       :style="readerStyle"
