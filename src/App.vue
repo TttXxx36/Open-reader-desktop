@@ -228,6 +228,14 @@ interface RemoteChapterContent {
   refresh_error: string | null;
 }
 
+interface SourceSearchDiagnostics {
+  source_id: string;
+  source_name: string;
+  pages_scanned: number;
+  parsed_items: number;
+  stop_reason: string;
+}
+
 interface MultiSourceSearchResult {
   results: UnifiedSearchItem[];
   failures: Array<{
@@ -235,6 +243,7 @@ interface MultiSourceSearchResult {
     source_name: string;
     message: string;
   }>;
+  diagnostics: SourceSearchDiagnostics[];
   enabled_sources: number;
 }
 
@@ -438,6 +447,15 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, parsed));
+}
+
+function paginationStopLabel(reason: string) {
+  return ({
+    empty_page: "遇到空页",
+    no_new_results: "没有新增结果",
+    max_pages: "达到页数上限",
+    request_failed: "请求失败",
+  } as Record<string, string>)[reason] ?? reason;
 }
 
 function normalizeHex(value: unknown, fallback: string) {
@@ -1343,6 +1361,12 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         <p class="search-results-summary">
           已查询 {{ searchResult.enabled_sources }} 个启用书源，最多扫描 {{ searchPageLimit }} 页，去重后 {{ searchResult.results.length }} 条结果。
         </p>
+        <ul v-if="searchResult.diagnostics.length" class="search-diagnostics">
+          <li v-for="diagnostic in searchResult.diagnostics" :key="diagnostic.source_id">
+            <strong>{{ diagnostic.source_name }}</strong>
+            <span>扫描 {{ diagnostic.pages_scanned }} 页 · 解析 {{ diagnostic.parsed_items }} 条 · {{ paginationStopLabel(diagnostic.stop_reason) }}</span>
+          </li>
+        </ul>
         <p v-if="!searchResult.results.length" class="search-results-empty">没有找到匹配书籍。</p>
         <div v-else class="search-results-list">
           <article
@@ -1494,6 +1518,31 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 
 .search-results-summary {
   margin: 16px 0 0;
+}
+
+.search-diagnostics {
+  display: grid;
+  gap: 7px;
+  margin: 13px 0 0;
+  padding: 0;
+  list-style: none;
+  color: #9fb1c8;
+  font-size: 12px;
+}
+
+.search-diagnostics li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 9px;
+  background: rgba(12, 17, 27, 0.42);
+}
+
+.search-diagnostics strong {
+  color: #dce7f7;
 }
 
 .search-results-empty {
