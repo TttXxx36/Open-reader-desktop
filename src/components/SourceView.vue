@@ -7,7 +7,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
 </script>
 
 <template>
-<section v-else-if="view === 'sources'" class="content source-content" id="sources">
+<section v-if="view === 'sources' class="content source-content" id="sources">
       <header class="topbar">
         <div>
           <span class="eyebrow">SOURCE PROTOCOL</span>
