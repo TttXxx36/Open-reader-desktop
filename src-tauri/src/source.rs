@@ -843,9 +843,8 @@ impl SourceEngine {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            SourceError::InvalidUrl("URL 回退链没有可用候选".to_string())
-        }))
+        Err(last_error
+            .unwrap_or_else(|| SourceError::InvalidUrl("URL 回退链没有可用候选".to_string())))
     }
 
     async fn fetch_text(
@@ -889,7 +888,13 @@ impl SourceEngine {
             .ok_or_else(|| SourceError::InvalidConfig("bookInfoUrl is required".to_string()))?;
         let context = SourceRequestContext::book(book_url);
         let (body, _url) = self
-            .fetch_stage_chain("book_info", template, &source.headers, &context, debug_steps)
+            .fetch_stage_chain(
+                "book_info",
+                template,
+                &source.headers,
+                &context,
+                debug_steps,
+            )
             .await?;
         let rules = source
             .book_info
@@ -1733,9 +1738,7 @@ fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>)
 fn split_url_chain(value: &str) -> Result<Vec<&str>, SourceError> {
     let parts = value.split("||").map(str::trim).collect::<Vec<_>>();
     if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
-        return Err(SourceError::InvalidUrl(
-            "URL 回退链包含空候选".to_string(),
-        ));
+        return Err(SourceError::InvalidUrl("URL 回退链包含空候选".to_string()));
     }
     if parts.len() > MAX_URL_CHAIN_LENGTH {
         return Err(SourceError::InvalidUrl(format!(
