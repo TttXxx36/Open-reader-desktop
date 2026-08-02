@@ -310,6 +310,7 @@ const sourcePipelineBusy = ref(false);
 const sourceKeyword = ref("demo");
 const sourcePipeline = ref<SourcePipelineResult | null>(null);
 const searchKeyword = ref("");
+const searchPageLimit = ref(1);
 const searchBusy = ref(false);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
 const sourceTransferBusy = ref(false);
@@ -779,11 +780,16 @@ async function searchSources() {
   const keyword = searchKeyword.value.trim();
   if (!keyword) return;
 
+  const maxPages = Math.min(20, Math.max(1, Math.trunc(searchPageLimit.value || 1)));
+  searchPageLimit.value = maxPages;
   searchBusy.value = true;
   searchResult.value = null;
   errorMessage.value = "";
   try {
-    searchResult.value = await invoke<MultiSourceSearchResult>("search_sources", { keyword });
+    searchResult.value = await invoke<MultiSourceSearchResult>("search_sources", {
+      keyword,
+      maxPages,
+    });
   } catch (error) {
     errorMessage.value = String(error);
   } finally {
@@ -1243,7 +1249,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
@@ -1298,6 +1304,10 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             placeholder="搜索书源中的书"
             @keyup.enter="searchSources"
           />
+          <label class="search-page-limit">
+            <span>页数</span>
+            <input v-model.number="searchPageLimit" type="number" min="1" max="20" aria-label="搜索页数上限" />
+          </label>
           <button class="secondary-button" type="button" :disabled="searchBusy || !searchKeyword.trim()" @click="searchSources">
             {{ searchBusy ? "搜索中…" : "搜索书源" }}
           </button>
@@ -1331,7 +1341,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <button class="source-link-button" type="button" @click="clearSearch">清除</button>
         </div>
         <p class="search-results-summary">
-          已查询 {{ searchResult.enabled_sources }} 个启用书源，去重后 {{ searchResult.results.length }} 条结果。
+          已查询 {{ searchResult.enabled_sources }} 个启用书源，最多扫描 {{ searchPageLimit }} 页，去重后 {{ searchResult.results.length }} 条结果。
         </p>
         <p v-if="!searchResult.results.length" class="search-results-empty">没有找到匹配书籍。</p>
         <div v-else class="search-results-list">
@@ -1431,7 +1441,25 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   background: #0c111b;
 }
 
-.library-search-input:focus {
+.search-page-limit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #9fb1c8;
+  font-size: 12px;
+}
+
+.search-page-limit input {
+  width: 54px;
+  padding: 9px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.library-search-input:focus,
+.search-page-limit input:focus {
   border-color: rgba(139, 183, 255, 0.75);
   outline: none;
 }
