@@ -1224,6 +1224,36 @@ mod tests {
     }
 
     #[test]
+    fn previews_xpath_rule_with_read_only_reason() {
+        let payload = json!([{
+            "bookSourceName": "XPath fixture",
+            "searchUrl": "https://xpath.test/search?q={{key}}",
+            "ruleSearch": {
+                "bookList": "//article",
+                "name": "@xpath=//h2"
+            }
+        }]);
+        let preview = preview_import_bundle(&payload.to_string()).expect("preview");
+        assert_eq!(preview.valid_count, 0);
+        assert_eq!(preview.invalid_count, 1);
+        let entry = &preview.entries[0];
+        assert!(!entry.valid);
+        assert_eq!(entry.unsupported_rules.len(), 2);
+        assert!(entry
+            .unsupported_rules
+            .iter()
+            .any(|rule| rule.value == "//article"));
+        assert!(entry
+            .unsupported_rules
+            .iter()
+            .all(|rule| rule.reason.contains("只读兼容性评估")));
+        assert!(entry
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("不受支持")));
+    }
+
+    #[test]
     fn accepts_string_wrappers() {
         let source = json!({
             "bookSourceName": "String wrapper",
