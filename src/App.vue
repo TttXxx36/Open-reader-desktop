@@ -315,13 +315,6 @@ const themeLabels: Record<ReaderTheme, string> = {
   sepia: "暖色",
   custom: "自定义",
 };
-const readerFontLabels: Record<ReaderFont, string> = {
-  system: "系统无衬线",
-  yahei: "微软雅黑",
-  serif: "宋体/衬线",
-  kai: "楷体",
-};
-
 onMounted(loadBooks);
 watch(settings, (value) => {
   try {
@@ -2758,4 +2751,85 @@ function nextChapter() {
     grid-template-columns: 1fr;
   }
 }
+
+.reader-page {
+  box-sizing: border-box;
+  margin-left: var(--reader-margin-left);
+  margin-right: var(--reader-margin-right);
+  letter-spacing: var(--reader-letter-spacing);
+  text-align: var(--reader-text-align);
+}
+
+.reader-page h2,
+.reader-rich-heading {
+  text-align: var(--reader-text-align);
+}
+
+.reader-meta,
+.chapter-navigation,
+.reader-rich-image {
+  text-align: left;
+}
+
+.reader-rich-block {
+  text-align: var(--reader-text-align);
+}
+
+.reading-paged .reader-page {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+}
+
+.theme-custom .reader-layout {
+  border-color: var(--reader-custom-accent);
+  background: var(--reader-custom-background);
+}
+
+.theme-custom .reader-page {
+  color: var(--reader-custom-text);
+  background: var(--reader-custom-background);
+}
+
+.theme-custom .reader-page h2,
+.theme-custom .reader-rich-heading {
+  color: var(--reader-custom-text);
+}
+
+.theme-custom .reader-meta,
+.theme-custom .reader-heading span,
+.theme-custom .reader-rich-quote,
+.theme-custom .reader-rich-image {
+  color: var(--reader-custom-text);
+}
+
+.theme-custom .reader-rich-quote,
+.theme-custom .reader-rich-image {
+  border-color: var(--reader-custom-accent);
+}
+
+.theme-custom .chapter-panel {
+  border-color: var(--reader-custom-accent);
+  background: var(--reader-custom-background);
+}
+
+.theme-custom .chapter-item:hover,
+.theme-custom .chapter-item.selected {
+  color: var(--reader-custom-background);
+  background: var(--reader-custom-accent);
+}
+
+.nav-item:focus-visible,
+.toolbar-button:focus-visible,
+.secondary-button:focus-visible,
+.import-button:focus-visible,
+.text-button:focus-visible,
+.source-link-button:focus-visible,
+.chapter-item:focus-visible,
+.reader-page:focus-visible {
+  outline: 2px solid #79c9ff;
+  outline-offset: 3px;
+}
+
 </style>
