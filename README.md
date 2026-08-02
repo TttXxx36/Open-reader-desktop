@@ -2,7 +2,7 @@
 
 Windows-first open-source desktop reader inspired by the extensible reading experience of Legado/阅读。
 
-> 项目仍处于早期规划阶段，当前仓库用于公开讨论产品边界、技术路线和实现任务。
+> 项目处于持续开发阶段，M2–M6 代码切片已完成，M6.5 Windows 安装包回归等待 Actions 权限恢复；M7.0 书源元数据兼容已开始。
 
 ## 目标
 
@@ -41,7 +41,10 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [x] 完成来源权限记录、敏感请求头审计与缓存状态查看
 - [x] 完成发布预检脚本与 CI 状态报告
 - [x] 完成手动/标签触发的 Windows 安装器、便携 ZIP 与 SHA-256 发布工作流
+- [x] 完成 M6.0–M6.4 设置、导入兼容、内容块、阅读设置和首页组件化代码切片
+- [x] 完成 M7.0 Legado 书源元数据保真与音频类型明确拒绝
 - [ ] 完成 Windows 安装、升级、卸载与 WebView2 回归（签名暂缓）
+- [ ] 完成 M7.1 书源分组、排序和元数据 SQLite 迁移
 
 ## 本地开发
 
@@ -50,7 +53,7 @@ npm install
 npm run tauri dev
 ```
 
-M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4/M4.1 将搜索、详情、目录和首章正文串成可测试链路，并加入书源持久化、启停和调试诊断；M5 已支持启用书源并发搜索、标题/作者去重、单源失败隔离，以及搜索结果进入远程详情、目录和章节阅读。远程详情与章节正文使用 SQLite TTL 缓存，应用启动时会清理过期缓存；书源页支持经过校验的配置 JSON 导入/导出，远程阅读支持手动强制刷新，章节正文支持按顺序执行的 replaceRules 替换。缓存写入后会保留最新的最多 256 条、总 payload 不超过 32 MiB；手动刷新会计算目录指纹、显示新增/移除章节，并在网络失败时回退到本机缓存。普通阅读不启动后台轮询。当前已加入来源权限审计、敏感请求头拦截、缓存统计和 WebView CSP/重定向限制；Windows 图标已加入仓库；GitHub Actions 会在 `v*` 标签上自动生成未签名安装器、便携 ZIP 和 SHA-256 清单，`npm run verify:release:strict` 作为发布门禁，安装与升级回归仍待执行。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)。
+M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4/M4.1 将搜索、详情、目录和首章正文串成可测试链路，并加入书源持久化、启停和调试诊断；M5 已支持启用书源并发搜索、标题/作者去重、单源失败隔离，以及搜索结果进入远程详情、目录和章节阅读。远程详情与章节正文使用 SQLite TTL 缓存，应用启动时会清理过期缓存；书源页支持经过校验的配置 JSON 导入/导出，远程阅读支持手动强制刷新，章节正文支持按顺序执行的 replaceRules 替换。缓存写入后会保留最新的最多 256 条、总 payload 不超过 32 MiB；手动刷新会计算目录指纹、显示新增/移除章节，并在网络失败时回退到本机缓存。普通阅读不启动后台轮询。当前已加入来源权限审计、敏感请求头拦截、缓存统计和 WebView CSP/重定向限制；Windows 图标已加入仓库；GitHub Actions 会在 `v*` 标签上自动生成未签名安装器、便携 ZIP 和 SHA-256 清单，`npm run verify:release:strict` 作为发布门禁，安装与升级回归仍待执行。M7.0 已开始保留 Legado 的来源 URL、分组、类型、权重、发现开关、自定义顺序、备注和书籍 URL 模式；XPath、JavaScript、认证态和音频书源仍按兼容性矩阵明确标记或拒绝。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)。
 
 ## 参与开发
 
