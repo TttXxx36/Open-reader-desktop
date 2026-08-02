@@ -3150,6 +3150,73 @@ mod tests {
     }
 
     #[test]
+    fn accumulates_next_page_budgets_without_resetting() {
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let base = "https://example.test/chapter/1";
+        let mut depth = 0;
+        let mut pages_used = 1;
+        let mut bytes_used = 0;
+        let mut elapsed_secs = 0;
+        let mut visited = vec![base.to_string()];
+
+        for (url, page_bytes, page_seconds) in [
+            ("https://example.test/chapter/2", 100, 5),
+            ("https://example.test/chapter/3", 100, 5),
+        ] {
+            let decision = evaluate_next_page_policy(
+                &policy,
+                base,
+                url,
+                depth,
+                pages_used,
+                bytes_used,
+                elapsed_secs,
+                &visited,
+            );
+            assert!(decision.allowed, "{url}: {decision:?}");
+            depth = decision.next_depth;
+            pages_used += 1;
+            bytes_used += page_bytes;
+            elapsed_secs += page_seconds;
+            visited.push(url.to_string());
+        }
+
+        let page_limit = evaluate_next_page_policy(
+            &policy,
+            base,
+            "https://example.test/chapter/4",
+            depth,
+            pages_used,
+            bytes_used,
+            elapsed_secs,
+            &visited,
+        );
+        assert!(!page_limit.allowed);
+        assert_eq!(page_limit.reason, "page_limit");
+
+        let time_limited = NextPagePolicy {
+            enabled: true,
+            max_duration_secs: 5,
+            ..NextPagePolicy::default()
+        };
+        let time_limit = evaluate_next_page_policy(
+            &time_limited,
+            base,
+            "https://example.test/chapter/2",
+            0,
+            1,
+            0,
+            5,
+            &[base.to_string()],
+        );
+        assert!(!time_limit.allowed);
+        assert_eq!(time_limit.reason, "time_limit");
+    }
+
+    #[test]
     fn validates_bounded_nested_content_url() {
         assert_eq!(
             bounded_next_url("https://example.test/chapter/2")
