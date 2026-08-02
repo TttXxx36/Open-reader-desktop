@@ -32,6 +32,7 @@ const MAX_SOURCE_WEIGHT: i64 = 1_000_000;
 const MAX_SOURCE_CUSTOM_ORDER: i64 = 1_000_000;
 const MAX_REDIRECTS: usize = 5;
 const MAX_STAGE_BUDGET_SECS: u64 = 60;
+const MAX_PIPELINE_BUDGET_SECS: u64 = 120;
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -465,6 +466,7 @@ pub struct SourceEngine {
     client: reqwest::Client,
     max_body_bytes: usize,
     stage_budget: Duration,
+    pipeline_budget: Duration,
 }
 
 impl SourceEngine {
@@ -490,6 +492,7 @@ impl SourceEngine {
             client,
             max_body_bytes,
             stage_budget: bounded_stage_timeout(timeout_secs),
+            pipeline_budget: bounded_pipeline_timeout(timeout_secs),
         })
     }
 
@@ -731,6 +734,23 @@ impl SourceEngine {
         &self,
         source: &BookSource,
         keyword: &str,
+    ) -> Result<SourcePipelineResult, SourceError> {
+        match tokio::time::timeout(self.pipeline_budget, self.run_pipeline_inner(source, keyword))
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(SourceError::TimeoutBudget(format!(
+                "pipeline 超过 {} 秒总时间预算",
+                self.pipeline_budget.as_secs()
+            ))),
+        }
+    }
+
+    async fn run_pipeline_inner(
+        &self,
+        source: &BookSource,
+        keyword: &str,
+    ) -> Result<SourcePipelineResult, SourceError> {
     ) -> Result<SourcePipelineResult, SourceError> {
         let mut debug_steps = Vec::new();
         let search_context = SourceRequestContext::search(keyword, 1);
@@ -1357,6 +1377,14 @@ fn bounded_stage_timeout(timeout_secs: u64) -> Duration {
         timeout_secs
             .saturating_mul(MAX_URL_CHAIN_LENGTH as u64)
             .min(MAX_STAGE_BUDGET_SECS),
+    )
+}
+
+fn bounded_pipeline_timeout(timeout_secs: u64) -> Duration {
+    Duration::from_secs(
+        timeout_secs
+            .saturating_mul(4)
+            .min(MAX_PIPELINE_BUDGET_SECS),
     )
 }
 
@@ -2595,6 +2623,19 @@ mod tests {
         assert_eq!(
             bounded_stage_timeout(DEFAULT_TIMEOUT_SECS),
             Duration::from_secs(MAX_STAGE_BUDGET_SECS)
+        );
+    }
+
+    #[test]
+    fn bounds_pipeline_time_budget() {
+        assert_eq!(bounded_pipeline_timeout(1), Duration::from_secs(4));
+        assert_eq!(
+            bounded_pipeline_timeout(DEFAULT_TIMEOUT_SECS),
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS * 4)
+        );
+        assert_eq!(
+            bounded_pipeline_timeout(999),
+            Duration::from_secs(MAX_PIPELINE_BUDGET_SECS)
         );
     }
 
