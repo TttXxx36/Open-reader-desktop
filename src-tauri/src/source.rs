@@ -3195,7 +3195,7 @@ mod tests {
             &visited,
         );
         assert!(!page_limit.allowed);
-        assert_eq!(page_limit.reason, "page_limit");
+        assert_eq!(page_limit.reason, "depth_limit");
 
         let time_limited = NextPagePolicy {
             enabled: true,
