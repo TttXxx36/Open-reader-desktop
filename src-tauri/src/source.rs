@@ -1105,21 +1105,30 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         .as_ref()
         .is_some_and(|value| value.len() > MAX_SOURCE_GROUP_BYTES)
     {
-        errors.push(format!("bookSourceGroup 不能超过 {} 字节", MAX_SOURCE_GROUP_BYTES));
+        errors.push(format!(
+            "bookSourceGroup 不能超过 {} 字节",
+            MAX_SOURCE_GROUP_BYTES
+        ));
     }
     if source
         .comment
         .as_ref()
         .is_some_and(|value| value.len() > MAX_SOURCE_COMMENT_BYTES)
     {
-        errors.push(format!("bookSourceComment 不能超过 {} 字节", MAX_SOURCE_COMMENT_BYTES));
+        errors.push(format!(
+            "bookSourceComment 不能超过 {} 字节",
+            MAX_SOURCE_COMMENT_BYTES
+        ));
     }
     if source
         .book_url_pattern
         .as_ref()
         .is_some_and(|value| value.len() > MAX_BOOK_URL_PATTERN_BYTES)
     {
-        errors.push(format!("bookUrlPattern 不能超过 {} 字节", MAX_BOOK_URL_PATTERN_BYTES));
+        errors.push(format!(
+            "bookUrlPattern 不能超过 {} 字节",
+            MAX_BOOK_URL_PATTERN_BYTES
+        ));
     }
     if source.weight < -MAX_SOURCE_WEIGHT || source.weight > MAX_SOURCE_WEIGHT {
         errors.push(format!("weight 必须在 ±{} 范围内", MAX_SOURCE_WEIGHT));
@@ -1735,14 +1744,20 @@ mod tests {
         );
         assert!(result.valid, "{:?}", result.errors);
         let source = result.source.expect("source should parse");
-        assert_eq!(source.source_url.as_deref(), Some("https://metadata.example.test/"));
+        assert_eq!(
+            source.source_url.as_deref(),
+            Some("https://metadata.example.test/")
+        );
         assert_eq!(source.group.as_deref(), Some("公开测试"));
         assert_eq!(source.source_type, 0);
         assert_eq!(
             source.book_url_pattern.as_deref(),
             Some("https://metadata.example.test/book/{{bookId}}")
         );
-        assert_eq!(source.explore_url.as_deref(), Some("https://metadata.example.test/explore"));
+        assert_eq!(
+            source.explore_url.as_deref(),
+            Some("https://metadata.example.test/explore")
+        );
         assert!(source.enabled_explore);
         assert_eq!(source.custom_order, 12);
         assert_eq!(source.weight, 80);
