@@ -1832,7 +1832,7 @@ fn parse_selector(value: &str) -> Result<Selector, SourceError> {
 fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
     if let SourceRule::Chain { chain } = rule {
         for child in chain {
-            match extract_from_element(element, child) {
+            match extract_from_element(element.clone(), child) {
                 Ok(value) => return Ok(value),
                 Err(SourceError::NoMatch) => continue,
                 Err(error) => return Err(error),
