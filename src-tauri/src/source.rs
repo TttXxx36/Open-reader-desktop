@@ -1553,35 +1553,42 @@ pub fn evaluate_next_page_policy(
         }
     };
 
+    let max_depth = max_depth.min(default_next_page_depth());
+    let max_pages = max_pages.min(default_next_page_count());
+    let max_bytes = max_bytes.min(default_next_page_bytes());
+    let max_duration_secs = policy
+        .max_duration_secs
+        .min(default_next_page_duration());
+
     if !policy.enabled {
         return bounded(
             false,
             "disabled",
             depth,
-            policy.max_pages.saturating_sub(pages_used),
-            policy.max_bytes.saturating_sub(bytes_used),
+            max_pages.saturating_sub(pages_used),
+            max_bytes.saturating_sub(bytes_used),
         );
     }
-    if policy.max_depth == 0 || policy.max_pages == 0 {
+    if max_depth == 0 || max_pages == 0 {
         return bounded(false, "quota_zero", depth, 0, 0);
     }
-    if depth >= policy.max_depth {
+    if depth >= max_depth {
         return bounded(
             false,
             "depth_limit",
             depth,
             0,
-            policy.max_bytes.saturating_sub(bytes_used),
+            max_bytes.saturating_sub(bytes_used),
         );
     }
-    if pages_used >= policy.max_pages {
-        return bounded(false, "page_limit", depth, 0, policy.max_bytes.saturating_sub(bytes_used));
+    if pages_used >= max_pages {
+        return bounded(false, "page_limit", depth, 0, max_bytes.saturating_sub(bytes_used));
     }
-    if bytes_used >= policy.max_bytes {
-        return bounded(false, "byte_limit", depth, policy.max_pages.saturating_sub(pages_used), 0);
+    if bytes_used >= max_bytes {
+        return bounded(false, "byte_limit", depth, max_pages.saturating_sub(pages_used), 0);
     }
-    if elapsed_secs >= policy.max_duration_secs {
-        return bounded(false, "time_limit", depth, policy.max_pages.saturating_sub(pages_used), policy.max_bytes.saturating_sub(bytes_used));
+    if elapsed_secs >= max_duration_secs {
+        return bounded(false, "time_limit", depth, max_pages.saturating_sub(pages_used), max_bytes.saturating_sub(bytes_used));
     }
 
     let Some(candidate) = bounded_next_url(candidate_url).ok().flatten() else {
@@ -1589,8 +1596,8 @@ pub fn evaluate_next_page_policy(
             false,
             "invalid_next_url",
             depth,
-            policy.max_pages.saturating_sub(pages_used),
-            policy.max_bytes.saturating_sub(bytes_used),
+            max_pages.saturating_sub(pages_used),
+            max_bytes.saturating_sub(bytes_used),
         );
     };
     if visited_urls.iter().any(|visited| visited == &candidate) {
@@ -1598,8 +1605,8 @@ pub fn evaluate_next_page_policy(
             false,
             "cycle",
             depth,
-            policy.max_pages.saturating_sub(pages_used),
-            policy.max_bytes.saturating_sub(bytes_used),
+            max_pages.saturating_sub(pages_used),
+            max_bytes.saturating_sub(bytes_used),
         );
     }
 
@@ -1610,8 +1617,8 @@ pub fn evaluate_next_page_policy(
                 false,
                 "invalid_base_url",
                 depth,
-                policy.max_pages.saturating_sub(pages_used),
-                policy.max_bytes.saturating_sub(bytes_used),
+                max_pages.saturating_sub(pages_used),
+                max_bytes.saturating_sub(bytes_used),
             );
         }
     };
@@ -1622,8 +1629,8 @@ pub fn evaluate_next_page_policy(
                 false,
                 "invalid_next_url",
                 depth,
-                policy.max_pages.saturating_sub(pages_used),
-                policy.max_bytes.saturating_sub(bytes_used),
+                max_pages.saturating_sub(pages_used),
+                max_bytes.saturating_sub(bytes_used),
             );
         }
     };
@@ -1632,8 +1639,8 @@ pub fn evaluate_next_page_policy(
             false,
             "same_origin",
             depth,
-            policy.max_pages.saturating_sub(pages_used),
-            policy.max_bytes.saturating_sub(bytes_used),
+            max_pages.saturating_sub(pages_used),
+            max_bytes.saturating_sub(bytes_used),
         );
     }
 
@@ -1644,7 +1651,7 @@ pub fn evaluate_next_page_policy(
         policy
             .max_pages
             .saturating_sub(pages_used.saturating_add(1)),
-        policy.max_bytes.saturating_sub(bytes_used),
+        max_bytes.saturating_sub(bytes_used),
     )
 }
 
