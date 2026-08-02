@@ -4,6 +4,7 @@ use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 
 const MAX_RULE_CHAIN_LENGTH: usize = 8;
+const MAX_URL_CHAIN_LENGTH: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct ImportedSource {
@@ -327,7 +328,7 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
     output.insert("name".to_string(), Value::String(name));
     output.insert(
         "searchUrl".to_string(),
-        Value::String(normalize_url(&search_url)),
+        Value::String(normalize_url(&search_url)?),
     );
 
     for (target, keys) in [
@@ -356,7 +357,7 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
                 .trim();
             if !text.is_empty() {
                 let normalized = if matches!(target, "source_url" | "explore_url") {
-                    normalize_url(text)
+                    normalize_url(text)?
                 } else {
                     text.to_string()
                 };
@@ -398,7 +399,7 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
             let url = value
                 .as_str()
                 .ok_or_else(|| format!("{target} 必须是字符串；当前只支持 HTTP/CSS 书源"))?;
-            output.insert(target.to_string(), Value::String(normalize_url(url)));
+            output.insert(target.to_string(), Value::String(normalize_url(url)?));
         }
     }
 
@@ -758,16 +759,27 @@ fn first_value<'a>(object: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a 
     keys.iter().find_map(|key| object.get(*key))
 }
 
-fn normalize_url(value: &str) -> String {
-    value
-        .split("||")
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .replace("{{page}}", "1")
-        .replace("{{pageNum}}", "1")
-        .replace("{{page+1}}", "2")
-        .replace("{{page-1}}", "0")
+fn normalize_url(value: &str) -> Result<String, String> {
+    let parts = value.split("||").map(str::trim).collect::<Vec<_>>();
+    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
+        return Err("URL 回退链包含空候选".to_string());
+    }
+    if parts.len() > MAX_URL_CHAIN_LENGTH {
+        return Err(format!(
+            "URL 回退链最多支持 {} 个候选",
+            MAX_URL_CHAIN_LENGTH
+        ));
+    }
+    Ok(parts
+        .into_iter()
+        .map(|part| {
+            part.replace("{{page}}", "1")
+                .replace("{{pageNum}}", "1")
+                .replace("{{page+1}}", "2")
+                .replace("{{page-1}}", "0")
+        })
+        .collect::<Vec<_>>()
+        .join("||"))
 }
 
 #[cfg(test)]
