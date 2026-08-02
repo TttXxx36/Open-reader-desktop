@@ -137,6 +137,14 @@ pub enum SourceRule {
         #[serde(default)]
         regex: Option<String>,
     },
+    JsonPath {
+        #[serde(alias = "jsonPath", alias = "path")]
+        json_path: String,
+        #[serde(default)]
+        attr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+    },
 }
 
 impl SourceRule {
@@ -144,21 +152,51 @@ impl SourceRule {
         match self {
             Self::Selector(value) => value,
             Self::Detailed { selector, .. } => selector,
+            Self::JsonPath { json_path, .. } => json_path,
         }
     }
 
     fn attr(&self) -> Option<&str> {
         match self {
             Self::Selector(_) => None,
-            Self::Detailed { attr, .. } => attr.as_deref(),
+            Self::Detailed { attr, .. } | Self::JsonPath { attr, .. } => attr.as_deref(),
         }
     }
 
     fn regex(&self) -> Option<&str> {
         match self {
             Self::Selector(_) => None,
-            Self::Detailed { regex, .. } => regex.as_deref(),
+            Self::Detailed { regex, .. } | Self::JsonPath { regex, .. } => regex.as_deref(),
         }
+    }
+
+    fn json_path(&self) -> Option<&str> {
+        match self {
+            Self::JsonPath { json_path, .. } => Some(json_path),
+            Self::Selector(value) if is_json_rule_path(value) => Some(value),
+            Self::Detailed { selector, .. } if is_json_rule_path(selector) => Some(selector),
+            _ => None,
+        }
+    }
+
+    fn is_json_path(&self) -> bool {
+        self.json_path().is_some()
+    }
+}
+
+impl PageRules {
+    fn is_json(&self) -> bool {
+        self.item.as_deref().is_some_and(is_json_rule_path)
+            || [
+                self.title.as_ref(),
+                self.author.as_ref(),
+                self.url.as_ref(),
+                self.intro.as_ref(),
+                self.content.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(SourceRule::is_json_path)
     }
 }
 
