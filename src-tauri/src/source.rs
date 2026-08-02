@@ -751,7 +751,6 @@ impl SourceEngine {
         source: &BookSource,
         keyword: &str,
     ) -> Result<SourcePipelineResult, SourceError> {
-    ) -> Result<SourcePipelineResult, SourceError> {
         let mut debug_steps = Vec::new();
         let search_context = SourceRequestContext::search(keyword, 1);
         let (search_body, search_url) = self
