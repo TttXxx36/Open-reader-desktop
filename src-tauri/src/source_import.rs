@@ -695,7 +695,7 @@ mod tests {
         );
         assert!(matches!(
             source.search.as_ref().and_then(|rules| rules.title.as_ref()),
-            Some(SourceRule::Detailed { attr: Some(attr), .. }) if attr == "text"
+            Some(SourceRule::Selector(selector)) if selector == "h2 a"
         ));
         assert!(matches!(
             source.book_info.as_ref().and_then(|rules| rules.url.as_ref()),
