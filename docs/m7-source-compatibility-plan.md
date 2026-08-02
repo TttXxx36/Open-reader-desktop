@@ -134,6 +134,9 @@ M7.3b 已加入离线只读解析 PoC（xpath_poc.rs 与 analyze_xpath_offline �
 M7.3c 已补充合成 HTML 夹具矩阵：覆盖 6 条受限语法（元素、绝对/相对路径、属性谓词、位置谓词、通配符、末端属性）和 6 条明确拒绝语法（函数、复杂属性谓词、联合、轴、父节点），并断言密集节点输入的估算工作量仍受上限约束。
 - 远程证据：[GitHub Actions run 30770432561](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30770432561)（M7.3c，56 个 Rust 测试、前端检查通过）。
 
+M7.3d 已把离线指标接入导入预览：每条发现同时展示受限语法是否可静态解析、步数和估算工作量；即使静态解析成功，仍明确保持“不执行”状态。
+- 远程证据：[GitHub Actions run 30770921591](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30770921591)（M7.3d，56 个 Rust 测试、前端检查通过）。
+
 下一步是继续扩充授权合成夹具并记录解析耗时分布；任何失败都不得静默改写为 CSS，只有固定节点数、表达式长度、执行时间和网络权限后，才决定是否进入可执行档。
 
 ## M7.4 JavaScript 评估闸门
