@@ -29,6 +29,15 @@
 
 所有上限都必须在服务端再次校验，不能依赖前端传入值。next URL 仍须通过当前 2 KiB、HTTP(S)、单链接校验。
 
+## 已实现的纯策略闸门
+
+后端已加入 NextPagePolicy 与 evaluate_next_page_policy 纯函数：
+
+- 默认 enabled=false；建议的深度、页数、总字节和总耗时会在服务端再次裁剪，避免调用方传入无限配额。
+- 只做候选 URL 的单链接/HTTP(S) 校验、同源比较、深度/页数/字节/时间预算、访问环路判断和剩余预算计算。
+- 返回稳定 reason（disabled、depth_limit、page_limit、byte_limit、time_limit、same_origin、cycle 等），不发起请求、不改变当前 next URL 中间结果。
+- 远程证据：[GitHub Actions run 30771892118](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30771892118)（策略闸门，59 个 Rust 测试、前端检查通过）。
+
 ## 失败与回退语义
 
 - 首页成功、后续页失败：保留已取得正文，返回“部分追链”状态和脱敏失败步骤，不回退到旧缓存覆盖新正文。
