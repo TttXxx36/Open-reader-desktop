@@ -4,7 +4,7 @@ use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -13,6 +13,7 @@ use url::{form_urlencoded, Url};
 const DEFAULT_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SEARCH_RESULTS: usize = 100;
+const MAX_SOURCE_SEARCH_PAGES: usize = 20;
 const MAX_REPLACE_RULES: usize = 32;
 const MAX_REPLACE_PATTERN_BYTES: usize = 512;
 const MAX_REPLACE_REPLACEMENT_BYTES: usize = 4 * 1024;
@@ -329,6 +330,74 @@ pub struct SourceDebugStep {
     pub status: Option<u16>,
     pub bytes: Option<usize>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub variables: BTreeMap<String, String>,
+    #[serde(default)]
+    pub cache_hit: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SourceRequestContext {
+    keyword: Option<String>,
+    page: usize,
+    book_url: Option<String>,
+    book_id: Option<String>,
+    chapter_id: Option<String>,
+}
+
+impl SourceRequestContext {
+    fn search(keyword: &str, page: usize) -> Self {
+        Self {
+            keyword: Some(keyword.to_string()),
+            page: page.max(1),
+            ..Self::default()
+        }
+    }
+
+    fn book(book_url: &str) -> Self {
+        Self {
+            book_url: Some(book_url.to_string()),
+            book_id: Some(last_path_segment(book_url).to_string()),
+            page: 1,
+            ..Self::default()
+        }
+    }
+
+    fn chapter(chapter_url: &str) -> Self {
+        Self {
+            chapter_id: Some(last_path_segment(chapter_url).to_string()),
+            page: 1,
+            ..Self::default()
+        }
+    }
+
+    fn variables(&self) -> BTreeMap<String, String> {
+        let page = self.page.max(1);
+        let mut variables = BTreeMap::from([
+            ("page".to_string(), page.to_string()),
+            ("pageNum".to_string(), page.to_string()),
+            ("pageIndex".to_string(), page.saturating_sub(1).to_string()),
+            ("page+1".to_string(), page.saturating_add(1).to_string()),
+            ("page-1".to_string(), page.saturating_sub(1).to_string()),
+        ]);
+        if self.keyword.is_some() {
+            variables.insert("keyword".to_string(), "<redacted>".to_string());
+            variables.insert("key".to_string(), "<redacted>".to_string());
+        }
+        if self.book_url.is_some() {
+            variables.insert("bookUrl".to_string(), "<redacted-url>".to_string());
+            variables.insert("book_url".to_string(), "<redacted-url>".to_string());
+        }
+        if self.book_id.is_some() {
+            variables.insert("bookId".to_string(), "<redacted>".to_string());
+            variables.insert("book_id".to_string(), "<redacted>".to_string());
+        }
+        if self.chapter_id.is_some() {
+            variables.insert("chapterId".to_string(), "<redacted>".to_string());
+            variables.insert("chapter_id".to_string(), "<redacted>".to_string());
+        }
+        variables
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -428,7 +497,17 @@ impl SourceEngine {
         source: &BookSource,
         keyword: &str,
     ) -> Result<Vec<SearchResult>, SourceError> {
-        let search_url = render_url(&source.search_url, Some(keyword), None, None, None);
+        self.search_page(source, keyword, 1).await
+    }
+
+    pub async fn search_page(
+        &self,
+        source: &BookSource,
+        keyword: &str,
+        page: usize,
+    ) -> Result<Vec<SearchResult>, SourceError> {
+        let context = SourceRequestContext::search(keyword, page);
+        let search_url = render_url_context(&source.search_url, &context);
         let fetched = self
             .fetch_text(&search_url, &source.headers)
             .await
@@ -439,6 +518,34 @@ impl SourceEngine {
         for result in &mut results {
             if let Some(url) = &result.book_url {
                 result.book_url = Some(absolutize_url(&search_url, url));
+            }
+        }
+        Ok(results)
+    }
+
+    pub async fn search_pages(
+        &self,
+        source: &BookSource,
+        keyword: &str,
+        requested_pages: usize,
+    ) -> Result<Vec<SearchResult>, SourceError> {
+        let mut results = Vec::new();
+        let mut seen = HashSet::new();
+        for page in 1..=bounded_search_pages(requested_pages) {
+            let page_results = self.search_page(source, keyword, page).await?;
+            if page_results.is_empty() {
+                break;
+            }
+
+            let mut added = 0;
+            for item in page_results {
+                if seen.insert(search_result_identity(&item)) {
+                    results.push(item);
+                    added += 1;
+                }
+            }
+            if added == 0 {
+                break;
             }
         }
         Ok(results)
@@ -525,9 +632,16 @@ impl SourceEngine {
         keyword: &str,
     ) -> Result<SourcePipelineResult, SourceError> {
         let mut debug_steps = Vec::new();
-        let search_url = render_url(&source.search_url, Some(keyword), None, None, None);
+        let search_context = SourceRequestContext::search(keyword, 1);
+        let search_url = render_url_context(&source.search_url, &search_context);
         let search_body = self
-            .fetch_stage("search", &search_url, &source.headers, &mut debug_steps)
+            .fetch_stage(
+                "search",
+                &search_url,
+                &source.headers,
+                &search_context,
+                &mut debug_steps,
+            )
             .await?;
         let mut search_results = self
             .parse_search_response(source, &search_body)
@@ -572,6 +686,7 @@ impl SourceEngine {
         stage: &str,
         url: &str,
         headers: &HashMap<String, String>,
+        context: &SourceRequestContext,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<String, SourceError> {
         let started = Instant::now();
@@ -584,6 +699,8 @@ impl SourceEngine {
                     status: Some(response.status),
                     bytes: Some(response.bytes),
                     error: None,
+                    variables: context.variables(),
+                    cache_hit: false,
                 });
                 Ok(response.body)
             }
@@ -596,6 +713,8 @@ impl SourceEngine {
                     status: None,
                     bytes: None,
                     error: Some(message.clone()),
+                    variables: context.variables(),
+                    cache_hit: false,
                 });
                 Err(pipeline_error(stage, error))
             }
@@ -641,15 +760,16 @@ impl SourceEngine {
             .book_info_url
             .as_deref()
             .ok_or_else(|| SourceError::InvalidConfig("bookInfoUrl is required".to_string()))?;
-        let url = render_url(
-            template,
-            None,
-            Some(book_url),
-            Some(last_path_segment(book_url)),
-            None,
-        );
+        let context = SourceRequestContext::book(book_url);
+        let url = render_url_context(template, &context);
         let body = self
-            .fetch_stage("book_info", &url, &source.headers, debug_steps)
+            .fetch_stage(
+                "book_info",
+                &url,
+                &source.headers,
+                &context,
+                debug_steps,
+            )
             .await?;
         let rules = source
             .book_info
@@ -680,15 +800,10 @@ impl SourceEngine {
             .toc_url
             .as_deref()
             .ok_or_else(|| SourceError::InvalidConfig("tocUrl is required".to_string()))?;
-        let url = render_url(
-            template,
-            None,
-            Some(book_url),
-            Some(last_path_segment(book_url)),
-            None,
-        );
+        let context = SourceRequestContext::book(book_url);
+        let url = render_url_context(template, &context);
         let body = self
-            .fetch_stage("toc", &url, &source.headers, debug_steps)
+            .fetch_stage("toc", &url, &source.headers, &context, debug_steps)
             .await?;
         let rules = source
             .toc
@@ -710,15 +825,10 @@ impl SourceEngine {
             .content_url
             .as_deref()
             .ok_or_else(|| SourceError::InvalidConfig("contentUrl is required".to_string()))?;
-        let url = render_url(
-            template,
-            None,
-            None,
-            None,
-            Some(last_path_segment(&chapter.url)),
-        );
+        let context = SourceRequestContext::chapter(&chapter.url);
+        let url = render_url_context(template, &context);
         let body = self
-            .fetch_stage("content", &url, &source.headers, debug_steps)
+            .fetch_stage("content", &url, &source.headers, &context, debug_steps)
             .await?;
         let rules = source
             .content
@@ -1019,28 +1129,61 @@ fn render_url(
     book_id: Option<&str>,
     chapter_id: Option<&str>,
 ) -> String {
+    let mut context = SourceRequestContext {
+        keyword: keyword.map(ToOwned::to_owned),
+        page: 1,
+        book_url: book_url.map(ToOwned::to_owned),
+        book_id: book_id.map(ToOwned::to_owned),
+        chapter_id: chapter_id.map(ToOwned::to_owned),
+    };
+    context.page = context.page.max(1);
+    render_url_context(template, &context)
+}
+
+fn render_url_context(template: &str, context: &SourceRequestContext) -> String {
+    let page = context.page.max(1);
     let mut result = template.to_string();
-    if let Some(keyword) = keyword {
+    if let Some(keyword) = context.keyword.as_deref() {
         result = result
             .replace("{{keyword}}", &encode_keyword(keyword))
             .replace("{{key}}", &encode_keyword(keyword));
     }
-    if let Some(book_url) = book_url {
+    result = result
+        .replace("{{page}}", &page.to_string())
+        .replace("{{pageNum}}", &page.to_string())
+        .replace("{{pageIndex}}", &page.saturating_sub(1).to_string())
+        .replace("{{page_index}}", &page.saturating_sub(1).to_string())
+        .replace("{{page+1}}", &page.saturating_add(1).to_string())
+        .replace("{{page-1}}", &page.saturating_sub(1).to_string());
+    if let Some(book_url) = context.book_url.as_deref() {
         result = result
             .replace("{{bookUrl}}", book_url)
             .replace("{{book_url}}", book_url);
     }
-    if let Some(book_id) = book_id {
+    if let Some(book_id) = context.book_id.as_deref() {
         result = result
             .replace("{{bookId}}", book_id)
             .replace("{{book_id}}", book_id);
     }
-    if let Some(chapter_id) = chapter_id {
+    if let Some(chapter_id) = context.chapter_id.as_deref() {
         result = result
             .replace("{{chapterId}}", chapter_id)
             .replace("{{chapter_id}}", chapter_id);
     }
     result
+}
+
+fn bounded_search_pages(requested_pages: usize) -> usize {
+    requested_pages.clamp(1, MAX_SOURCE_SEARCH_PAGES)
+}
+
+fn search_result_identity(item: &SearchResult) -> String {
+    format!(
+        "{}|{}|{}",
+        normalize_search_text(&item.title),
+        normalize_search_text(item.author.as_deref().unwrap_or_default()),
+        normalize_search_text(item.book_url.as_deref().unwrap_or_default())
+    )
 }
 
 fn encode_keyword(value: &str) -> String {
@@ -1440,12 +1583,12 @@ fn validate_url(url: &str) -> Result<(), SourceError> {
 }
 
 fn expand_url_template(url: &str) -> String {
-    url.replace("{{keyword}}", "open-reader")
-        .replace("{{key}}", "open-reader")
-        .replace("{{page}}", "1")
-        .replace("{{pageNum}}", "1")
-        .replace("{{page+1}}", "2")
-        .replace("{{page-1}}", "0")
+    let context = SourceRequestContext {
+        keyword: Some("open-reader".to_string()),
+        page: 1,
+        ..SourceRequestContext::default()
+    };
+    render_url_context(url, &context)
 }
 
 fn is_json_rule_path(value: &str) -> bool {
@@ -1966,7 +2109,32 @@ mod tests {
     }
 
     #[test]
-    fn extracts_json_wildcard_values() {
+    fn renders_bounded_request_template_variables() {
+        let context = SourceRequestContext {
+            keyword: Some("测试 书".to_string()),
+            page: 2,
+            book_url: Some("https://example.test/book/42".to_string()),
+            book_id: Some("42".to_string()),
+            chapter_id: Some("7".to_string()),
+        };
+        let rendered = render_url_context(
+            "https://example.test/search?q={{keyword}}&page={{page}}&next={{page+1}}&prev={{page-1}}&index={{pageIndex}}&book={{bookId}}&chapter={{chapterId}}",
+            &context,
+        );
+        assert!(rendered.contains("q=%E6%B5%8B%E8%AF%95+%E4%B9%A6"));
+        assert!(rendered.contains("page=2"));
+        assert!(rendered.contains("next=3"));
+        assert!(rendered.contains("prev=1"));
+        assert!(rendered.contains("index=1"));
+        assert!(rendered.contains("book=42"));
+        assert!(rendered.contains("chapter=7"));
+        assert_eq!(bounded_search_pages(0), 1);
+        assert_eq!(bounded_search_pages(3), 3);
+        assert_eq!(bounded_search_pages(999), MAX_SOURCE_SEARCH_PAGES);
+    }
+
+    #[test]
+    fn extracts_json_wildcard_values {
         let engine = SourceEngine::new(1, 1024).expect("engine should build");
         let values = engine
             .extract_json_values(
@@ -2107,6 +2275,17 @@ mod tests {
         assert!(result.first_chapter.content.contains("这是正文"));
         assert_eq!(result.debug_steps.len(), 4);
         assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
+        assert_eq!(
+            result.debug_steps[0].variables.get("page").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            result.debug_steps[0]
+                .variables
+                .get("keyword")
+                .map(String::as_str),
+            Some("<redacted>")
+        );
         server.join().expect("fixture server should stop");
     }
 
