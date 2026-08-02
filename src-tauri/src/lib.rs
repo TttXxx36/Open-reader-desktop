@@ -1034,6 +1034,8 @@ async fn fetch_source_book(
     source_id: String,
     book_url: String,
     force_refresh: bool,
+    operation_id: Option<String>,
+    cancellation: tauri::State<'_, SourceCancellationState>,
 ) -> Result<RemoteBookDetail, String> {
     if book_url.trim().is_empty() {
         return Err("书籍链接不能为空".to_string());
@@ -1055,17 +1057,31 @@ async fn fetch_source_book(
     }
 
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
-    let detail: SourceBookDetail = match engine.fetch_book_detail(&source, &book_url).await {
+    let operation_id = normalize_source_operation_id(operation_id)?;
+    let token = cancellation.register(&operation_id)?;
+    let fetch_result = tokio::select! {
+        detail = engine.fetch_book_detail(&source, &book_url) => {
+            detail.map_err(|error| error.to_string())
+        }
+        _ = wait_for_source_cancellation(token.clone()) => {
+            Err("书源请求已取消".to_string())
+        }
+    };
+    cancellation.remove(&operation_id);
+    let detail: SourceBookDetail = match fetch_result {
         Ok(detail) => detail,
-        Err(error) => {
+        Err(message) => {
+            if message == "书源请求已取消" {
+                return Err(message);
+            }
             if let Some(mut fallback) = previous.clone() {
                 mark_book_cache_hit(&mut fallback);
                 fallback.stale = true;
-                fallback.refresh_error = Some(error.to_string());
+                fallback.refresh_error = Some(message);
                 fallback.chapter_update = None;
                 return Ok(fallback);
             }
-            return Err(error.to_string());
+            return Err(message);
         }
     };
     let chapter_update = previous
@@ -1107,6 +1123,8 @@ async fn fetch_source_chapter(
     source_id: String,
     chapter: source::SourceChapter,
     force_refresh: bool,
+    operation_id: Option<String>,
+    cancellation: tauri::State<'_, SourceCancellationState>,
 ) -> Result<RemoteChapterContent, String> {
     if chapter.url.trim().is_empty() {
         return Err("章节链接不能为空".to_string());
@@ -1128,27 +1146,38 @@ async fn fetch_source_chapter(
     }
 
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    let operation_id = normalize_source_operation_id(operation_id)?;
+    let token = cancellation.register(&operation_id)?;
     let mut debug_steps = Vec::new();
-    let result = match engine
-        .fetch_chapter_content(&source, &chapter, &mut debug_steps)
-        .await
-    {
+    let fetch_result = tokio::select! {
+        content = engine.fetch_chapter_content(&source, &chapter, &mut debug_steps) => {
+            content.map_err(|error| error.to_string())
+        }
+        _ = wait_for_source_cancellation(token.clone()) => {
+            Err("书源请求已取消".to_string())
+        }
+    };
+    cancellation.remove(&operation_id);
+    let result = match fetch_result {
         Ok(content) => {
             let mut result = RemoteChapterContent::from(content);
             result.debug_steps = debug_steps;
             result
         }
-        Err(error) => {
+        Err(message) => {
+            if message == "书源请求已取消" {
+                return Err(message);
+            }
             if let Some(mut fallback) = previous {
                 mark_chapter_cache_hit(&mut fallback);
                 fallback.stale = true;
-                fallback.refresh_error = Some(error.to_string());
+                fallback.refresh_error = Some(message);
                 if !debug_steps.is_empty() {
                     fallback.debug_steps = debug_steps;
                 }
                 return Ok(fallback);
             }
-            return Err(error.to_string());
+            return Err(message);
         }
     };
     let mut cache_result = result.clone();
@@ -1174,6 +1203,8 @@ async fn search_sources(
     database: tauri::State<'_, Database>,
     keyword: String,
     max_pages: Option<usize>,
+    operation_id: Option<String>,
+    cancellation: tauri::State<'_, SourceCancellationState>,
 ) -> Result<MultiSourceSearchResult, String> {
     let keyword = keyword.trim();
     if keyword.is_empty() {
@@ -1204,9 +1235,18 @@ async fn search_sources(
     }
 
     let engine = SourceEngine::default().map_err(|error| error.to_string())?;
-    let mut result = engine
-        .search_many_with_pages(definitions, keyword, max_pages.unwrap_or(1))
-        .await;
+    let operation_id = normalize_source_operation_id(operation_id)?;
+    let token = cancellation.register(&operation_id)?;
+    let search_result = tokio::select! {
+        result = engine.search_many_with_pages(definitions, keyword, max_pages.unwrap_or(1)) => {
+            Ok(result)
+        }
+        _ = wait_for_source_cancellation(token.clone()) => {
+            Err("书源搜索已取消".to_string())
+        }
+    };
+    cancellation.remove(&operation_id);
+    let mut result = search_result?;
     result.enabled_sources = enabled_sources;
     result.failures.splice(0..0, failures);
     Ok(result)
