@@ -74,14 +74,14 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
 
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-        return Ok(text);
+        return Ok(text.trim_start_matches('\u{feff}').to_string());
     }
 
     let (text, _, had_errors) = GB18030.decode(bytes);
     if had_errors {
         return Err(ImportError::TextDecode);
     }
-    Ok(text.into_owned())
+    Ok(text.into_owned().trim_start_matches('\u{feff}').to_string())
 }
 
 fn split_txt(text: &str) -> Vec<ParsedChapter> {
