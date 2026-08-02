@@ -539,7 +539,9 @@ fn insert_header(headers: &mut Map<String, Value>, key: &str, value: &str) -> Re
     if key.is_empty() || value.is_empty() {
         return Err("header 名称和值不能为空".to_string());
     }
-    if key.contains(['\\r', '\\n']) || value.contains(['\\r', '\\n']) {
+    if key.chars().any(|character| matches!(character, '\\r' | '\\n'))
+        || value.chars().any(|character| matches!(character, '\\r' | '\\n'))
+    {
         return Err("header 不能包含换行符".to_string());
     }
     headers.insert(key.to_string(), Value::String(value.to_string()));
