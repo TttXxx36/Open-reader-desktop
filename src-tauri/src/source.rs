@@ -735,8 +735,11 @@ impl SourceEngine {
         source: &BookSource,
         keyword: &str,
     ) -> Result<SourcePipelineResult, SourceError> {
-        match tokio::time::timeout(self.pipeline_budget, self.run_pipeline_inner(source, keyword))
-            .await
+        match tokio::time::timeout(
+            self.pipeline_budget,
+            self.run_pipeline_inner(source, keyword),
+        )
+        .await
         {
             Ok(result) => result,
             Err(_) => Err(SourceError::TimeoutBudget(format!(
@@ -1380,11 +1383,7 @@ fn bounded_stage_timeout(timeout_secs: u64) -> Duration {
 }
 
 fn bounded_pipeline_timeout(timeout_secs: u64) -> Duration {
-    Duration::from_secs(
-        timeout_secs
-            .saturating_mul(4)
-            .min(MAX_PIPELINE_BUDGET_SECS),
-    )
+    Duration::from_secs(timeout_secs.saturating_mul(4).min(MAX_PIPELINE_BUDGET_SECS))
 }
 
 fn bounded_search_pages(requested_pages: usize) -> usize {
