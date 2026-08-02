@@ -531,7 +531,12 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
                     .ok_or_else(|| format!("{context} 缺少 selector 或 JSONPath"))?;
             let attr = object.get("attr").and_then(Value::as_str);
             let regex = object.get("regex").and_then(Value::as_str);
-            normalize_rule_parts(raw_selector, context, attr, regex)
+            let normalized = normalize_rule_parts(raw_selector, context, attr, regex)?;
+            if normalized.is_string() {
+                Ok(json!({ "selector": normalized }))
+            } else {
+                Ok(normalized)
+            }
         }
         _ => Err(format!("{context} 必须是字符串或规则对象")),
     }
