@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use encoding_rs::{GB18030, UTF_16BE, UTF_16LE};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -32,6 +33,8 @@ pub struct ParsedBook {
 
 pub const CONTENT_FORMAT_TEXT: &str = "text";
 pub const CONTENT_FORMAT_BLOCKS_V1: &str = "blocks-v1";
+const MAX_EMBEDDED_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_EMBEDDED_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ParsedChapter {
@@ -225,6 +228,29 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
         manifest.insert(id, ManifestItem { href, media_type });
     }
 
+    let mut image_sources = HashMap::new();
+    let mut embedded_image_bytes = 0usize;
+    for item in manifest.values() {
+        let media_type = item.media_type.to_ascii_lowercase();
+        if !is_safe_epub_image_type(&media_type) {
+            continue;
+        }
+        let path = join_zip_path(base_path, &item.href);
+        let Ok(bytes) = read_zip_bytes(&mut archive, &path) else {
+            continue;
+        };
+        if bytes.len() > MAX_EMBEDDED_IMAGE_BYTES
+            || embedded_image_bytes.saturating_add(bytes.len()) > MAX_EMBEDDED_IMAGE_TOTAL_BYTES
+        {
+            continue;
+        }
+        embedded_image_bytes = embedded_image_bytes.saturating_add(bytes.len());
+        image_sources.insert(
+            path,
+            format!("data:{media_type};base64,{}", STANDARD.encode(bytes)),
+        );
+    }
+
     let spine: Vec<String> = find_tags(&opf, "itemref")
         .into_iter()
         .filter_map(|tag| extract_attribute(&tag, "idref"))
@@ -241,7 +267,8 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
 
         let path = join_zip_path(base_path, &item.href);
         let html = read_zip_text(&mut archive, &path)?;
-        let document = parse_html_document(&html);
+        let mut document = parse_html_document(&html);
+        resolve_epub_images(&mut document, &path, &image_sources);
         if document.blocks.is_empty() {
             continue;
         }
@@ -273,13 +300,21 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
     })
 }
 
+fn read_zip_bytes<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+) -> Result<Vec<u8>, ImportError> {
+    let mut file = archive.by_name(path)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 fn read_zip_text<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     path: &str,
 ) -> Result<String, ImportError> {
-    let mut file = archive.by_name(path)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    let bytes = read_zip_bytes(archive, path)?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -307,6 +342,38 @@ fn join_zip_path(base: &str, href: &str) -> String {
     }
 
     parts.join("/")
+}
+
+fn is_safe_epub_image_type(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/bmp"
+    )
+}
+
+fn resolve_epub_images(
+    document: &mut ContentDocument,
+    chapter_path: &str,
+    image_sources: &HashMap<String, String>,
+) {
+    let chapter_base = chapter_path
+        .rsplit_once('/')
+        .map(|(base, _)| base)
+        .unwrap_or_default();
+
+    for block in &mut document.blocks {
+        if block.kind != "image" {
+            continue;
+        }
+        let Some(source) = block.src.take() else {
+            continue;
+        };
+        if source.contains("://") || source.starts_with("data:") || source.starts_with('#') {
+            continue;
+        }
+        let image_path = join_zip_path(chapter_base, &source);
+        block.src = image_sources.get(&image_path).cloned();
+    }
 }
 
 fn find_tags(xml: &str, name: &str) -> Vec<String> {
@@ -469,12 +536,15 @@ fn parse_html_document(html: &str) -> ContentDocument {
             let alt = extract_html_attribute(&raw_tag, "alt")
                 .map(|value| decode_entities(&value).trim().to_string())
                 .filter(|value| !value.is_empty());
+            let src = extract_html_attribute(&raw_tag, "src")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
             blocks.push(ContentBlock {
                 kind: "image".to_string(),
                 level: None,
                 spans: Vec::new(),
                 alt,
-                src: None,
+                src,
             });
         } else if name == "br" {
             push_html_block(
@@ -987,6 +1057,46 @@ mod tests {
             strip_html("<h1>标题</h1><p>第一段</p><p>第二段</p>"),
             "标题\n\n第一段\n\n第二段"
         );
+    }
+
+    #[test]
+    fn resolves_local_image_sources_and_rejects_external_urls() {
+        let mut document = ContentDocument {
+            version: 1,
+            blocks: vec![
+                ContentBlock {
+                    kind: "image".to_string(),
+                    level: None,
+                    spans: Vec::new(),
+                    alt: Some("封面".to_string()),
+                    src: Some("../Images/cover.jpg".to_string()),
+                },
+                ContentBlock {
+                    kind: "image".to_string(),
+                    level: None,
+                    spans: Vec::new(),
+                    alt: None,
+                    src: Some("https://example.test/cover.jpg".to_string()),
+                },
+            ],
+        };
+        let mut image_sources = HashMap::new();
+        image_sources.insert(
+            "OPS/Images/cover.jpg".to_string(),
+            "data:image/jpeg;base64,AAAA".to_string(),
+        );
+
+        resolve_epub_images(
+            &mut document,
+            "OPS/Text/chapter.xhtml",
+            &image_sources,
+        );
+
+        assert_eq!(
+            document.blocks[0].src.as_deref(),
+            Some("data:image/jpeg;base64,AAAA")
+        );
+        assert!(document.blocks[1].src.is_none());
     }
 
     #[test]
