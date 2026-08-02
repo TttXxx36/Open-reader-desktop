@@ -2759,11 +2759,11 @@ mod tests {
             Some("https://example.test/chapter/2".to_string())
         );
         assert!(bounded_next_url("https://example.test/chapter/1", "javascript:alert(1)").is_err());
-        assert!(bounded_next_url(
-            "https://example.test/chapter/1",
-            &"https://example.test/".to_string() + &"a".repeat(MAX_NEXT_URL_BYTES)
-        )
-        .is_err());
+        let oversized = format!(
+            "https://example.test/{}",
+            "a".repeat(MAX_NEXT_URL_BYTES)
+        );
+        assert!(bounded_next_url("https://example.test/chapter/1", &oversized).is_err());
     }
 
     #[test]
