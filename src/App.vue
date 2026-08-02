@@ -1641,6 +1641,37 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   color: #b9f6dd;
 }
 
+.source-library-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.source-library-actions input {
+  width: 120px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  color: #dce7f7;
+  background: #0c111b;
+  font-size: 12px;
+}
+
+.source-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  color: #8391a6;
+  font-size: 10px;
+}
+
+.source-row-meta span {
+  padding: 3px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 999px;
+}
+
 .source-row-actions {
   justify-content: flex-end;
   margin-top: 11px;
@@ -1839,6 +1870,69 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   line-height: 1.6;
 }
 
+.source-metadata-panel {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(12, 17, 27, 0.42);
+}
+
+.source-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.source-meta-field {
+  display: grid;
+  gap: 7px;
+  color: #aebbd0;
+  font-size: 12px;
+}
+
+.source-meta-field input:not([type="checkbox"]) {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.source-meta-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.source-meta-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 26px;
+}
+
+.source-meta-checkbox input {
+  accent-color: #86dfc2;
+}
+
+.source-meta-wide {
+  grid-column: 1 / -1;
+}
+
+.source-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 15px;
+}
+
+.source-meta-actions span {
+  color: #8391a6;
+  font-size: 11px;
+}
+
 .source-result-empty {
   display: grid;
   justify-items: start;
@@ -1903,6 +1997,24 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 }
 
 @media (max-width: 900px) {
+  .source-library-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .source-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .source-meta-wide {
+    grid-column: auto;
+  }
+
+  .source-meta-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .source-grid {
     grid-template-columns: 1fr;
   }
