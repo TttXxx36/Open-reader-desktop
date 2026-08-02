@@ -31,14 +31,17 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
       </header>
 
       <div
-        v-if="remoteBook.stale || remoteBook.chapter_update || remoteChapter.stale"
+        v-if="remoteBook.stale || remoteBook.chapter_update || remoteChapter.stale || remoteBook.cache_hit || remoteChapter.cache_hit"
         class="reader-notices"
         role="status"
       >
         <p v-if="remoteBook.stale || remoteChapter.stale" class="reader-stale-note">
           刷新失败，正在显示缓存内容：{{ remoteBook.refresh_error || remoteChapter.refresh_error || "未知错误" }}
         </p>
-        <p v-else-if="remoteBook.chapter_update" class="reader-update-note">
+        <p v-if="remoteBook.cache_hit || remoteChapter.cache_hit" class="reader-cache-note">
+          本次内容来自本地缓存；点击“刷新内容”可重新请求网络。
+        </p>
+        <p v-if="!remoteBook.stale && !remoteChapter.stale && remoteBook.chapter_update" class="reader-update-note">
           {{ remoteBook.chapter_update.changed ? "目录已更新" : "目录未变化" }}：
           新增 {{ remoteBook.chapter_update.added }} 章，移除 {{ remoteBook.chapter_update.removed }} 章，
           保留 {{ remoteBook.chapter_update.retained }} 章。
