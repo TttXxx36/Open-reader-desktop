@@ -235,6 +235,8 @@ fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
             }
             other => other.clone(),
         };
+        let mut config_value = config_value;
+        merge_wrapper_metadata(object, &mut config_value);
         let config_json = normalize_source_value(&config_value)
             .map_err(|error| format!("第 {} 个书源：{error}", index + 1))?;
         return Ok(ImportedSource {
@@ -251,6 +253,43 @@ fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
         enabled,
         config_json,
     })
+}
+
+fn merge_wrapper_metadata(wrapper: &Map<String, Value>, config: &mut Value) {
+    let Some(config_object) = config.as_object_mut() else {
+        return;
+    };
+
+    for (target, keys) in [
+        ("source_url", &["sourceUrl", "bookSourceUrl", "source_url"][..]),
+        (
+            "group",
+            &["group", "group_name", "bookSourceGroup", "book_source_group"][..],
+        ),
+        ("source_type", &["source_type", "bookSourceType", "sourceType"][..]),
+        (
+            "book_url_pattern",
+            &["bookUrlPattern", "book_url_pattern"][..],
+        ),
+        ("explore_url", &["exploreUrl", "explore_url"][..]),
+        (
+            "enabled_explore",
+            &["enabledExplore", "enabled_explore"][..],
+        ),
+        ("custom_order", &["customOrder", "custom_order"][..]),
+        ("weight", &["weight"][..]),
+        (
+            "comment",
+            &["comment", "bookSourceComment", "book_source_comment"][..],
+        ),
+    ] {
+        if config_object.contains_key(target) {
+            continue;
+        }
+        if let Some(value) = first_value(wrapper, keys) {
+            config_object.insert(target.to_string(), value.clone());
+        }
+    }
 }
 
 fn normalize_source_value(value: &Value) -> Result<String, String> {
@@ -676,6 +715,8 @@ mod tests {
             "sources": [{
                 "id": "fixture",
                 "enabled": false,
+                "group_name": "Library",
+                "weight": 7,
                 "config_json": {
                     "name": "Fixture",
                     "searchUrl": "https://example.test/search?q={{keyword}}"
@@ -689,6 +730,8 @@ mod tests {
         let source: BookSource =
             serde_json::from_str(&imported[0].config_json).expect("canonical source");
         assert_eq!(source.name, "Fixture");
+        assert_eq!(source.group.as_deref(), Some("Library"));
+        assert_eq!(source.weight, 7);
     }
 
     #[test]
