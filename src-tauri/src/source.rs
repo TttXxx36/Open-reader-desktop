@@ -733,6 +733,69 @@ impl SourceEngine {
         extract_json_path(&value, path)
     }
 
+    fn parse_search_response(
+        &self,
+        source: &BookSource,
+        body: &str,
+    ) -> Result<Vec<SearchResult>, SourceError> {
+        if source.search.as_ref().is_some_and(PageRules::is_json) {
+            self.parse_search_json(source, body)
+        } else {
+            self.parse_search_html(source, body)
+        }
+    }
+
+    pub fn parse_search_json(
+        &self,
+        source: &BookSource,
+        body: &str,
+    ) -> Result<Vec<SearchResult>, SourceError> {
+        let rules = source
+            .search
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("search rules are required".to_string()))?;
+        if !rules.is_json() {
+            return Err(SourceError::InvalidConfig(
+                "search rules are not JSONPath rules".to_string(),
+            ));
+        }
+
+        let value: Value = serde_json::from_str(body)
+            .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+        let items = extract_json_nodes(&value, rules.item.as_deref().unwrap_or("$"))?;
+        let mut results = Vec::new();
+
+        for item in items {
+            let title = rules
+                .title
+                .as_ref()
+                .map(|rule| extract_json_rule(item, rule))
+                .transpose()?
+                .unwrap_or_default();
+            let author = rules
+                .author
+                .as_ref()
+                .map(|rule| extract_json_rule(item, rule))
+                .transpose()?;
+            let book_url = rules
+                .url
+                .as_ref()
+                .map(|rule| extract_json_rule(item, rule))
+                .transpose()?;
+
+            if !title.is_empty() || book_url.is_some() {
+                results.push(SearchResult {
+                    title,
+                    author: non_empty(author),
+                    book_url: non_empty(book_url),
+                    source_name: source.name.clone(),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+
     pub fn parse_search_html(
         &self,
         source: &BookSource,
