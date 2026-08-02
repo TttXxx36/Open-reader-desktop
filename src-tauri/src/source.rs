@@ -2568,6 +2568,24 @@ mod tests {
     }
 
     #[test]
+    fn validates_bounded_url_fallback_chain() {
+        let context = SourceRequestContext::search("demo", 2);
+        let urls = render_url_chain(
+            "https://one.example.test/search?q={{keyword}}||https://two.example.test/search?page={{pageNum}}",
+            &context,
+        )
+        .expect("URL chain should render");
+        assert_eq!(urls[0], "https://one.example.test/search?q=demo");
+        assert_eq!(urls[1], "https://two.example.test/search?page=2");
+
+        let too_many = (0..9)
+            .map(|index| format!("https://{index}.example.test"))
+            .collect::<Vec<_>>()
+            .join("||");
+        assert!(split_url_chain(&too_many).is_err());
+    }
+
+    #[test]
     fn extracts_bounded_jsonpath_filter_and_bracket_alias() {
         let engine = SourceEngine::new(1, 1024).expect("engine should build");
         let values = engine
