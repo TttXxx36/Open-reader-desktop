@@ -103,6 +103,12 @@ interface SourceSummary {
   explore_url: string | null;
 }
 
+interface UnsupportedImportRule {
+  context: string;
+  value: string;
+  reason: string;
+}
+
 interface SourceImportPreviewEntry {
   index: number;
   name: string | null;
@@ -112,6 +118,7 @@ interface SourceImportPreviewEntry {
   action: string;
   existing_id: string | null;
   changed_fields: string[];
+  unsupported_rules: UnsupportedImportRule[];
 }
 
 interface SourceImportPreview {
