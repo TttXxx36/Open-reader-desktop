@@ -64,11 +64,11 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 ### M6.2 阅读内容模型
 
 - [x] TXT 保留段落、缩进和章节标题
-- [x] EPUB 保留标题、段落、引用和基础强调文本（安全纯文本回退，不执行 HTML）
-- [x] EPUB 过滤 script/style/noscript，并将图片转为本地占位文本
-- [ ] 评估图片资源映射和本地缓存
-- [ ] 引入向后兼容的内容格式字段或 JSON 内容块
-- [ ] 为旧版本纯文本章节提供读取回退
+- [x] EPUB 使用 `blocks-v1` 保留标题、段落、引用和基础强调
+- [x] EPUB 过滤 script/style/noscript，并将不可信图片转为占位文本
+- [x] 仅嵌入受限的本地栅格图片（单张 2 MB、总计 8 MB），外链和 SVG 保持占位
+- [x] 新增 `content_format` 字段与 `blocks-v1` JSON 内容块
+- [x] 旧数据库章节默认 `text`，前端保留纯文本读取回退
 
 ### M6.3 阅读设置
 
@@ -97,9 +97,13 @@ M6.0 先做小步修复并建立回归测试；随后把 2000 多行的单文件
 - 2026-08-02：新增安全 JSONPath 解析层，支持字符串/对象规则、`jsonPath`/`path` 别名、对象字段、通配数组和数组下标；HTML/CSS 书源路径保持兼容。
 - 2026-08-02：TXT 导入剥离 UTF-8 BOM，并在章节内容裁剪时保留首行缩进与空行段落；新增 BOM/缩进回归测试。
 - 2026-08-02：EPUB 文本提取改为安全块级转换：过滤 script/style/noscript，保留段落、标题和引用边界，图片转为本地占位文本，并扩展常见 HTML 实体；不执行外部资源，图片映射与缓存仍待后续完成。
+- 2026-08-02：EPUB 引入 `blocks-v1` 内容文档和 `content_format` 数据库迁移，前端按白名单渲染标题、段落、引用和 strong/em 文本；旧 text 章节继续走原有纯文本回退。
+- 2026-08-02：EPUB 图片仅解析包内安全栅格资源，转为受大小上限保护的本地 data URI；外链、SVG 和超限资源不嵌入，前端拒绝非白名单 URI。
 - 当前边界：界面导入使用预览和逐条跳过，原有 `import_sources` 命令仍保留整包严格模式供兼容调用；JSONPath 仅支持安全字段/数组遍历，不执行过滤表达式、XPath、JavaScript 或认证逻辑；更多编码和授权夹具仍需后续评估。本轮不在本地构建或安装。
 - CI 验证：运行 [30742621733](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30742621733) 通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 30 个 Rust tests；JSONPath 导入、搜索解析和 TXT BOM/缩进回归测试均包含在本次验证中。
 - CI 验证：运行 [30743927928](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30743927928) 通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 32 个 Rust tests；EPUB 脚本/样式过滤、引用边界和图片占位回归测试均包含在本次验证中。
+- CI 验证：运行 [30744561337](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30744561337) 通过内容块格式的前端/Rust 检查与 33 个 Rust tests。
+- CI 验证：运行 [30744789147](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30744789147) 通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 34 个 Rust tests；内容块、图片本地映射、大小上限和外链拒绝回归测试均包含在本次验证中。
 
 ## 四、测试与验收
 
