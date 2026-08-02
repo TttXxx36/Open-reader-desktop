@@ -93,7 +93,7 @@
 - 空库/旧 M5 数据库升级失败回滚、重复来源 URL 冲突和非法枚举专项夹具。
 - 跨分组拖拽、批量元数据编辑、快照清理策略和 Windows 手工恢复流程。
 
-## M7.2 规则执行增强（分页诊断、安全回退链与缓存诊断已完成）
+## M7.2 规则执行增强（分页诊断、安全回退链、缓存诊断与有限 JSONPath 已完成）
 
 分页/模板变量首个切片已接入真实 pipeline：支持 page、pageNum、pageIndex、page+1、page-1、keyword/key、bookUrl/bookId、chapterId；多页搜索有 20 页硬上限，并在空页或无新增结果时停止。随后补齐了统一的每源诊断模型（扫描页数、解析数量、终止原因、请求失败）和前端展示；调试步骤携带变量名快照（关键词、URL 和 ID 脱敏）与 cache_hit 字段。
 
@@ -101,12 +101,14 @@
 
 书籍/章节缓存响应现在返回 cache_hit；过期刷新失败时保留 stale 与错误原因，阅读器明确提示缓存来源并可手动刷新。基础缓存可见化已完成，导出的诊断快照与重试时间线仍属于后续切片。
 
-远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）。
+有限 JSONPath 已扩展为安全子集：支持对象字段、数组下标、数组/对象通配、连续括号字段别名（`['title']`/[\"title\"]）和单字段等值过滤（`[?(@.kind == 'novel')]`）。路径最多 512 字节，字段最多 128 字节，过滤值最多 256 字节，单段最多产生 256 个节点；不等式、逻辑组合、函数、脚本和转义表达式继续拒绝。
+
+远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）；[GitHub Actions run 30763032154](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30763032154)（有限 JSONPath，44 tests）。
 
 后续切片：
 
 1. 将缓存命中、失败回退和重试记录合并到可导出的诊断快照。
-2. 扩展有限 JSONPath 的数组过滤/字段别名，并为每项能力补授权夹具和拒绝用例。
+2. 保持复杂 JSONPath（函数、脚本、逻辑组合）拒绝，并根据授权夹具补充有限数字/布尔值过滤。
 3. 在不执行脚本的前提下补多级 URL 中间模型，限制深度、响应数和总耗时。
 4. 为链式规则增加请求级取消、超时预算和 UI 中的候选命中说明。
 
