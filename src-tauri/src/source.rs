@@ -1071,6 +1071,160 @@ impl SourceEngine {
         })
     }
 
+    pub async fn fetch_chapter_content_with_policy(
+        &self,
+        source: &BookSource,
+        chapter: &SourceChapter,
+        policy: &NextPagePolicy,
+        debug_steps: &mut Vec<SourceDebugStep>,
+    ) -> Result<SourceChapterContent, SourceError> {
+        if !policy.enabled {
+            return self
+                .fetch_chapter_content(source, chapter, debug_steps)
+                .await;
+        }
+
+        let template = source
+            .content_url
+            .as_deref()
+            .ok_or_else(|| SourceError::InvalidConfig("contentUrl is required".to_string()))?;
+        let rules = source
+            .content
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
+
+        let started = Instant::now();
+        let mut depth = 0;
+        let mut pages_used = 0;
+        let mut bytes_used = 0;
+        let mut current_url = chapter.url.clone();
+        let mut visited_urls = vec![current_url.clone()];
+        let mut combined = String::new();
+        let mut pending_next_url = None;
+
+        loop {
+            let context = SourceRequestContext::chapter(&current_url);
+            let stage = if depth == 0 {
+                "content".to_string()
+            } else {
+                format!("content.next.depth-{depth}")
+            };
+            let fetched = match self
+                .fetch_stage_chain(
+                    &stage,
+                    template,
+                    &source.headers,
+                    &context,
+                    debug_steps,
+                )
+                .await
+            {
+                Ok(fetched) => fetched,
+                Err(error) if pages_used > 0 => {
+                    debug_steps.push(SourceDebugStep {
+                        stage: "content.next.policy".to_string(),
+                        url: redact_url(&current_url),
+                        duration_ms: started.elapsed().as_millis() as u64,
+                        status: None,
+                        bytes: None,
+                        error: Some(format!("next URL request_error: {error}")),
+                        variables: context.variables(),
+                        cache_hit: false,
+                    });
+                    pending_next_url = Some(current_url);
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+
+            let (body, content_url) = fetched;
+            let max_bytes = policy.max_bytes.min(default_next_page_bytes());
+            if bytes_used.saturating_add(body.len()) > max_bytes {
+                let error = SourceError::BodyTooLarge(max_bytes);
+                debug_steps.push(SourceDebugStep {
+                    stage: "content.next.policy".to_string(),
+                    url: redact_url(&content_url),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    status: None,
+                    bytes: Some(body.len()),
+                    error: Some(format!("next URL byte_limit: {error}")),
+                    variables: context.variables(),
+                    cache_hit: false,
+                });
+                if pages_used == 0 {
+                    return Err(error);
+                }
+                pending_next_url = Some(content_url);
+                break;
+            }
+
+            let (page_content, next_url) = match parse_chapter_page(rules, &body, &content_url) {
+                Ok(page) => page,
+                Err(error) if pages_used > 0 => {
+                    debug_steps.push(SourceDebugStep {
+                        stage: "content.next.policy".to_string(),
+                        url: redact_url(&content_url),
+                        duration_ms: started.elapsed().as_millis() as u64,
+                        status: None,
+                        bytes: Some(body.len()),
+                        error: Some(format!("next URL parse_error: {error}")),
+                        variables: context.variables(),
+                        cache_hit: false,
+                    });
+                    pending_next_url = Some(content_url);
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+
+            let page_content = apply_replace_rules(&page_content, &source.replace_rules)?;
+            if !combined.is_empty() {
+                combined.push_str("\n\n");
+            }
+            combined.push_str(&page_content);
+            pages_used = pages_used.saturating_add(1);
+            bytes_used = bytes_used.saturating_add(body.len());
+
+            let Some(next_url) = next_url else {
+                break;
+            };
+            let decision = evaluate_next_page_policy(
+                policy,
+                &content_url,
+                &next_url,
+                depth,
+                pages_used,
+                bytes_used,
+                started.elapsed().as_secs(),
+                &visited_urls,
+            );
+            if !decision.allowed {
+                debug_steps.push(SourceDebugStep {
+                    stage: "content.next.policy".to_string(),
+                    url: redact_url(&next_url),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    status: None,
+                    bytes: None,
+                    error: Some(format!("next URL {}", decision.reason)),
+                    variables: context.variables(),
+                    cache_hit: false,
+                });
+                pending_next_url = Some(next_url);
+                break;
+            }
+
+            depth = decision.next_depth;
+            current_url = next_url;
+            visited_urls.push(current_url.clone());
+        }
+
+        Ok(SourceChapterContent {
+            title: chapter.title.clone(),
+            content: combined,
+            next_url: pending_next_url,
+        })
+    }
+
     pub fn extract_html_value(&self, html: &str, rule: &SourceRule) -> Result<String, SourceError> {
         let document = Html::parse_document(html);
         let selector = parse_selector(rule.selector())?;
