@@ -1710,6 +1710,38 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   margin-top: 14px;
 }
 
+.source-conflict-strategy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #aebbd0;
+  font-size: 11px;
+}
+
+.source-conflict-strategy select,
+.source-batch-group-input {
+  padding: 7px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  color: #dce7f7;
+  background: #0c111b;
+  font-size: 11px;
+}
+
+.source-snapshot-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 9px;
+  padding: 8px 11px;
+  border: 1px solid rgba(155, 231, 216, 0.16);
+  border-radius: 9px;
+  color: #8391a6;
+  background: rgba(12, 17, 27, 0.38);
+  font-size: 11px;
+}
+
 .secondary-button {
   padding: 10px 14px;
   border: 1px solid rgba(155, 231, 216, 0.45);
@@ -1847,6 +1879,10 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 
 .source-batch-bar strong {
   color: #dce7f7;
+}
+
+.source-batch-group-input {
+  width: 92px;
 }
 
 .source-library-actions input {
