@@ -3587,6 +3587,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn follows_authorized_next_pages_with_opt_in_policy() {
+        let (base_url, server) = spawn_next_page_fixture_server();
+        let mut source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Next page fixture",
+              "searchUrl": "https://example.test/search",
+              "content": {
+                "content": { "selector": "article.content" },
+                "next": { "selector": "a.next", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("next page source should parse");
+        source.content_url = Some(format!("{base_url}/chapter/{{{{chapterId}}}}"));
+
+        let chapter = SourceChapter {
+            title: "第一章".to_string(),
+            url: format!("{base_url}/chapter/1"),
+            index: 0,
+        };
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let mut debug_steps = Vec::new();
+        let result = engine
+            .fetch_chapter_content_with_policy(&source, &chapter, &policy, &mut debug_steps)
+            .await
+            .expect("next page fixture should succeed");
+
+        assert!(result.content.contains("第一页"));
+        assert!(result.content.contains("第二页"));
+        assert!(result.content.contains("第三页"));
+        assert!(result.next_url.is_none());
+        assert!(debug_steps
+            .iter()
+            .any(|step| step.stage == "content.next.depth-1"));
+        assert!(debug_steps
+            .iter()
+            .any(|step| step.stage == "content.next.depth-2"));
+        server.join().expect("next page fixture server should stop");
+    }
+
+    #[tokio::test]
     async fn runs_authorized_fixture_pipeline() {
         let (base_url, server) = spawn_fixture_server();
         let mut source: BookSource =
@@ -3659,6 +3704,50 @@ mod tests {
         });
 
         (format!("http://{}", address), server)
+    }
+
+
+    fn spawn_next_page_fixture_server() -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("next page fixture listener");
+        let address = listener
+            .local_addr()
+            .expect("next page fixture address");
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(3) {
+                let mut stream = stream.expect("next page fixture stream");
+                let mut buffer = [0_u8; 2048];
+                let size = stream
+                    .read(&mut buffer)
+                    .expect("next page fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let body = match path {
+                    "/chapter/1" => {
+                        r#"<article class="content">第一页</article><a class="next" href="/chapter/2">下一页</a>"#
+                    }
+                    "/chapter/2" => {
+                        r#"<article class="content">第二页</article><a class="next" href="/chapter/3">下一页</a>"#
+                    }
+                    _ => r#"<article class="content">第三页</article>"#,
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("next page fixture response");
+            }
+        });
+
+        (format!("http://{address}"), server)
     }
 
     fn spawn_fixture_server() -> (String, std::thread::JoinHandle<()>) {
