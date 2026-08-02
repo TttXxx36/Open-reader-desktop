@@ -725,7 +725,10 @@ mod tests {
         let source: BookSource =
             serde_json::from_str(&imported[0].config_json).expect("canonical JSONPath source");
         assert_eq!(
-            source.search.as_ref().and_then(|rules| rules.item.as_deref()),
+            source
+                .search
+                .as_ref()
+                .and_then(|rules| rules.item.as_deref()),
             Some("$.books[*]")
         );
         assert!(matches!(
