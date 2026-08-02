@@ -71,6 +71,10 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
     if bytes.starts_with(&[0xFE, 0xFF]) {
         return Ok(UTF_16BE.decode(&bytes[2..]).0.into_owned());
     }
+
+    let bytes = bytes
+        .strip_prefix(&[0xEF, 0xBB, 0xBF])
+        .unwrap_or(bytes);
     if let Ok(text) = String::from_utf8(bytes.to_vec()) {
         return Ok(text);
     }
@@ -109,10 +113,13 @@ fn split_txt(text: &str) -> Vec<ParsedChapter> {
 }
 
 fn push_text_chapter(chapters: &mut Vec<ParsedChapter>, title: &str, lines: &[String]) {
-    let content = lines.join("\n").trim().to_string();
-    if content.is_empty() {
+    let Some(first) = lines.iter().position(|line| !line.trim().is_empty()) else {
         return;
-    }
+    };
+    let Some(last) = lines.iter().rposition(|line| !line.trim().is_empty()) else {
+        return;
+    };
+    let content = lines[first..=last].join("\n");
 
     let title = if title.is_empty() {
         format!("正文 {}", chapters.len() + 1)
@@ -383,6 +390,20 @@ mod tests {
         assert_eq!(book.title, "demo");
         assert_eq!(book.chapters.len(), 2);
         assert_eq!(book.chapters[1].content, "世界");
+    }
+
+    #[test]
+    fn strips_utf8_bom_and_preserves_indentation() {
+        let bytes = [
+            vec![0xEF, 0xBB, 0xBF],
+            "第一章\n  首行缩进\n\n第二章\n正文".as_bytes().to_vec(),
+        ]
+        .concat();
+        let book = parse_book_bytes("bom.txt", &bytes).expect("BOM txt should parse");
+
+        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters[0].title, "第一章");
+        assert_eq!(book.chapters[0].content, "  首行缩进");
     }
 
     #[test]
