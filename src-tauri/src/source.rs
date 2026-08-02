@@ -763,13 +763,7 @@ impl SourceEngine {
         let context = SourceRequestContext::book(book_url);
         let url = render_url_context(template, &context);
         let body = self
-            .fetch_stage(
-                "book_info",
-                &url,
-                &source.headers,
-                &context,
-                debug_steps,
-            )
+            .fetch_stage("book_info", &url, &source.headers, &context, debug_steps)
             .await?;
         let rules = source
             .book_info
@@ -2276,7 +2270,11 @@ mod tests {
         assert_eq!(result.debug_steps.len(), 4);
         assert!(result.debug_steps.iter().all(|step| step.error.is_none()));
         assert_eq!(
-            result.debug_steps[0].variables.get("page").map(String::as_str),
+            result
+                .debug_steps[0]
+                .variables
+                .get("page")
+                .map(String::as_str),
             Some("1")
         );
         assert_eq!(
