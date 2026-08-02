@@ -2132,6 +2132,13 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   text-align: left;
 }
 
+.source-preview-unsupported small {
+  display: block;
+  margin-top: 0.15rem;
+  color: #d7c4a1;
+  font-size: 0.7rem;
+}
+
 .source-preview-actions {
   justify-content: flex-start;
   margin-top: 14px;
