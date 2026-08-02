@@ -278,7 +278,8 @@ fn collect_unsupported_rules_at(
         Value::Object(object) => {
             for (key, child) in object {
                 let child_path = format!("{path}.{key}");
-                if key.eq_ignore_ascii_case("config_json") || key.eq_ignore_ascii_case("configJson") {
+                if key.eq_ignore_ascii_case("config_json") || key.eq_ignore_ascii_case("configJson")
+                {
                     if let Some(raw) = child.as_str() {
                         if let Ok(nested) =
                             serde_json::from_str::<Value>(raw.trim_start_matches('\u{feff}'))
