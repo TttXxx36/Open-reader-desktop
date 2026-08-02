@@ -18,6 +18,11 @@ const MAX_REPLACE_PATTERN_BYTES: usize = 512;
 const MAX_REPLACE_REPLACEMENT_BYTES: usize = 4 * 1024;
 const MAX_PERMISSION_SCOPE_BYTES: usize = 512;
 const MAX_PERMISSION_REVIEWED_AT_BYTES: usize = 64;
+const MAX_SOURCE_GROUP_BYTES: usize = 128;
+const MAX_SOURCE_COMMENT_BYTES: usize = 2 * 1024;
+const MAX_BOOK_URL_PATTERN_BYTES: usize = 512;
+const MAX_SOURCE_WEIGHT: i64 = 1_000_000;
+const MAX_SOURCE_CUSTOM_ORDER: i64 = 1_000_000;
 const MAX_REDIRECTS: usize = 5;
 
 #[derive(Debug, Error)]
@@ -49,6 +54,24 @@ pub enum SourceError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookSource {
     pub name: String,
+    #[serde(default, alias = "bookSourceUrl")]
+    pub source_url: Option<String>,
+    #[serde(default, alias = "bookSourceGroup")]
+    pub group: Option<String>,
+    #[serde(default, alias = "bookSourceType")]
+    pub source_type: i64,
+    #[serde(default, alias = "bookUrlPattern")]
+    pub book_url_pattern: Option<String>,
+    #[serde(default, alias = "exploreUrl")]
+    pub explore_url: Option<String>,
+    #[serde(default, alias = "enabledExplore")]
+    pub enabled_explore: bool,
+    #[serde(default, alias = "customOrder")]
+    pub custom_order: i64,
+    #[serde(default)]
+    pub weight: i64,
+    #[serde(default, alias = "bookSourceComment")]
+    pub comment: Option<String>,
     #[serde(alias = "searchUrl")]
     pub search_url: String,
     #[serde(default, alias = "bookInfoUrl")]
@@ -1065,6 +1088,50 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
     if source.name.trim().is_empty() {
         errors.push("name 不能为空".to_string());
     }
+    if let Some(value) = source.source_url.as_deref() {
+        validate_endpoint("bookSourceUrl", value, &mut errors);
+    }
+    if let Some(value) = source.explore_url.as_deref() {
+        validate_endpoint("exploreUrl", value, &mut errors);
+    }
+    if source.source_type != 0 {
+        errors.push("bookSourceType 目前仅支持文本书源（0）；音频书源将在后续版本评估".to_string());
+    }
+    if source.enabled_explore && source.explore_url.is_none() {
+        warnings.push("enabledExplore 已开启，但未配置 exploreUrl".to_string());
+    }
+    if source
+        .group
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_SOURCE_GROUP_BYTES)
+    {
+        errors.push(format!("bookSourceGroup 不能超过 {} 字节", MAX_SOURCE_GROUP_BYTES));
+    }
+    if source
+        .comment
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_SOURCE_COMMENT_BYTES)
+    {
+        errors.push(format!("bookSourceComment 不能超过 {} 字节", MAX_SOURCE_COMMENT_BYTES));
+    }
+    if source
+        .book_url_pattern
+        .as_ref()
+        .is_some_and(|value| value.len() > MAX_BOOK_URL_PATTERN_BYTES)
+    {
+        errors.push(format!("bookUrlPattern 不能超过 {} 字节", MAX_BOOK_URL_PATTERN_BYTES));
+    }
+    if source.weight < -MAX_SOURCE_WEIGHT || source.weight > MAX_SOURCE_WEIGHT {
+        errors.push(format!("weight 必须在 ±{} 范围内", MAX_SOURCE_WEIGHT));
+    }
+    if source.custom_order < -MAX_SOURCE_CUSTOM_ORDER
+        || source.custom_order > MAX_SOURCE_CUSTOM_ORDER
+    {
+        errors.push(format!(
+            "customOrder 必须在 ±{} 范围内",
+            MAX_SOURCE_CUSTOM_ORDER
+        ));
+    }
     validate_permission(&source.permission, &mut errors);
     validate_endpoint("searchUrl", &source.search_url, &mut errors);
     for (name, value) in [
@@ -1205,6 +1272,8 @@ fn validate_permission(permission: &SourcePermission, errors: &mut Vec<String>) 
 fn source_endpoint_hosts(source: &BookSource) -> Vec<String> {
     let mut hosts = HashSet::new();
     for endpoint in [
+        source.source_url.as_deref(),
+        source.explore_url.as_deref(),
         Some(source.search_url.as_str()),
         source.book_info_url.as_deref(),
         source.toc_url.as_deref(),
@@ -1645,6 +1714,52 @@ mod tests {
         let result = validate_source_json(include_str!("../fixtures/sample_source.json"));
         assert!(result.valid, "{:?}", result.errors);
         assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn preserves_legado_source_metadata() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Metadata fixture",
+              "bookSourceUrl": "https://metadata.example.test/",
+              "bookSourceGroup": "公开测试",
+              "bookSourceType": 0,
+              "bookUrlPattern": "https://metadata.example.test/book/{{bookId}}",
+              "exploreUrl": "https://metadata.example.test/explore",
+              "enabledExplore": true,
+              "customOrder": 12,
+              "weight": 80,
+              "bookSourceComment": "仅用于授权夹具",
+              "searchUrl": "https://metadata.example.test/search?q={{keyword}}"
+            }"#,
+        );
+        assert!(result.valid, "{:?}", result.errors);
+        let source = result.source.expect("source should parse");
+        assert_eq!(source.source_url.as_deref(), Some("https://metadata.example.test/"));
+        assert_eq!(source.group.as_deref(), Some("公开测试"));
+        assert_eq!(source.source_type, 0);
+        assert_eq!(
+            source.book_url_pattern.as_deref(),
+            Some("https://metadata.example.test/book/{{bookId}}")
+        );
+        assert_eq!(source.explore_url.as_deref(), Some("https://metadata.example.test/explore"));
+        assert!(source.enabled_explore);
+        assert_eq!(source.custom_order, 12);
+        assert_eq!(source.weight, 80);
+        assert_eq!(source.comment.as_deref(), Some("仅用于授权夹具"));
+    }
+
+    #[test]
+    fn rejects_unsupported_audio_source_type() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Audio fixture",
+              "bookSourceType": 1,
+              "searchUrl": "https://example.test/search?q={{keyword}}"
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result.errors.iter().any(|error| error.contains("音频书源")));
     }
 
     #[test]
