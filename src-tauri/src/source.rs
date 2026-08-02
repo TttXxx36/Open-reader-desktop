@@ -1545,6 +1545,101 @@ fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceErr
         .map(|values| values.into_iter().map(json_value_to_text).collect())
 }
 
+fn extract_json_rule(value: &Value, rule: &SourceRule) -> Result<String, SourceError> {
+    let path = rule.json_path().ok_or_else(|| {
+        SourceError::InvalidConfig("JSON 文档中的字段必须使用 JSONPath 规则".to_string())
+    })?;
+    let selected = extract_json_nodes(value, path)?
+        .into_iter()
+        .next()
+        .ok_or(SourceError::NoMatch)?;
+    let selected = if let Some(attribute) = rule.attr() {
+        selected
+            .get(attribute)
+            .ok_or(SourceError::NoMatch)?
+    } else {
+        selected
+    };
+    let text = json_value_to_text(selected);
+    apply_regex(text.trim(), rule.regex())
+}
+
+fn extract_json_rule_optional(
+    value: &Value,
+    rule: Option<&SourceRule>,
+) -> Result<Option<String>, SourceError> {
+    let Some(rule) = rule else {
+        return Ok(None);
+    };
+    match extract_json_rule(value, rule) {
+        Ok(value) => Ok(Some(value)),
+        Err(SourceError::NoMatch) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn first_json_context<'a>(
+    value: &'a Value,
+    item_path: Option<&str>,
+) -> Result<&'a Value, SourceError> {
+    extract_json_nodes(value, item_path.unwrap_or("$"))?
+        .into_iter()
+        .next()
+        .ok_or(SourceError::NoMatch)
+}
+
+fn parse_json_rule_document(
+    body: &str,
+    item_path: Option<&str>,
+    rule: Option<&SourceRule>,
+) -> Result<Option<String>, SourceError> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+    let context = first_json_context(&value, item_path)?;
+    extract_json_rule_optional(context, rule)
+}
+
+fn parse_book_info_json(
+    rules: &PageRules,
+    body: &str,
+    book_url: &str,
+) -> Result<BookInfo, SourceError> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+    let context = first_json_context(&value, rules.item.as_deref())?;
+    Ok(BookInfo {
+        title: extract_json_rule_optional(context, rules.title.as_ref())?
+            .unwrap_or_else(|| "未命名书籍".to_string()),
+        author: non_empty(extract_json_rule_optional(context, rules.author.as_ref())?),
+        intro: non_empty(extract_json_rule_optional(context, rules.intro.as_ref())?),
+        cover_url: non_empty(extract_json_rule_optional(context, rules.url.as_ref())?),
+        book_url: book_url.to_string(),
+    })
+}
+
+fn parse_chapter_list_json(
+    rules: &PageRules,
+    body: &str,
+    base_url: &str,
+) -> Result<Vec<SourceChapter>, SourceError> {
+    let value: Value = serde_json::from_str(body)
+        .map_err(|error| SourceError::InvalidJson(error.to_string()))?;
+    let items = extract_json_nodes(&value, rules.item.as_deref().unwrap_or("$"))?;
+    let mut chapters = Vec::new();
+
+    for (index, item) in items.into_iter().enumerate() {
+        let Some(title) = extract_json_rule_optional(item, rules.title.as_ref())? else {
+            continue;
+        };
+        let url = extract_json_rule_optional(item, rules.url.as_ref())?
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| absolutize_url(base_url, &value))
+            .unwrap_or_else(|| format!("{base_url}#chapter-{index}"));
+        chapters.push(SourceChapter { title, url, index });
+    }
+
+    Ok(chapters)
+}
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
 }
