@@ -125,6 +125,19 @@ interface SourceImportUrlPreview {
   preview: SourceImportPreview;
 }
 
+interface SourceImportResult {
+  imported: SourceSummary[];
+  snapshot_id: string;
+  skipped: number;
+}
+
+interface SourceSnapshotSummary {
+  id: string;
+  label: string;
+  source_count: number;
+  created_at: string;
+}
+
 interface SourceAuditReport {
   source_id: string;
   source_name: string;
@@ -274,6 +287,10 @@ const sourceExploreDraft = ref(false);
 const sourceCommentDraft = ref("");
 const selectedSourceIds = ref<string[]>([]);
 const sourceBatchBusy = ref(false);
+const sourceBatchGroup = ref("");
+const sourceSnapshots = ref<SourceSnapshotSummary[]>([]);
+const sourceImportStrategy = ref<"update" | "skip-existing" | "new">("update");
+const sourceImportSnapshotId = ref<string | null>(null);
 const filteredSources = computed(() => {
   const filter = sourceGroupFilter.value.trim().toLocaleLowerCase();
   if (!filter) return sources.value;
@@ -485,7 +502,7 @@ async function loadBooks() {
 async function openSources() {
   view.value = "sources";
   errorMessage.value = "";
-  await Promise.all([loadSources(), refreshSourceCacheStatus()]);
+  await Promise.all([loadSources(), loadSourceSnapshots(), refreshSourceCacheStatus()]);
 }
 
 function openSettings() {
@@ -513,6 +530,14 @@ async function loadSources() {
     errorMessage.value = String(error);
   } finally {
     sourceListBusy.value = false;
+  }
+}
+
+async function loadSourceSnapshots() {
+  try {
+    sourceSnapshots.value = await invoke<SourceSnapshotSummary[]>("list_source_snapshots");
+  } catch (error) {
+    errorMessage.value = String(error);
   }
 }
 
@@ -669,7 +694,7 @@ function toggleSelectAllSources() {
   }
 }
 
-async function applySourceBatch(action: "enable" | "disable" | "explore-on" | "explore-off" | "delete") {
+async function applySourceBatch(action: "enable" | "disable" | "explore-on" | "explore-off" | "group" | "delete") {
   const sourceIds = [...selectedSourceIds.value];
   if (!sourceIds.length) {
     errorMessage.value = "请先选择书源";
@@ -687,6 +712,17 @@ async function applySourceBatch(action: "enable" | "disable" | "explore-on" | "e
         sourceIds,
         enabled: action === "enable",
       });
+    } else if (action === "group") {
+      const groupName = sourceBatchGroup.value.trim();
+      if (!groupName) {
+        errorMessage.value = "请输入目标分组";
+        return;
+      }
+      await invoke("set_sources_group", {
+        sourceIds,
+        groupName,
+      });
+      sourceBatchGroup.value = "";
     } else {
       await invoke("set_sources_explore_enabled", {
         sourceIds,
@@ -758,12 +794,37 @@ function clearSearch() {
   searchKeyword.value = "";
 }
 
-async function finishSourceImport(imported: SourceSummary[], label: string) {
+async function finishSourceImport(result: SourceImportResult, label: string) {
   await loadSources();
-  if (imported[0]) {
-    selectSource(imported[0]);
+  await loadSourceSnapshots();
+  sourceImportSnapshotId.value = result.snapshot_id;
+  if (result.imported[0]) {
+    selectSource(result.imported[0]);
   }
-  sourceTransferMessage.value = "已从" + label + "导入 " + imported.length + " 个书源";
+  const skipped = result.skipped ? `，跳过 ${result.skipped} 个冲突项` : "";
+  sourceTransferMessage.value = "已从" + label + "导入 " + result.imported.length + " 个书源" + skipped;
+}
+
+async function restoreSourceSnapshot(snapshotId = sourceImportSnapshotId.value ?? sourceSnapshots.value[0]?.id) {
+  if (!snapshotId) {
+    errorMessage.value = "当前没有可恢复的书源快照";
+    return;
+  }
+  if (!window.confirm("恢复快照会替换当前全部书源，确定继续吗？")) return;
+
+  sourceTransferBusy.value = true;
+  errorMessage.value = "";
+  try {
+    await invoke<SourceSummary[]>("restore_source_snapshot", { snapshotId });
+    sourceImportSnapshotId.value = null;
+    await Promise.all([loadSources(), loadSourceSnapshots()]);
+    newSourceDraft();
+    sourceTransferMessage.value = "已恢复书源快照";
+  } catch (error) {
+    errorMessage.value = String(error);
+  } finally {
+    sourceTransferBusy.value = false;
+  }
 }
 
 async function exportSources() {
@@ -829,11 +890,12 @@ async function confirmSourceImport() {
   sourceTransferMessage.value = "";
   errorMessage.value = "";
   try {
-    const imported = await invoke<SourceSummary[]>("import_sources_selected", {
+    const result = await invoke<SourceImportResult>("import_sources_selected", {
       bundleJson: payload,
       indices,
+      conflictStrategy: sourceImportStrategy.value,
     });
-    await finishSourceImport(imported, label);
+    await finishSourceImport(result, label);
     clearSourceImportPreview();
   } catch (error) {
     errorMessage.value = String(error);
@@ -1179,7 +1241,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
