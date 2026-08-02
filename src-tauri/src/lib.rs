@@ -3,7 +3,10 @@ mod library;
 mod source;
 mod source_import;
 
-use db::{BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceSummary};
+use db::{
+    BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceMetadata,
+    SourceSummary,
+};
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
 use source::{
@@ -91,8 +94,9 @@ fn save_source(
     if !validation.valid {
         return Err(validation.errors.join("；"));
     }
+    let metadata = SourceMetadata::from(&source);
     database
-        .save_source(source_id.as_deref(), &source.name, &config_json)
+        .save_source(source_id.as_deref(), &source.name, &config_json, &metadata)
         .map_err(|error| error.to_string())
 }
 
@@ -105,6 +109,116 @@ fn set_source_enabled(
     database
         .set_source_enabled(&source_id, enabled)
         .map_err(|error| error.to_string())
+}
+
+fn update_source_metadata_impl(
+    database: &Database,
+    source_id: &str,
+    group_name: Option<String>,
+    weight: Option<i64>,
+    custom_order: Option<i64>,
+    enabled_explore: Option<bool>,
+    comment: Option<String>,
+) -> Result<SourceSummary, String> {
+    let summary = database
+        .list_sources()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| "书源不存在".to_string())?;
+
+    let mut value: serde_json::Value = serde_json::from_str(&summary.config_json)
+        .map_err(|error| format!("书源配置解析失败：{error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "书源配置必须是 JSON 对象".to_string())?;
+
+    if let Some(group_name) = group_name {
+        let group_name = group_name.trim();
+        if group_name.is_empty() {
+            object.remove("group");
+        } else {
+            object.insert(
+                "group".to_string(),
+                serde_json::Value::String(group_name.to_string()),
+            );
+        }
+    }
+    if let Some(weight) = weight {
+        object.insert("weight".to_string(), serde_json::json!(weight));
+    }
+    if let Some(custom_order) = custom_order {
+        object.insert("custom_order".to_string(), serde_json::json!(custom_order));
+    }
+    if let Some(enabled_explore) = enabled_explore {
+        object.insert(
+            "enabled_explore".to_string(),
+            serde_json::json!(enabled_explore),
+        );
+    }
+    if let Some(comment) = comment {
+        let comment = comment.trim();
+        if comment.is_empty() {
+            object.remove("comment");
+        } else {
+            object.insert(
+                "comment".to_string(),
+                serde_json::Value::String(comment.to_string()),
+            );
+        }
+    }
+
+    let config_json =
+        serde_json::to_string(&value).map_err(|error| format!("书源配置序列化失败：{error}"))?;
+    let validation = source::validate_source_json(&config_json);
+    let source = validation
+        .source
+        .ok_or_else(|| validation.errors.join("；"))?;
+    if !validation.valid {
+        return Err(validation.errors.join("；"));
+    }
+    let metadata = SourceMetadata::from(&source);
+    database
+        .save_source(Some(source_id), &source.name, &config_json, &metadata)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_source_metadata(
+    database: tauri::State<'_, Database>,
+    source_id: String,
+    group_name: Option<String>,
+    weight: Option<i64>,
+    custom_order: Option<i64>,
+    enabled_explore: Option<bool>,
+    comment: Option<String>,
+) -> Result<SourceSummary, String> {
+    update_source_metadata_impl(
+        &database,
+        &source_id,
+        group_name,
+        weight,
+        custom_order,
+        enabled_explore,
+        comment,
+    )
+}
+
+#[tauri::command]
+fn set_source_explore_enabled(
+    database: tauri::State<'_, Database>,
+    source_id: String,
+    enabled: bool,
+) -> Result<SourceSummary, String> {
+    update_source_metadata_impl(
+        &database,
+        &source_id,
+        None,
+        None,
+        None,
+        Some(enabled),
+        None,
+    )
 }
 
 #[tauri::command]
@@ -185,8 +299,9 @@ fn persist_imported_sources(
             ));
         }
 
+        let metadata = SourceMetadata::from(&source);
         let saved = database
-            .save_source(item.id.as_deref(), &source.name, &item.config_json)
+            .save_source(item.id.as_deref(), &source.name, &item.config_json, &metadata)
             .map_err(|error| error.to_string())?;
         let saved = database
             .set_source_enabled(&saved.id, item.enabled)
@@ -264,6 +379,15 @@ fn export_sources(database: tauri::State<'_, Database>) -> Result<String, String
                 "id": source.id,
                 "enabled": source.enabled,
                 "config_json": source.config_json,
+                "source_url": source.source_url,
+                "group_name": source.group_name,
+                "source_type": source.source_type,
+                "weight": source.weight,
+                "enabled_explore": source.enabled_explore,
+                "custom_order": source.custom_order,
+                "comment": source.comment,
+                "book_url_pattern": source.book_url_pattern,
+                "explore_url": source.explore_url,
             }))
             .collect::<Vec<_>>(),
     });
@@ -638,6 +762,8 @@ pub fn run() {
             list_sources,
             save_source,
             set_source_enabled,
+            update_source_metadata,
+            set_source_explore_enabled,
             delete_source,
             audit_sources,
             export_sources,
