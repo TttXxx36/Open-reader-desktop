@@ -107,6 +107,10 @@ interface UnsupportedImportRule {
   context: string;
   value: string;
   reason: string;
+  offline_accepted: boolean;
+  offline_syntax: string;
+  offline_steps: number;
+  offline_estimated_work: number;
 }
 
 interface SourceImportPreviewEntry {
