@@ -1133,7 +1133,7 @@ const MAX_DIAGNOSTIC_STEPS = 256;
 const MAX_DIAGNOSTIC_BYTES = 256 * 1024;
 
 function truncateDiagnostic(value: string, limit: number) {
-  const normalized = value.replace(/[\\u0000-\\u001f\\u007f]/g, " ");
+  const normalized = value.replace(/[\u0000-\u001f\u007f]/g, " ");
   return normalized.length > limit ? normalized.slice(0, limit) + "…" : normalized;
 }
 
