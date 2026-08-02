@@ -1589,7 +1589,13 @@ pub fn evaluate_next_page_policy(
         );
     }
     if bytes_used >= max_bytes {
-        return bounded(false, "byte_limit", depth, max_pages.saturating_sub(pages_used), 0);
+        return bounded(
+            false,
+            "byte_limit",
+            depth,
+            max_pages.saturating_sub(pages_used),
+            0,
+        );
     }
     if elapsed_secs >= max_duration_secs {
         return bounded(false, "time_limit", depth, max_pages.saturating_sub(pages_used), max_bytes.saturating_sub(bytes_used));
