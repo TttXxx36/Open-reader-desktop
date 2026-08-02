@@ -9,6 +9,7 @@ use db::{
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use source::{
     MultiSourceSearchResult, SourceBookDetail, SourceDefinition, SourceEngine, SourcePreview,
     SourceSearchFailure, SourceValidation,
@@ -219,6 +220,105 @@ fn set_source_explore_enabled(
     update_source_metadata_impl(&database, &source_id, None, None, None, Some(enabled), None)
 }
 
+const MAX_SOURCE_BATCH: usize = 512;
+
+fn validate_source_ids(database: &Database, source_ids: &[String]) -> Result<(), String> {
+    if source_ids.is_empty() {
+        return Err("请至少选择一个书源".to_string());
+    }
+    if source_ids.len() > MAX_SOURCE_BATCH {
+        return Err(format!("单次最多操作 {MAX_SOURCE_BATCH} 个书源"));
+    }
+
+    let mut unique = HashSet::new();
+    for source_id in source_ids {
+        if source_id.trim().is_empty() || !unique.insert(source_id) {
+            return Err("书源选择列表包含空 ID 或重复项".to_string());
+        }
+    }
+
+    let existing = database.list_sources().map_err(|error| error.to_string())?;
+    if source_ids
+        .iter()
+        .any(|source_id| !existing.iter().any(|source| source.id == *source_id))
+    {
+        return Err("书源选择列表包含不存在的条目".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_sources_enabled(
+    database: tauri::State<'_, Database>,
+    source_ids: Vec<String>,
+    enabled: bool,
+) -> Result<Vec<SourceSummary>, String> {
+    validate_source_ids(&database, &source_ids)?;
+    source_ids
+        .iter()
+        .map(|source_id| {
+            database
+                .set_source_enabled(source_id, enabled)
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn set_sources_explore_enabled(
+    database: tauri::State<'_, Database>,
+    source_ids: Vec<String>,
+    enabled: bool,
+) -> Result<Vec<SourceSummary>, String> {
+    validate_source_ids(&database, &source_ids)?;
+    for source_id in &source_ids {
+        update_source_metadata_impl(
+            &database,
+            source_id,
+            None,
+            None,
+            None,
+            Some(enabled),
+            None,
+        )?;
+    }
+    database.list_sources().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn reorder_sources(
+    database: tauri::State<'_, Database>,
+    source_ids: Vec<String>,
+) -> Result<Vec<SourceSummary>, String> {
+    validate_source_ids(&database, &source_ids)?;
+    for (index, source_id) in source_ids.iter().enumerate() {
+        update_source_metadata_impl(
+            &database,
+            source_id,
+            None,
+            None,
+            Some(index as i64),
+            None,
+            None,
+        )?;
+    }
+    database.list_sources().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_sources(
+    database: tauri::State<'_, Database>,
+    source_ids: Vec<String>,
+) -> Result<(), String> {
+    validate_source_ids(&database, &source_ids)?;
+    for source_id in &source_ids {
+        database
+            .delete_source(source_id)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn delete_source(database: tauri::State<'_, Database>, source_id: String) -> Result<(), String> {
     database
@@ -324,12 +424,123 @@ fn import_source_payload(database: &Database, payload: &str) -> Result<Vec<Sourc
     persist_imported_sources(database, bundle)
 }
 
-fn preview_source_payload(payload: &str) -> Result<source_import::ImportPreview, String> {
+fn canonical_source_value(config_json: &str) -> Option<serde_json::Value> {
+    let source = serde_json::from_str::<source::BookSource>(config_json).ok()?;
+    serde_json::to_value(source).ok()
+}
+
+fn source_diff_fields(existing: &serde_json::Value, incoming: &serde_json::Value) -> Vec<String> {
+    const FIELDS: &[&str] = &[
+        "name",
+        "source_url",
+        "group",
+        "source_type",
+        "book_url_pattern",
+        "explore_url",
+        "enabled_explore",
+        "custom_order",
+        "weight",
+        "comment",
+        "search_url",
+        "book_info_url",
+        "toc_url",
+        "content_url",
+        "search",
+        "book_info",
+        "toc",
+        "content",
+        "permission",
+        "headers",
+        "replace_rules",
+    ];
+    FIELDS
+        .iter()
+        .filter(|field| existing.get(**field) != incoming.get(**field))
+        .map(|field| (*field).to_string())
+        .collect()
+}
+
+fn source_import_match<'a>(
+    sources: &'a [SourceSummary],
+    entry: &source_import::ImportPreviewEntry,
+    incoming: &serde_json::Value,
+) -> Option<&'a SourceSummary> {
+    if let Some(source_id) = entry.source_id.as_deref() {
+        if let Some(found) = sources.iter().find(|source| source.id == source_id) {
+            return Some(found);
+        }
+    }
+
+    if let Some(source_url) = incoming
+        .get("source_url")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(found) = sources
+            .iter()
+            .find(|source| source.source_url.as_deref() == Some(source_url))
+        {
+            return Some(found);
+        }
+    }
+
+    let name = incoming
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())?;
+    let matches: Vec<&SourceSummary> = sources
+        .iter()
+        .filter(|source| source.name == name)
+        .collect();
+    (matches.len() == 1).then(|| matches[0])
+}
+
+fn enrich_source_import_preview(
+    database: &Database,
+    mut preview: source_import::ImportPreview,
+) -> Result<source_import::ImportPreview, String> {
+    let sources = database.list_sources().map_err(|error| error.to_string())?;
+    for entry in &mut preview.entries {
+        if !entry.valid {
+            continue;
+        }
+        let Some(config_json) = entry.config_json.as_deref() else {
+            continue;
+        };
+        let Some(incoming) = canonical_source_value(config_json) else {
+            continue;
+        };
+        if let Some(existing) = source_import_match(&sources, entry, &incoming) {
+            entry.existing_id = Some(existing.id.clone());
+            entry.changed_fields = source_diff_fields(
+                &canonical_source_value(&existing.config_json).unwrap_or(serde_json::Value::Null),
+                &incoming,
+            );
+            if entry.enabled != existing.enabled {
+                entry.changed_fields.push("enabled".to_string());
+            }
+            entry.action = if entry.changed_fields.is_empty() {
+                "无变化".to_string()
+            } else {
+                "更新".to_string()
+            };
+        } else {
+            entry.action = "新增".to_string();
+        }
+    }
+    Ok(preview)
+}
+
+fn preview_source_payload(
+    database: &Database,
+    payload: &str,
+) -> Result<source_import::ImportPreview, String> {
     if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
         return Err("书源文件超过 2 MB 限制".to_string());
     }
 
-    source_import::preview_import_bundle(payload)
+    let preview = source_import::preview_import_bundle(payload)?;
+    enrich_source_import_preview(database, preview)
 }
 
 fn validate_source_import_url(url: &str) -> Result<&str, String> {
@@ -353,8 +564,11 @@ async fn fetch_source_import_payload(url: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn preview_sources(bundle_json: String) -> Result<source_import::ImportPreview, String> {
-    preview_source_payload(&bundle_json)
+fn preview_sources(
+    database: tauri::State<'_, Database>,
+    bundle_json: String,
+) -> Result<source_import::ImportPreview, String> {
+    preview_source_payload(&database, &bundle_json)
 }
 
 #[tauri::command]
@@ -406,9 +620,12 @@ fn import_sources(
 }
 
 #[tauri::command]
-async fn preview_sources_from_url(url: String) -> Result<RemoteSourceImportPreview, String> {
+async fn preview_sources_from_url(
+    database: tauri::State<'_, Database>,
+    url: String,
+) -> Result<RemoteSourceImportPreview, String> {
     let payload = fetch_source_import_payload(&url).await?;
-    let preview = preview_source_payload(&payload)?;
+    let preview = preview_source_payload(&database, &payload)?;
     Ok(RemoteSourceImportPreview { payload, preview })
 }
 
@@ -767,7 +984,11 @@ pub fn run() {
             set_source_enabled,
             update_source_metadata,
             set_source_explore_enabled,
+            set_sources_enabled,
+            set_sources_explore_enabled,
+            reorder_sources,
             delete_source,
+            delete_sources,
             audit_sources,
             export_sources,
             import_sources,
