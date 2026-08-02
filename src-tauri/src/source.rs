@@ -1855,6 +1855,57 @@ mod tests {
         assert_eq!(values, vec!["第一本", "第二本"]);
     }
 
+    #[test]
+    fn parses_json_search_results_with_jsonpath_rules() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "JSON Fixture",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "$.books[*]",
+                "title": "$.title",
+                "author": { "jsonPath": "$.author" },
+                "url": { "path": "$.url" }
+              }
+            }"#,
+        )
+        .expect("JSON source should parse");
+        let engine = SourceEngine::new(1, 1024).expect("engine should build");
+        let results = engine
+            .parse_search_json(
+                &source,
+                r#"{ "books": [
+                    { "title": "第一本", "author": "作者甲", "url": "/book/1" },
+                    { "title": "第二本", "author": "作者乙", "url": "/book/2" }
+                ] }"#,
+            )
+            .expect("JSON should parse");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].title, "第一本");
+        assert_eq!(results[0].author.as_deref(), Some("作者甲"));
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn rejects_invalid_jsonpath_rules() {
+        let result = validate_source_json(
+            r#"{
+              "name": "Broken JSON",
+              "searchUrl": "https://example.test/search",
+              "search": {
+                "item": "$.books[",
+                "title": "$.title"
+              }
+            }"#,
+        );
+        assert!(!result.valid);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("JSON path")));
+    }
+
     #[tokio::test]
     async fn searches_multiple_sources_with_failure_isolation() {
         let (base_url, server) = spawn_search_fixture_server();
