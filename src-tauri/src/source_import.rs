@@ -737,7 +737,7 @@ mod tests {
         ));
         assert!(matches!(
             source.search.as_ref().and_then(|rules| rules.author.as_ref()),
-            Some(SourceRule::Selector(selector)) if selector == "$.author"
+            Some(SourceRule::Detailed { selector, .. }) if selector == "$.author"
         ));
     }
 
