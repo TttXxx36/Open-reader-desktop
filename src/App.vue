@@ -2114,6 +2114,20 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   color: #ffb0bc;
 }
 
+.source-preview-unsupported {
+  display: grid;
+  gap: 0.2rem;
+  margin-top: 0.35rem;
+  color: #ffb0bc;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.source-preview-unsupported span {
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
 .source-preview-actions {
   justify-content: flex-start;
   margin-top: 14px;
