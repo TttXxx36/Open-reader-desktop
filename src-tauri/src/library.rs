@@ -72,9 +72,7 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
         return Ok(UTF_16BE.decode(&bytes[2..]).0.into_owned());
     }
 
-    let bytes = bytes
-        .strip_prefix(&[0xEF, 0xBB, 0xBF])
-        .unwrap_or(bytes);
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     if let Ok(text) = String::from_utf8(bytes.to_vec()) {
         return Ok(text);
     }
