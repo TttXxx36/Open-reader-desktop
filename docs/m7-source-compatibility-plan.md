@@ -101,7 +101,7 @@
 
 书籍/章节缓存响应现在返回 cache_hit；过期刷新失败时保留 stale 与错误原因，阅读器明确提示缓存来源并可手动刷新。基础缓存可见化已完成，导出的诊断快照与重试时间线仍属于后续切片。
 
-有限 JSONPath 已扩展为安全子集：支持对象字段、数组下标、数组/对象通配、连续括号字段别名（`['title']`/[\"title\"]）和单字段等值过滤（`[?(@.kind == 'novel')]`）。路径最多 512 字节，字段最多 128 字节，过滤值最多 256 字节，单段最多产生 256 个节点；不等式、逻辑组合、函数、脚本和转义表达式继续拒绝。
+有限 JSONPath 已扩展为安全子集：支持对象字段、数组下标、数组/对象通配、连续括号字段别名（`['title']`/`["title"]`）和单字段等值过滤（`[?(@.kind == 'novel')]`）。路径最多 512 字节，字段最多 128 字节，过滤值最多 256 字节，单段最多产生 256 个节点；不等式、逻辑组合、函数、脚本和转义表达式继续拒绝。
 
 远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）；[GitHub Actions run 30763032154](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30763032154)（有限 JSONPath，44 tests）。
 
