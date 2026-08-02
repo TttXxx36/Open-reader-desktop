@@ -517,10 +517,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
         heading_level,
     );
 
-    ContentDocument {
-        version: 1,
-        blocks,
-    }
+    ContentDocument { version: 1, blocks }
 }
 
 fn is_emphasis_html_tag(name: &str) -> bool {
@@ -553,8 +550,16 @@ fn push_html_span(
     pending_space: &mut bool,
 ) {
     let raw = std::mem::take(current);
-    let leading = raw.chars().next().map(|value| value.is_whitespace()).unwrap_or(false);
-    let trailing = raw.chars().last().map(|value| value.is_whitespace()).unwrap_or(false);
+    let leading = raw
+        .chars()
+        .next()
+        .map(|value| value.is_whitespace())
+        .unwrap_or(false);
+    let trailing = raw
+        .chars()
+        .last()
+        .map(|value| value.is_whitespace())
+        .unwrap_or(false);
     let normalized = decode_entities(&raw)
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -986,8 +991,9 @@ mod tests {
 
     #[test]
     fn parses_content_blocks_with_heading_quote_and_emphasis() {
-        let document =
-            parse_html_document("<h1>标题</h1><p>正文 <strong>重点</strong></p><blockquote>引用</blockquote>");
+        let document = parse_html_document(
+            "<h1>标题</h1><p>正文 <strong>重点</strong></p><blockquote>引用</blockquote>",
+        );
 
         assert_eq!(document.version, 1);
         assert_eq!(document.blocks.len(), 3);
