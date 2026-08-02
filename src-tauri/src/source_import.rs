@@ -207,7 +207,10 @@ fn parse_entry(value: &Value, index: usize) -> Result<ImportedSource, String> {
     let object = value
         .as_object()
         .ok_or_else(|| format!("第 {} 个书源必须是对象", index + 1))?;
-    let id = optional_text(object.get("id")).or_else(|| optional_text(object.get("sourceId")));
+    let id = optional_text(object.get("id"))
+        .or_else(|| optional_text(object.get("sourceId")))
+        .or_else(|| optional_text(object.get("bookSourceUrl")))
+        .or_else(|| optional_text(object.get("source_url")));
     let enabled = object
         .get("enabled")
         .and_then(Value::as_bool)
@@ -266,6 +269,74 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
         "searchUrl".to_string(),
         Value::String(normalize_url(&search_url)),
     );
+
+    for (target, keys) in [
+        (
+            "source_url",
+            &["sourceUrl", "bookSourceUrl", "source_url"][..],
+        ),
+        (
+            "group",
+            &["group", "bookSourceGroup", "book_source_group"][..],
+        ),
+        (
+            "book_url_pattern",
+            &["bookUrlPattern", "book_url_pattern"][..],
+        ),
+        (
+            "explore_url",
+            &["exploreUrl", "explore_url"][..],
+        ),
+        (
+            "comment",
+            &["comment", "bookSourceComment", "book_source_comment"][..],
+        ),
+    ] {
+        if let Some(value) = first_value(object, keys) {
+            let text = value
+                .as_str()
+                .ok_or_else(|| format!("{target} 必须是字符串"))?
+                .trim();
+            if !text.is_empty() {
+                let normalized = if matches!(target, "source_url" | "explore_url") {
+                    normalize_url(text)
+                } else {
+                    text.to_string()
+                };
+                output.insert(target.to_string(), Value::String(normalized));
+            }
+        }
+    }
+
+    if let Some(value) = first_value(
+        object,
+        &["source_type", "bookSourceType", "sourceType"][..],
+    ) {
+        let source_type = value
+            .as_i64()
+            .ok_or_else(|| "bookSourceType 必须是数字".to_string())?;
+        output.insert("source_type".to_string(), json!(source_type));
+    }
+    if let Some(value) = first_value(
+        object,
+        &["enabled_explore", "enabledExplore"][..],
+    ) {
+        let enabled_explore = value
+            .as_bool()
+            .ok_or_else(|| "enabledExplore 必须是布尔值".to_string())?;
+        output.insert("enabled_explore".to_string(), json!(enabled_explore));
+    }
+    for (target, keys) in [
+        ("custom_order", &["customOrder", "custom_order"][..]),
+        ("weight", &["weight"][..]),
+    ] {
+        if let Some(value) = first_value(object, keys) {
+            let number = value
+                .as_i64()
+                .ok_or_else(|| format!("{target} 必须是整数"))?;
+            output.insert(target.to_string(), json!(number));
+        }
+    }
 
     for (target, keys) in [
         ("bookInfoUrl", &["bookInfoUrl", "book_info_url"][..]),
@@ -707,6 +778,42 @@ mod tests {
             .as_ref()
             .and_then(|rules| rules.content.as_ref())
             .is_some());
+    }
+
+    #[test]
+    fn normalizes_legado_metadata_and_uses_source_url_as_id() {
+        let payload = json!({
+            "bookSourceName": "Metadata Alias",
+            "bookSourceUrl": "https://metadata.example.test/",
+            "bookSourceGroup": "公开测试",
+            "bookSourceType": 0,
+            "bookUrlPattern": "https://metadata.example.test/book/{{bookId}}",
+            "exploreUrl": "https://metadata.example.test/explore",
+            "enabledExplore": true,
+            "customOrder": 3,
+            "weight": 50,
+            "bookSourceComment": "授权夹具",
+            "searchUrl": "https://metadata.example.test/search?q={{key}}"
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("metadata source");
+        assert_eq!(
+            imported[0].id.as_deref(),
+            Some("https://metadata.example.test/")
+        );
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("canonical metadata source");
+        assert_eq!(source.source_url.as_deref(), Some("https://metadata.example.test/"));
+        assert_eq!(source.group.as_deref(), Some("公开测试"));
+        assert_eq!(source.source_type, 0);
+        assert_eq!(
+            source.book_url_pattern.as_deref(),
+            Some("https://metadata.example.test/book/{{bookId}}")
+        );
+        assert_eq!(source.explore_url.as_deref(), Some("https://metadata.example.test/explore"));
+        assert!(source.enabled_explore);
+        assert_eq!(source.custom_order, 3);
+        assert_eq!(source.weight, 50);
+        assert_eq!(source.comment.as_deref(), Some("授权夹具"));
     }
 
     #[test]
