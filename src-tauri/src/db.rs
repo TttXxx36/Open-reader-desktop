@@ -646,7 +646,16 @@ fn backfill_source_metadata(connection: &Connection) -> Result<(), DbError> {
                  comment = ?7,
                  book_url_pattern = ?8,
                  explore_url = ?9
-             WHERE id = ?10",
+             WHERE id = ?10
+               AND source_url IS NULL
+               AND group_name = ''
+               AND source_type = 0
+               AND weight = 0
+               AND enabled_explore = 0
+               AND custom_order = 0
+               AND comment = ''
+               AND book_url_pattern IS NULL
+               AND explore_url IS NULL",
             params![
                 metadata.source_url.as_deref(),
                 metadata.group_name,
@@ -685,6 +694,77 @@ fn generated_id(prefix: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persists_and_orders_source_metadata() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-source-metadata-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        database
+            .save_source(
+                Some("source-beta"),
+                "Beta",
+                r#"{"name":"Beta"}"#,
+                &SourceMetadata {
+                    source_url: Some("https://beta.example.test/".to_string()),
+                    group_name: "Beta".to_string(),
+                    source_type: 0,
+                    weight: 10,
+                    enabled_explore: true,
+                    custom_order: 2,
+                    comment: "beta".to_string(),
+                    book_url_pattern: None,
+                    explore_url: Some("https://beta.example.test/explore".to_string()),
+                },
+            )
+            .expect("beta source should save");
+        database
+            .save_source(
+                Some("source-alpha"),
+                "Alpha",
+                r#"{"name":"Alpha"}"#,
+                &SourceMetadata {
+                    source_url: Some("https://alpha.example.test/".to_string()),
+                    group_name: "Alpha".to_string(),
+                    source_type: 0,
+                    weight: 20,
+                    enabled_explore: false,
+                    custom_order: 1,
+                    comment: "alpha".to_string(),
+                    book_url_pattern: None,
+                    explore_url: None,
+                },
+            )
+            .expect("alpha source should save");
+
+        let listed = database.list_sources().expect("sources should list");
+        assert_eq!(
+            listed.iter().map(|source| source.id.as_str()).collect::<Vec<_>>(),
+            vec!["source-alpha", "source-beta"]
+        );
+        assert_eq!(listed[0].group_name, "Alpha");
+        assert_eq!(listed[0].weight, 20);
+        assert!(listed[1].enabled_explore);
+        assert_eq!(
+            listed[1].explore_url.as_deref(),
+            Some("https://beta.example.test/explore")
+        );
+
+        drop(database);
+        let reopened = Database::open(&directory).expect("database should reopen");
+        let persisted = reopened
+            .list_sources()
+            .expect("metadata should persist after reopen");
+        assert_eq!(persisted[0].group_name, "Alpha");
+        assert_eq!(persisted[1].comment, "beta");
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn persists_source_configuration_and_enabled_state() {
