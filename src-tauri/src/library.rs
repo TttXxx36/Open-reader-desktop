@@ -526,7 +526,8 @@ fn extract_html_attribute(tag: &str, name: &str) -> Option<String> {
     let mut cursor = 0usize;
 
     while cursor < bytes.len() {
-        while cursor < bytes.len() && (bytes[cursor].is_ascii_whitespace() || bytes[cursor] == b'/') {
+        while cursor < bytes.len() && (bytes[cursor].is_ascii_whitespace() || bytes[cursor] == b'/')
+        {
             cursor += 1;
         }
         let key_start = cursor;
