@@ -17,6 +17,13 @@ pub struct ImportPreviewEntry {
     pub enabled: bool,
     pub valid: bool,
     pub error: Option<String>,
+    pub action: String,
+    pub existing_id: Option<String>,
+    pub changed_fields: Vec<String>,
+    #[serde(skip)]
+    pub source_id: Option<String>,
+    #[serde(skip)]
+    pub config_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,17 +54,13 @@ pub fn preview_import_bundle(input: &str) -> Result<ImportPreview, String> {
     let mut preview_entries = Vec::with_capacity(entries.len());
     let mut valid_count = 0;
     for (index, entry) in entries.iter().enumerate() {
-        let valid = match parse_entry(entry, index) {
-            Ok(_) => {
+        let parsed = parse_entry(entry, index);
+        let (valid, error, source_id, config_json) = match parsed {
+            Ok(source) => {
                 valid_count += 1;
-                true
+                (true, None, source.id, Some(source.config_json))
             }
-            Err(_) => false,
-        };
-        let error = if valid {
-            None
-        } else {
-            parse_entry(entry, index).err()
+            Err(error) => (false, Some(error), None, None),
         };
         preview_entries.push(ImportPreviewEntry {
             index,
@@ -65,6 +68,11 @@ pub fn preview_import_bundle(input: &str) -> Result<ImportPreview, String> {
             enabled: entry_enabled(entry),
             valid,
             error,
+            action: "新增".to_string(),
+            existing_id: None,
+            changed_fields: Vec::new(),
+            source_id,
+            config_json,
         });
     }
 
