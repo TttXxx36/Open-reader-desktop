@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 
 const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
+const libraryOverview = readFileSync(new URL("../src/components/LibraryOverview.vue", import.meta.url), "utf8");
+const readerSettingsPanel = readFileSync(new URL("../src/components/ReaderSettingsPanel.vue", import.meta.url), "utf8");
 const failures = [];
 
 function requireContract(condition, message) {
@@ -28,9 +30,23 @@ for (const variable of [
   "--reader-content-width",
   "--reader-paragraph-spacing",
   "--reader-text-indent",
+  "--reader-letter-spacing",
+  "--reader-margin-left",
+  "--reader-margin-right",
+  "--reader-text-align",
 ]) {
   requireContract(app.includes(variable), "阅读器缺少 " + variable + " 设置变量");
 }
+
+requireContract(app.includes("LibraryOverview"), "首页必须接入 LibraryOverview 组件");
+requireContract(libraryOverview.includes("continue-card") && libraryOverview.includes("recent-reading"), "首页组件必须提供继续阅读与最近阅读");
+requireContract(libraryOverview.includes("library-stat-card"), "首页组件必须提供书架统计");
+requireContract(readerSettingsPanel.includes("字间距") && readerSettingsPanel.includes("自定义背景色"), "阅读设置组件必须提供字间距与自定义颜色");
+requireContract(readerSettingsPanel.includes("readingMode") && readerSettingsPanel.includes("textAlign"), "阅读设置组件必须提供阅读模式与文本对齐");
+requireContract(app.includes("SETTINGS_VERSION = 2") && app.includes("normalizeHex"), "阅读设置必须包含版本迁移与颜色校验");
+requireContract(!app.includes("Desktop · M2") && !app.includes("⌘1") && !app.includes(">M6<"), "界面不得残留过期版本/平台快捷键文案");
+requireContract(app.includes("reading-paged") && app.includes("theme-custom"), "阅读器必须包含分页滚动与自定义主题样式");
+requireContract(app.includes(":focus-visible"), "阅读器视图必须提供键盘焦点样式");
 
 if (failures.length > 0) {
   console.error("UI contract check failed:");
