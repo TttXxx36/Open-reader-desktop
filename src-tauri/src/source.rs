@@ -205,9 +205,7 @@ impl SourceRule {
             Self::JsonPath { json_path, .. } => Some(json_path),
             Self::Selector(value) if is_json_rule_path(value) => Some(value),
             Self::Detailed { selector, .. } if is_json_rule_path(selector) => Some(selector),
-            Self::Chain { chain }
-                if !chain.is_empty() && chain.iter().all(Self::is_json_path) =>
-            {
+            Self::Chain { chain } if !chain.is_empty() && chain.iter().all(Self::is_json_path) => {
                 chain.first().and_then(Self::json_path)
             }
             _ => None,
@@ -216,9 +214,7 @@ impl SourceRule {
 
     fn is_json_path(&self) -> bool {
         match self {
-            Self::Chain { chain } => {
-                !chain.is_empty() && chain.iter().all(Self::is_json_path)
-            }
+            Self::Chain { chain } => !chain.is_empty() && chain.iter().all(Self::is_json_path),
             _ => self.json_path().is_some(),
         }
     }
@@ -1666,7 +1662,10 @@ fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>)
                 MAX_RULE_CHAIN_LENGTH
             ));
         }
-        let json_flags = chain.iter().map(SourceRule::is_json_path).collect::<Vec<_>>();
+        let json_flags = chain
+            .iter()
+            .map(SourceRule::is_json_path)
+            .collect::<Vec<_>>();
         if json_flags.iter().any(|flag| *flag) && json_flags.iter().any(|flag| !*flag) {
             errors.push(format!("{name} 链式规则不能混用 CSS 和 JSONPath"));
         }
