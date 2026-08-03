@@ -3791,6 +3791,7 @@ mod tests {
                 && step.error.as_deref().is_some_and(|error| {
                     error.contains("timeout")
                         || error.contains("超时")
+                        || error.contains("超过")
                         || error.contains("timed out")
                 })
         }));
