@@ -3788,9 +3788,9 @@ mod tests {
         );
         // reqwest versions may redact the transport timeout wording; the stable
         // contract is that the later-page stage records an error and partial content remains.
-        assert!(debug_steps.iter().any(|step| {
-            step.stage == "content.next.depth-1" && step.error.is_some()
-        }));
+        assert!(debug_steps
+            .iter()
+            .any(|step| { step.stage == "content.next.depth-1" && step.error.is_some() }));
         server.join().expect("timeout fixture server should stop");
     }
 
