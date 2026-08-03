@@ -3649,11 +3649,17 @@ mod tests {
         );
         assert!(debug_steps.iter().any(|step| {
             step.stage == "content.next.depth-1"
-                && step.error.as_deref().is_some_and(|error| error.contains("503"))
+                && step
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("503"))
         }));
         assert!(debug_steps.iter().any(|step| {
             step.stage == "content.next.policy"
-                && step.error.as_deref().is_some_and(|error| error.contains("request_error"))
+                && step
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("request_error"))
         }));
         server.join().expect("partial fixture server should stop");
     }
@@ -3683,7 +3689,10 @@ mod tests {
         );
         assert!(debug_steps.iter().any(|step| {
             step.stage == "content.next.policy"
-                && step.error.as_deref().is_some_and(|error| error.contains("cycle"))
+                && step
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("cycle"))
         }));
         server.join().expect("cycle fixture server should stop");
     }
@@ -3712,9 +3721,14 @@ mod tests {
         );
         assert!(debug_steps.iter().any(|step| {
             step.stage == "content.next.policy"
-                && step.error.as_deref().is_some_and(|error| error.contains("same_origin"))
+                && step
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("same_origin"))
         }));
-        server.join().expect("cross-origin fixture server should stop");
+        server
+            .join()
+            .expect("cross-origin fixture server should stop");
     }
 
     #[tokio::test]
@@ -3742,7 +3756,10 @@ mod tests {
         );
         assert!(debug_steps.iter().any(|step| {
             step.stage == "content.next.policy"
-                && step.error.as_deref().is_some_and(|error| error.contains("byte_limit"))
+                && step
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("byte_limit"))
         }));
         server.join().expect("byte fixture server should stop");
     }
@@ -3772,7 +3789,9 @@ mod tests {
         assert!(debug_steps.iter().any(|step| {
             step.stage == "content.next.depth-1"
                 && step.error.as_deref().is_some_and(|error| {
-                    error.contains("timeout") || error.contains("超时") || error.contains("timed out")
+                    error.contains("timeout")
+                        || error.contains("超时")
+                        || error.contains("timed out")
                 })
         }));
         server.join().expect("timeout fixture server should stop");
