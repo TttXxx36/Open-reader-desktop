@@ -3700,7 +3700,6 @@ mod tests {
         (format!("http://{}", address), server)
     }
 
-
     fn spawn_next_page_fixture_server() -> (String, std::thread::JoinHandle<()>) {
         use std::{
             io::{Read, Write},
@@ -3709,16 +3708,12 @@ mod tests {
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("next page fixture listener");
-        let address = listener
-            .local_addr()
-            .expect("next page fixture address");
+        let address = listener.local_addr().expect("next page fixture address");
         let server = thread::spawn(move || {
             for stream in listener.incoming().take(3) {
                 let mut stream = stream.expect("next page fixture stream");
                 let mut buffer = [0_u8; 2048];
-                let size = stream
-                    .read(&mut buffer)
-                    .expect("next page fixture request");
+                let size = stream.read(&mut buffer).expect("next page fixture request");
                 let request = String::from_utf8_lossy(&buffer[..size]);
                 let path = request.split_whitespace().nth(1).unwrap_or("/");
                 let body = match path {
