@@ -38,6 +38,12 @@
 - 返回稳定 reason（disabled、depth_limit、page_limit、byte_limit、time_limit、same_origin、cycle 等），不发起请求、不改变当前 next URL 中间结果。
 - 远程证据：[GitHub Actions run 30771892118](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30771892118)（策略闸门，59 个 Rust 测试、前端检查通过）。Stop-reason 矩阵又覆盖页数、字节、时间、非法候选/基准、零配额和无限输入裁剪；[run 30772265421](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30772265421)（60 个 Rust 测试、前端检查通过）。累计多页夹具验证页数/时间预算不会重置，深度优先级固定；[run 30772819136](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30772819136)（61 个 Rust 测试、前端检查通过）。
 
+## 已实现的显式 opt-in 请求夹具
+
+`SourceEngine::fetch_chapter_content_with_policy` 已在后端提供显式 opt-in 的受限请求链：只有 `NextPagePolicy.enabled=true` 才会发起后续页请求；默认的 `fetch_chapter_content` 单页路径和现有 Tauri 命令保持不变。合成 HTTP 夹具覆盖首屏→第二页→第三页，断言正文合并、`content.next.depth-1/2` 诊断步骤、访问上限和 `next_url` 清空。
+
+远程证据：[GitHub Actions run 30773702655](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30773702655)（前端检查、Rust fmt/check、62 个 Rust 测试通过）。该证据只证明受限 opt-in 链路可运行，不代表已把自动追链接入默认阅读流程。
+
 ## 失败与回退语义
 
 - 首页成功、后续页失败：保留已取得正文，返回“部分追链”状态和脱敏失败步骤，不回退到旧缓存覆盖新正文。
@@ -60,7 +66,7 @@
 
 ## 进入实现的门槛
 
-1. 用用户自有、公开测试或公版内容建立合成多页夹具：成功、环路、跨源、超时、超体积、取消和部分成功。
+1. 已用合成 HTTP 夹具验证成功的三页 opt-in 链；仍需补齐环路、跨源、超时、超体积、取消和部分成功夹具。
 2. Rust 单元/集成测试覆盖所有 stop_reason，并证明总响应体与总耗时预算不会被单页重置。
 3. 前端明确显示“自动追链已关闭/已启用、当前深度和停止原因”，导出诊断不包含正文、Cookie 或认证头。
 4. 兼容性矩阵区分“保留 next URL”“可选自动追链”“默认关闭”；Windows 手工验收确认取消按钮和阅读进度不回退。
