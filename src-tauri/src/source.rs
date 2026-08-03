@@ -3962,7 +3962,7 @@ mod tests {
                     ),
                     ("byte", "/chapter/2") => (
                         "HTTP/1.1 200 OK",
-                        format!("<article class="content">{}</article>", "长".repeat(256)),
+                        format!(r#"<article class="content">{}</article>"#, "长".repeat(256)),
                     ),
                     ("timeout", "/chapter/1") => (
                         "HTTP/1.1 200 OK",
