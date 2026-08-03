@@ -1041,6 +1041,7 @@ async fn fetch_source_book(
     source_id: String,
     book_url: String,
     force_refresh: bool,
+    next_page_policy: Option<source::NextPagePolicy>,
     operation_id: Option<String>,
     cancellation: tauri::State<'_, SourceCancellationState>,
 ) -> Result<RemoteBookDetail, String> {
@@ -1130,6 +1131,7 @@ async fn fetch_source_chapter(
     source_id: String,
     chapter: source::SourceChapter,
     force_refresh: bool,
+    next_page_policy: Option<source::NextPagePolicy>,
     operation_id: Option<String>,
     cancellation: tauri::State<'_, SourceCancellationState>,
 ) -> Result<RemoteChapterContent, String> {
@@ -1156,8 +1158,24 @@ async fn fetch_source_chapter(
     let operation_id = normalize_source_operation_id(operation_id)?;
     let token = cancellation.register(&operation_id)?;
     let mut debug_steps = Vec::new();
+    let next_page_policy = next_page_policy.unwrap_or_default();
     let fetch_result = tokio::select! {
-        content = engine.fetch_chapter_content(&source, &chapter, &mut debug_steps) => {
+        content = async {
+            if next_page_policy.enabled {
+                engine
+                    .fetch_chapter_content_with_policy(
+                        &source,
+                        &chapter,
+                        &next_page_policy,
+                        &mut debug_steps,
+                    )
+                    .await
+            } else {
+                engine
+                    .fetch_chapter_content(&source, &chapter, &mut debug_steps)
+                    .await
+            }
+        } => {
             content.map_err(|error| error.to_string())
         }
         _ = wait_for_source_cancellation(token.clone()) => {
