@@ -1094,9 +1094,9 @@ impl SourceEngine {
             .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
 
         let started = Instant::now();
-        let mut depth = 0;
-        let mut pages_used = 0;
-        let mut bytes_used = 0;
+        let mut depth: usize = 0;
+        let mut pages_used: usize = 0;
+        let mut bytes_used: usize = 0;
         let mut current_url = chapter.url.clone();
         let mut visited_urls = vec![current_url.clone()];
         let mut combined = String::new();
