@@ -1041,7 +1041,6 @@ async fn fetch_source_book(
     source_id: String,
     book_url: String,
     force_refresh: bool,
-    next_page_policy: Option<source::NextPagePolicy>,
     operation_id: Option<String>,
     cancellation: tauri::State<'_, SourceCancellationState>,
 ) -> Result<RemoteBookDetail, String> {
