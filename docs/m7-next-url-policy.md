@@ -42,7 +42,7 @@
 
 `SourceEngine::fetch_chapter_content_with_policy` 已在后端提供显式 opt-in 的受限请求链：只有 `NextPagePolicy.enabled=true` 才会发起后续页请求；默认的 `fetch_chapter_content` 单页路径和现有 Tauri 命令保持不变。合成 HTTP 夹具覆盖首屏→第二页→第三页，断言正文合并、`content.next.depth-1/2` 诊断步骤、访问上限和 `next_url` 清空。
 
-远程证据：[GitHub Actions run 30773702655](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30773702655)（前端检查、Rust fmt/check、62 个 Rust 测试通过）。该证据只证明受限 opt-in 链路可运行，不代表已把自动追链接入默认阅读流程。
+远程证据：[GitHub Actions run 30773702655](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30773702655)（前端检查、Rust fmt/check、62 个 Rust 测试通过）。该证据只证明受限 opt-in 链路可运行，不代表已把自动追链接入默认阅读流程。 `fetch_source_chapter` 现接受可选 `next_page_policy`，并在同一取消 token 的 `tokio::select!` 中运行；缺省或 `enabled=false` 仍走原单页路径。远程证据：[GitHub Actions run 30775360305](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30775360305)（前端检查与 Rust fmt/check/test 通过）。
 
 边界夹具又覆盖后续请求失败时保留部分正文、环路停止、跨源候选拒绝、累计响应体超限和阶段请求超时；失败步骤会写入稳定 stage，默认路径仍不改变。远程证据：[GitHub Actions run 30774860219](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30774860219)（67 个 Rust 测试、前端检查通过）。
 
@@ -69,7 +69,7 @@
 ## 进入实现的门槛
 
 1. 已用合成 HTTP 夹具验证成功的三页 opt-in 链，以及部分成功、环路、跨源、超时和超体积边界；取消夹具仍待把取消 token 接入 opt-in 方法和 Tauri 命令。
-2. Rust 单元/集成测试覆盖所有 stop_reason，并证明总响应体与总耗时预算不会被单页重置。
+2. Rust 单元/集成测试覆盖所有 stop_reason，并证明总响应体与总耗时预算不会被单页重置；外层取消 token 已接入 opt-in Tauri 请求，仍需补 UI 取消/开关验收。
 3. 前端明确显示“自动追链已关闭/已启用、当前深度和停止原因”，导出诊断不包含正文、Cookie 或认证头。
 4. 兼容性矩阵区分“保留 next URL”“可选自动追链”“默认关闭”；Windows 手工验收确认取消按钮和阅读进度不回退。
 5. 未满足以上门槛前，保持当前不自动追链行为，不修改默认设置。
