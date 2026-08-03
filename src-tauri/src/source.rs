@@ -3626,6 +3626,159 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preserves_partial_content_after_next_page_request_failure() {
+        let (base_url, server) = spawn_next_page_edge_fixture_server("partial");
+        let source = next_page_fixture_source(&base_url);
+        let chapter = next_page_fixture_chapter(&base_url);
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let mut debug_steps = Vec::new();
+
+        let result = engine
+            .fetch_chapter_content_with_policy(&source, &chapter, &policy, &mut debug_steps)
+            .await
+            .expect("a later request failure should preserve partial content");
+
+        assert!(result.content.contains("第一页"));
+        assert_eq!(
+            result.next_url.as_deref(),
+            Some(format!("{base_url}/chapter/2").as_str())
+        );
+        assert!(debug_steps.iter().any(|step| {
+            step.stage == "content.next.depth-1"
+                && step.error.as_deref().is_some_and(|error| error.contains("503"))
+        }));
+        assert!(debug_steps.iter().any(|step| {
+            step.stage == "content.next.policy"
+                && step.error.as_deref().is_some_and(|error| error.contains("request_error"))
+        }));
+        server.join().expect("partial fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn stops_next_page_chain_on_cycle_without_requesting_again() {
+        let (base_url, server) = spawn_next_page_edge_fixture_server("cycle");
+        let source = next_page_fixture_source(&base_url);
+        let chapter = next_page_fixture_chapter(&base_url);
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let mut debug_steps = Vec::new();
+
+        let result = engine
+            .fetch_chapter_content_with_policy(&source, &chapter, &policy, &mut debug_steps)
+            .await
+            .expect("cycle should return accumulated content");
+
+        assert!(result.content.contains("第一页"));
+        assert!(result.content.contains("第二页"));
+        assert_eq!(
+            result.next_url.as_deref(),
+            Some(format!("{base_url}/chapter/1").as_str())
+        );
+        assert!(debug_steps.iter().any(|step| {
+            step.stage == "content.next.policy"
+                && step.error.as_deref().is_some_and(|error| error.contains("cycle"))
+        }));
+        server.join().expect("cycle fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn refuses_cross_origin_next_page_before_request() {
+        let (base_url, server) = spawn_next_page_edge_fixture_server("cross-origin");
+        let source = next_page_fixture_source(&base_url);
+        let chapter = next_page_fixture_chapter(&base_url);
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let mut debug_steps = Vec::new();
+
+        let result = engine
+            .fetch_chapter_content_with_policy(&source, &chapter, &policy, &mut debug_steps)
+            .await
+            .expect("cross-origin candidate should keep first page");
+
+        assert!(result.content.contains("第一页"));
+        assert_eq!(
+            result.next_url.as_deref(),
+            Some("https://example.invalid/chapter/2")
+        );
+        assert!(debug_steps.iter().any(|step| {
+            step.stage == "content.next.policy"
+                && step.error.as_deref().is_some_and(|error| error.contains("same_origin"))
+        }));
+        server.join().expect("cross-origin fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn preserves_partial_content_when_cumulative_bytes_are_exhausted() {
+        let (base_url, server) = spawn_next_page_edge_fixture_server("byte");
+        let source = next_page_fixture_source(&base_url);
+        let chapter = next_page_fixture_chapter(&base_url);
+        let policy = NextPagePolicy {
+            enabled: true,
+            max_bytes: 180,
+            ..NextPagePolicy::default()
+        };
+        let engine = SourceEngine::new(3, 1024 * 1024).expect("engine should build");
+        let mut debug_steps = Vec::new();
+
+        let result = engine
+            .fetch_chapter_content_with_policy(&source, &chapter, &policy, &mut debug_steps)
+            .await
+            .expect("byte limit should preserve the first page");
+
+        assert!(result.content.contains("第一页"));
+        assert_eq!(
+            result.next_url.as_deref(),
+            Some(format!("{base_url}/chapter/2").as_str())
+        );
+        assert!(debug_steps.iter().any(|step| {
+            step.stage == "content.next.policy"
+                && step.error.as_deref().is_some_and(|error| error.contains("byte_limit"))
+        }));
+        server.join().expect("byte fixture server should stop");
+    }
+
+    #[tokio::test]
+    async fn preserves_partial_content_when_next_page_times_out() {
+        let (base_url, server) = spawn_next_page_edge_fixture_server("timeout");
+        let source = next_page_fixture_source(&base_url);
+        let chapter = next_page_fixture_chapter(&base_url);
+        let policy = NextPagePolicy {
+            enabled: true,
+            ..NextPagePolicy::default()
+        };
+        let engine = SourceEngine::new(1, 1024 * 1024).expect("engine should build");
+        let mut debug_steps = Vec::new();
+
+        let result = engine
+            .fetch_chapter_content_with_policy(&source, &chapter, &policy, &mut debug_steps)
+            .await
+            .expect("a timed-out later request should preserve partial content");
+
+        assert!(result.content.contains("第一页"));
+        assert_eq!(
+            result.next_url.as_deref(),
+            Some(format!("{base_url}/chapter/2").as_str())
+        );
+        assert!(debug_steps.iter().any(|step| {
+            step.stage == "content.next.depth-1"
+                && step.error.as_deref().is_some_and(|error| {
+                    error.contains("timeout") || error.contains("超时") || error.contains("timed out")
+                })
+        }));
+        server.join().expect("timeout fixture server should stop");
+    }
+
+    #[tokio::test]
     async fn runs_authorized_fixture_pipeline() {
         let (base_url, server) = spawn_fixture_server();
         let mut source: BookSource =
@@ -3733,6 +3886,105 @@ mod tests {
                 stream
                     .write_all(response.as_bytes())
                     .expect("next page fixture response");
+            }
+        });
+
+        (format!("http://{address}"), server)
+    }
+
+    fn next_page_fixture_source(base_url: &str) -> BookSource {
+        let mut source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Next page edge fixture",
+              "searchUrl": "https://example.test/search",
+              "content": {
+                "content": { "selector": "article.content" },
+                "next": { "selector": "a.next", "attr": "href" }
+              }
+            }"#,
+        )
+        .expect("next page source should parse");
+        source.content_url = Some(format!("{base_url}/chapter/{{{{chapterId}}}}"));
+        source
+    }
+
+    fn next_page_fixture_chapter(base_url: &str) -> SourceChapter {
+        SourceChapter {
+            title: "第一章".to_string(),
+            url: format!("{base_url}/chapter/1"),
+            index: 0,
+        }
+    }
+
+    fn spawn_next_page_edge_fixture_server(
+        mode: &'static str,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("edge fixture listener");
+        let address = listener.local_addr().expect("edge fixture address");
+        let connections = if mode == "cross-origin" { 1 } else { 2 };
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(connections) {
+                let mut stream = stream.expect("edge fixture stream");
+                let mut buffer = [0_u8; 4096];
+                let size = stream.read(&mut buffer).expect("edge fixture request");
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or("/");
+                let (status, body) = match (mode, path) {
+                    ("partial", "/chapter/1") => (
+                        "HTTP/1.1 200 OK",
+                        r#"<article class="content">第一页</article><a class="next" href="/chapter/2">下一页</a>"#.to_string(),
+                    ),
+                    ("partial", "/chapter/2") => (
+                        "HTTP/1.1 503 Service Unavailable",
+                        "暂时不可用".to_string(),
+                    ),
+                    ("cycle", "/chapter/1") => (
+                        "HTTP/1.1 200 OK",
+                        r#"<article class="content">第一页</article><a class="next" href="/chapter/2">下一页</a>"#.to_string(),
+                    ),
+                    ("cycle", "/chapter/2") => (
+                        "HTTP/1.1 200 OK",
+                        r#"<article class="content">第二页</article><a class="next" href="/chapter/1">上一页</a>"#.to_string(),
+                    ),
+                    ("cross-origin", "/chapter/1") => (
+                        "HTTP/1.1 200 OK",
+                        r#"<article class="content">第一页</article><a class="next" href="https://example.invalid/chapter/2">跨源</a>"#.to_string(),
+                    ),
+                    ("byte", "/chapter/1") => (
+                        "HTTP/1.1 200 OK",
+                        r#"<article class="content">第一页</article><a class="next" href="/chapter/2">下一页</a>"#.to_string(),
+                    ),
+                    ("byte", "/chapter/2") => (
+                        "HTTP/1.1 200 OK",
+                        format!("<article class="content">{}</article>", "长".repeat(256)),
+                    ),
+                    ("timeout", "/chapter/1") => (
+                        "HTTP/1.1 200 OK",
+                        r#"<article class="content">第一页</article><a class="next" href="/chapter/2">下一页</a>"#.to_string(),
+                    ),
+                    ("timeout", "/chapter/2") => {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        (
+                            "HTTP/1.1 200 OK",
+                            r#"<article class="content">迟到的第二页</article>"#.to_string(),
+                        )
+                    }
+                    _ => ("HTTP/1.1 404 Not Found", "not found".to_string()),
+                };
+                let response = format!(
+                    "{status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("edge fixture response");
             }
         });
 
