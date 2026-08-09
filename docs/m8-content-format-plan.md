@@ -34,7 +34,8 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - `normalize_txt_text` 已改为单次字符扫描，同时归一化 CRLF/CR 换行和全角空格，避免先复制整段文本再做多轮换行替换。
 - 无替换规则时，TXT 拆章改为逐行归一化并直接累积章节；有效 UTF-8 使用借用解码路径，避免额外的整段解码副本。
 - CI 合成夹具覆盖 512 章约 1 MiB 文本；run [31328789321](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31328789321) 验证行累积，run [31329875168](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31329875168) 验证混合换行归一化，run [31330389289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31330389289) 验证流式行处理与 UTF-8 借用；最新运行的前端检查、Rust fmt/check 和 95 个 Rust 测试通过。
-- 新增 1/16/64 MiB 单章节 TXT 尺寸矩阵，每档解析时间上限 20 秒；run [31330961076](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31330961076) 通过。CI 已在 run [31331505049](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31331505049) 中重复执行基线并上传 artifact [9043104393](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31331505049#artifacts)，包含 `txt-performance-output.log` 与 `txt-performance-time.log`；下一步补充跨平台峰值内存采样。
+- 新增 1/16/64 MiB 单章节 TXT 尺寸矩阵，每档解析时间上限 20 秒；run [31330961076](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31330961076) 通过。CI 已在 run [31331505049](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31331505049) 中重复执行基线并上传 artifact [9043104393](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31331505049#artifacts)，包含 `txt-performance-output.log` 与 `txt-performance-time.log`。
+- 默认无替换规则路径已接入 64 KiB 分块解码：UTF-16LE/BE 与 GB18030 使用有状态 decoder，跨块多字节字符、CRLF 和尾部 flush 均有夹具；run [31332336289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31332336289) 的前端检查、Rust fmt/check 和 97 个 Rust 测试通过，性能日志 artifact [9043330887](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31332336289#artifacts)。替换规则路径暂保留完整文本语义，后续补充跨平台峰值内存采样与替换规则的流式策略。
 - 后续在 64 MiB 默认导入上限下接入分块/流式编码解码，避免一次性复制多份正文；EPUB 继续使用 ZIP 条目配额。
 - 记录导入耗时、峰值章节数和失败原因的本地测试摘要，不上传遥测；以 1 MiB、16 MiB、64 MiB 合成文件建立 CI 时间和内存回归阈值。
 
