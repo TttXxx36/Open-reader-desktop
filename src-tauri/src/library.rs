@@ -439,7 +439,8 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| ImportError::InvalidEpub(format!("EPUB ZIP 容器损坏：{error}")))?;
     validate_epub_archive(&mut archive)?;
-    let container = read_required_zip_text(&mut archive, "META-INF/container.xml", "container.xml")?;
+    let container =
+        read_required_zip_text(&mut archive, "META-INF/container.xml", "container.xml")?;
     let opf_path = extract_attribute_from_xml(&container, "rootfile", "full-path")
         .ok_or_else(|| ImportError::InvalidEpub("缺少 OPF 根文件".to_string()))?;
     let opf = read_required_zip_text(&mut archive, &opf_path, "OPF 文件")?;
@@ -1550,7 +1551,8 @@ mod tests {
 
     #[test]
     fn rejects_corrupt_epub_zip_with_recoverable_error() {
-        let error = parse_book_bytes("broken.epub", b"not a zip").expect_err("broken ZIP must fail");
+        let error =
+            parse_book_bytes("broken.epub", b"not a zip").expect_err("broken ZIP must fail");
         assert!(error.to_string().contains("ZIP"));
     }
 
@@ -1585,13 +1587,11 @@ mod tests {
                 "OPS/content.opf",
                 r#"<package><metadata><dc:title>演示书</dc:title></metadata><manifest><item id="missing" href="Text/missing.xhtml" media-type="application/xhtml+xml"/><item id="good" href="Text/good.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="missing"/><itemref idref="good"/></spine></package>"#,
             ),
-            (
-                "OPS/Text/good.xhtml",
-                "<h1>可读章节</h1><p>正文</p>",
-            ),
+            ("OPS/Text/good.xhtml", "<h1>可读章节</h1><p>正文</p>"),
         ]);
 
-        let book = parse_book_bytes("recover.epub", &bytes).expect("readable spine item should survive");
+        let book =
+            parse_book_bytes("recover.epub", &bytes).expect("readable spine item should survive");
         assert_eq!(book.chapters.len(), 1);
         assert_eq!(book.chapters[0].title, "可读章节");
     }
