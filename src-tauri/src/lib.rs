@@ -1280,6 +1280,60 @@ async fn search_sources(
 }
 
 #[tauri::command]
+async fn retry_source_search(
+    database: tauri::State<'_, Database>,
+    source_id: String,
+    keyword: String,
+    max_pages: Option<usize>,
+    operation_id: Option<String>,
+    cancellation: tauri::State<'_, SourceCancellationState>,
+) -> Result<MultiSourceSearchResult, String> {
+    let keyword = keyword.trim();
+    if keyword.is_empty() {
+        return Err("搜索关键词不能为空".to_string());
+    }
+    if keyword.chars().count() > 128 {
+        return Err("搜索关键词不能超过 128 个字符".to_string());
+    }
+
+    let summary = database
+        .list_sources()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| "书源不存在".to_string())?;
+    if !summary.enabled {
+        return Err("书源已停用，请先重新启用".to_string());
+    }
+    let source = serde_json::from_str::<source::BookSource>(&summary.config_json)
+        .map_err(|error| format!("配置解析失败：{}", error))?;
+
+    let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    let operation_id = normalize_source_operation_id(operation_id)?;
+    let token = cancellation.register(&operation_id)?;
+    let search_result = tokio::select! {
+        result = engine.search_many_with_pages(
+            vec![SourceDefinition {
+                id: summary.id.clone(),
+                name: summary.name.clone(),
+                source,
+            }],
+            keyword,
+            max_pages.unwrap_or(1),
+        ) => Ok(result),
+        _ = wait_for_source_cancellation(token.clone()) => {
+            Err("书源搜索已取消".to_string())
+        }
+    };
+    cancellation.remove(&operation_id);
+    search_result
+        .map(|mut result| {
+            result.enabled_sources = 1;
+            result
+        })
+}
+
+#[tauri::command]
 async fn run_source_pipeline(
     config_json: String,
     keyword: String,
