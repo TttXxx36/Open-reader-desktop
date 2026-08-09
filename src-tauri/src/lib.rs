@@ -1080,7 +1080,7 @@ async fn fetch_source_book(
         Ok(detail) => {
             record_source_request_success(&database, &summary.id, "book");
             detail
-        },
+        }
         Err(message) => {
             record_source_failure(
                 &database,
