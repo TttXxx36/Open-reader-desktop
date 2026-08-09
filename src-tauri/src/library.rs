@@ -947,7 +947,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     quote_depth,
                     heading_level,
                     block_anchor.take(),
-                block_style.take(),
+                    block_style.take(),
                 );
                 quote_depth = quote_depth.saturating_sub(1);
             } else if is_block_html_tag(&name) {
@@ -959,7 +959,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     quote_depth,
                     heading_level,
                     block_anchor.take(),
-                block_style.take(),
+                    block_style.take(),
                 );
             }
         } else if name == "script" || name == "style" || name == "noscript" {
