@@ -237,25 +237,17 @@ fn has_image_signature(bytes: &[u8]) -> bool {
         || (bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WEBP")
 }
 
-fn format_probe_metadata(
-    format: BookFormatKind,
-    bytes: &[u8],
-) -> Option<FormatProbeMetadata> {
+fn format_probe_metadata(format: BookFormatKind, bytes: &[u8]) -> Option<FormatProbeMetadata> {
     match format {
-        BookFormatKind::Pdf => parse_pdf_version(bytes).map(|version| {
-            FormatProbeMetadata::Pdf {
-                version: version.to_string(),
-            }
+        BookFormatKind::Pdf => parse_pdf_version(bytes).map(|version| FormatProbeMetadata::Pdf {
+            version: version.to_string(),
         }),
         BookFormatKind::Image => {
             let (mime, dimensions) = if bytes.starts_with(b"\x89PNG\r\n\x1A\n") {
                 ("image/png", png_dimensions(bytes))
             } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
                 ("image/gif", gif_dimensions(bytes))
-            } else if bytes.starts_with(b"RIFF")
-                && bytes.len() >= 16
-                && &bytes[8..12] == b"WEBP"
-            {
+            } else if bytes.starts_with(b"RIFF") && bytes.len() >= 16 && &bytes[8..12] == b"WEBP" {
                 ("image/webp", webp_dimensions(bytes))
             } else {
                 ("image/jpeg", jpeg_dimensions(bytes))
@@ -266,14 +258,11 @@ fn format_probe_metadata(
                 height: dimensions.map(|(_, height)| height),
             })
         }
-        BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => {
-            mobi_metadata(bytes).map(|(record_offset, header_length)| {
-                FormatProbeMetadata::Mobi {
-                    record_offset,
-                    header_length,
-                }
-            })
-        }
+        BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => mobi_metadata(bytes)
+            .map(|(record_offset, header_length)| FormatProbeMetadata::Mobi {
+                record_offset,
+                header_length,
+            }),
         _ => None,
     }
 }
@@ -307,14 +296,10 @@ fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.len() < 30 || &bytes[12..16] != b"VP8X" {
         return None;
     }
-    let width = 1
-        + u32::from(bytes[24])
-        + (u32::from(bytes[25]) << 8)
-        + (u32::from(bytes[26]) << 16);
-    let height = 1
-        + u32::from(bytes[27])
-        + (u32::from(bytes[28]) << 8)
-        + (u32::from(bytes[29]) << 16);
+    let width =
+        1 + u32::from(bytes[24]) + (u32::from(bytes[25]) << 8) + (u32::from(bytes[26]) << 16);
+    let height =
+        1 + u32::from(bytes[27]) + (u32::from(bytes[28]) << 8) + (u32::from(bytes[29]) << 16);
     valid_image_dimensions(width, height)
 }
 
@@ -368,8 +353,7 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 }
 
 fn valid_image_dimensions(width: u32, height: u32) -> Option<(u32, u32)> {
-    (width > 0 && height > 0 && width <= 100_000 && height <= 100_000)
-        .then_some((width, height))
+    (width > 0 && height > 0 && width <= 100_000 && height <= 100_000).then_some((width, height))
 }
 
 fn mobi_metadata(bytes: &[u8]) -> Option<(u32, Option<u32>)> {
