@@ -1309,6 +1309,8 @@ mod tests {
         let options = TxtParseOptions {
             chapter_rule: TxtChapterRule::Regex,
             custom_pattern: Some(r"^卷\d+".to_string()),
+            normalize_full_width_space: false,
+            replacements: Vec::new(),
         };
         let book = parse_book_bytes_with_options(
             "custom.txt",
@@ -1327,6 +1329,8 @@ mod tests {
         let options = TxtParseOptions {
             chapter_rule: TxtChapterRule::Disabled,
             custom_pattern: None,
+            normalize_full_width_space: false,
+            replacements: Vec::new(),
         };
         let book = parse_book_bytes_with_options(
             "plain.txt",
@@ -1344,6 +1348,8 @@ mod tests {
         let options = TxtParseOptions {
             chapter_rule: TxtChapterRule::Regex,
             custom_pattern: Some("[".to_string()),
+            normalize_full_width_space: false,
+            replacements: Vec::new(),
         };
         let error = parse_book_bytes_with_options("bad.txt", "正文".as_bytes(), &options)
             .expect_err("invalid regex should be rejected");
