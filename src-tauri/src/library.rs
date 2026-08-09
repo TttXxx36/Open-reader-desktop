@@ -1549,9 +1549,9 @@ mod tests {
     #[test]
     fn extracts_safe_epub_internal_links() {
         let links = extract_epub_internal_links(
-            r#"<p><a href="#toc">目录</a> <a href="chapter-2.xhtml#part">第二章</a>
+            r##"<p><a href="#toc">目录</a> <a href="chapter-2.xhtml#part">第二章</a>
                <a href="https://example.test/out">外链</a>
-               <a href="javascript:alert(1)">脚本</a></p>"#,
+               <a href="javascript:alert(1)">脚本</a></p>"##,
         );
 
         assert_eq!(links.len(), 2);
