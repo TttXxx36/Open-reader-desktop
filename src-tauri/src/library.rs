@@ -1707,21 +1707,16 @@ mod tests {
 
     #[test]
     fn normalizes_mixed_line_endings_in_one_pass() {
-        let input = "第一章\r\n首行\r第二行\n\n第二章\n正文";
+        let input = "第一章\r\n首行\r第二行\n\n第二章\n正文内容";
         let normalized = normalize_txt_text(input, &TxtParseOptions::default())
             .expect("mixed line endings should normalize");
-        assert_eq!(normalized, "第一章\n首行\n第二行\n\n第二章\n正文");
+        assert_eq!(normalized, "第一章\n首行\n第二行\n\n第二章\n正文内容");
         assert!(looks_like_chapter("第一章"));
         assert!(looks_like_chapter("第二章"));
 
         let chapters = split_txt_with_options(&normalized, &TxtParseOptions::default())
             .expect("normalized text should split");
-        assert_eq!(
-            chapters.len(),
-            2,
-            "normalized={normalized:?}, lines={:?}, chapters={chapters:?}",
-            normalized.lines().collect::<Vec<_>>()
-        );
+        assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].content, "首行\n第二行");
     }
 
