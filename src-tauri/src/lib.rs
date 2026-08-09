@@ -9,7 +9,9 @@ use db::{
     SourceFailureStats, SourceMetadata, SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome,
     SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
-use library::parse_book_bytes;
+use library::{
+    parse_book_bytes_with_options, preview_book_bytes, BookImportPreview, TxtParseOptions,
+};
 use serde::{Deserialize, Serialize};
 use source::{
     MultiSourceSearchResult, SourceBookDetail, SourceDefinition, SourceEngine, SourcePreview,
@@ -107,21 +109,70 @@ fn list_books(database: tauri::State<'_, Database>) -> Result<Vec<BookSummary>, 
     database.list_books().map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn import_book(
-    database: tauri::State<'_, Database>,
+fn import_book_impl(
+    database: &Database,
     file_name: String,
     bytes: Vec<u8>,
+    txt_options: TxtParseOptions,
 ) -> Result<BookSummary, String> {
     const MAX_IMPORT_BYTES: usize = 64 * 1024 * 1024;
     if bytes.len() > MAX_IMPORT_BYTES {
         return Err("文件超过 64 MB 限制".to_string());
     }
 
-    let parsed = parse_book_bytes(&file_name, &bytes).map_err(|error| error.to_string())?;
+    let parsed = parse_book_bytes_with_options(&file_name, &bytes, &txt_options)
+        .map_err(|error| error.to_string())?;
     database
         .import_book(&file_name, parsed)
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn import_book(
+    database: tauri::State<'_, Database>,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<BookSummary, String> {
+    import_book_impl(
+        &database,
+        file_name,
+        bytes,
+        TxtParseOptions::default(),
+    )
+}
+
+#[tauri::command]
+fn import_book_with_options(
+    database: tauri::State<'_, Database>,
+    file_name: String,
+    bytes: Vec<u8>,
+    txt_options: Option<TxtParseOptions>,
+) -> Result<BookSummary, String> {
+    import_book_impl(
+        &database,
+        file_name,
+        bytes,
+        txt_options.unwrap_or_default(),
+    )
+}
+
+#[tauri::command]
+fn preview_book_import(
+    file_name: String,
+    bytes: Vec<u8>,
+    txt_options: Option<TxtParseOptions>,
+) -> Result<BookImportPreview, String> {
+    const MAX_IMPORT_BYTES: usize = 64 * 1024 * 1024;
+    if bytes.len() > MAX_IMPORT_BYTES {
+        return Err("文件超过 64 MB 限制".to_string());
+    }
+
+    preview_book_bytes(
+        &file_name,
+        &bytes,
+        &txt_options.unwrap_or_default(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1649,6 +1700,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_books,
             import_book,
+            import_book_with_options,
+            preview_book_import,
             get_book_detail,
             get_chapter_content,
             save_progress,
