@@ -750,8 +750,8 @@ fn extract_epub_internal_links(html: &str) -> Vec<ContentLink> {
         };
         let open_end = start + relative_end + 1;
         let tag = &html[start..open_end];
-        let Some(href) = extract_html_attribute(tag, "href")
-            .and_then(|value| safe_epub_internal_href(&value))
+        let Some(href) =
+            extract_html_attribute(tag, "href").and_then(|value| safe_epub_internal_href(&value))
         else {
             cursor = open_end;
             continue;
@@ -932,7 +932,11 @@ fn parse_html_document(html: &str) -> ContentDocument {
         heading_level,
     );
 
-    ContentDocument { version: 1, blocks, links: extract_epub_internal_links(html) }
+    ContentDocument {
+        version: 1,
+        blocks,
+        links: extract_epub_internal_links(html),
+    }
 }
 
 fn is_emphasis_html_tag(name: &str) -> bool {
