@@ -25,11 +25,13 @@
 | `truncated_entries` | boolean | 是否因条数上限截断。 |
 | `privacy` | string[] | 报告的隐私边界说明。 |
 
-`source_metrics` 字段只包含 `total_sources`、`enabled_sources`、`audited_sources`、`audit_pass`、`audit_attention`、`failure_events`、`cache_entries` 和 `cache_bytes`，不代表网络请求总量或成功率。
+`source_metrics` 包含书源/审计/缓存摘要，以及可选的 `request_metrics`：`total_attempts`、`total_successes`、`total_failures`、`total_cache_hits`、`failure_rate`、`cache_hit_rate` 和按阶段统计。请求指标只统计已完成的网络请求；取消的请求不计入成功或失败。缓存命中率的分母是网络请求次数加缓存命中次数，失败率的分母是已完成网络请求次数；没有观测值时比例为 0，不代表真实网络成功率。
 
 每条 `entries` 记录包含：
 
 `id`、`source_id`、`source_name`、`stage`、`reason_code`、`operation_id`、`message`、`created_at`。其中 `operation_id` 可以为 null：这是 0009 迁移前的旧记录，读取和导出时按“无关联任务”处理。
+
+请求指标由本机 SQLite 0010 迁移维护，按来源和阶段聚合；缓存命中只在读取未过期缓存时递增，stale 回退不计为命中。
 
 ## 兼容与迁移规则
 
