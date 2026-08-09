@@ -396,13 +396,7 @@ where
 {
     let mut line = String::new();
     let mut pending_cr = false;
-    consume_normalized_txt_chunk(
-        text,
-        options,
-        &mut line,
-        &mut pending_cr,
-        &mut callback,
-    );
+    consume_normalized_txt_chunk(text, options, &mut line, &mut pending_cr, &mut callback);
     finish_normalized_txt_lines(&mut line, &mut pending_cr, &mut callback);
 }
 
@@ -449,13 +443,7 @@ where
         if had_errors {
             return Err(ImportError::TextDecode);
         }
-        consume_normalized_txt_chunk(
-            &decoded,
-            options,
-            &mut line,
-            &mut pending_cr,
-            &mut callback,
-        );
+        consume_normalized_txt_chunk(&decoded, options, &mut line, &mut pending_cr, &mut callback);
     }
 
     finish_normalized_txt_lines(&mut line, &mut pending_cr, &mut callback);
@@ -495,11 +483,8 @@ fn consume_normalized_txt_chunk<F>(
     }
 }
 
-fn finish_normalized_txt_lines<F>(
-    line: &mut String,
-    pending_cr: &mut bool,
-    callback: &mut F,
-) where
+fn finish_normalized_txt_lines<F>(line: &mut String, pending_cr: &mut bool, callback: &mut F)
+where
     F: FnMut(&str),
 {
     if *pending_cr {
