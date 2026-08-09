@@ -193,9 +193,7 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
         (
             BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3,
             FormatSupport::ProbeOnly,
-        ) => {
-            "已识别 MOBI/AZW 容器；当前仅做只读探测，尚未导入且不会绕过 DRM".to_string()
-        },
+        ) => "已识别 MOBI/AZW 容器；当前仅做只读探测，尚未导入且不会绕过 DRM".to_string(),
         (BookFormatKind::Pdf, FormatSupport::ProbeOnly) => {
             "已识别 PDF；需要独立的渲染、搜索和目录模型".to_string()
         }
