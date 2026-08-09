@@ -1313,6 +1313,77 @@ mod tests {
         let _ = fs::remove_dir_all(directory);
     }
     #[test]
+    fn upgrades_legacy_failure_history_with_operation_ids() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-source-failure-migration-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).expect("directory should create");
+        let database_path = directory.join("open-reader.db");
+        let connection = Connection::open(&database_path).expect("legacy database should open");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations (
+                   version INTEGER PRIMARY KEY NOT NULL,
+                   applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                 );",
+            )
+            .expect("migration table should create");
+        for (version, sql) in [
+            (1_i64, include_str!("../migrations/0001_init.sql")),
+            (2_i64, include_str!("../migrations/0002_library.sql")),
+            (3_i64, include_str!("../migrations/0003_sources.sql")),
+            (4_i64, include_str!("../migrations/0004_source_cache.sql")),
+            (5_i64, include_str!("../migrations/0005_content_format.sql")),
+            (
+                6_i64,
+                include_str!("../migrations/0006_source_metadata.sql"),
+            ),
+            (
+                7_i64,
+                include_str!("../migrations/0007_source_snapshots.sql"),
+            ),
+            (
+                8_i64,
+                include_str!("../migrations/0008_source_failure_history.sql"),
+            ),
+        ] {
+            connection
+                .execute_batch(sql)
+                .expect("legacy migration should apply");
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations (version) VALUES (?1)",
+                    params![version],
+                )
+                .expect("legacy migration should be recorded");
+        }
+        drop(connection);
+
+        let database = Database::open(&directory).expect("legacy database should upgrade");
+        database
+            .record_source_failure_history(
+                "source-legacy",
+                "Legacy",
+                "search",
+                "request",
+                Some("operation-upgraded"),
+                "legacy failure",
+            )
+            .expect("upgraded history should accept operation IDs");
+        let entries = database
+            .list_source_failure_history(None, 10)
+            .expect("upgraded history should list");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].operation_id.as_deref(), Some("operation-upgraded"));
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn persists_and_clears_source_failure_history() {
         let directory = std::env::temp_dir().join(format!(
             "open-reader-source-failure-test-{}",
