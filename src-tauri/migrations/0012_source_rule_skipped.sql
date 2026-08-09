@@ -1,0 +1,1 @@
+ALTER TABLE source_rule_metrics ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0;
