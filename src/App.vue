@@ -27,9 +27,16 @@ interface BookSummary {
 
 type TxtChapterRule = "auto" | "disabled" | "regex";
 
+interface TxtReplacement {
+  from: string;
+  to: string;
+}
+
 interface TxtParseOptions {
   chapter_rule: TxtChapterRule;
   custom_pattern: string;
+  normalize_full_width_space: boolean;
+  replacements: TxtReplacement[];
 }
 
 interface BookImportPreview {
@@ -467,7 +474,13 @@ const isImporting = ref(false);
 const bookImportPreview = ref<BookImportPreview | null>(null);
 const bookImportFileName = ref("");
 const bookImportBytes = ref<number[]>([]);
-const txtParseOptions = ref<TxtParseOptions>({ chapter_rule: "auto", custom_pattern: "" });
+const txtParseOptions = ref<TxtParseOptions>({
+  chapter_rule: "auto",
+  custom_pattern: "",
+  normalize_full_width_space: false,
+  replacements: [],
+});
+const txtReplacementDraft = ref("");
 const bookImportBusy = ref(false);
 const settings = ref<ReaderSettings>(loadSettings());
 const nextPagePolicy = ref<NextPagePolicy>(loadNextPagePolicy());
@@ -1881,7 +1894,13 @@ function resetBookImportPreview() {
   bookImportPreview.value = null;
   bookImportFileName.value = "";
   bookImportBytes.value = [];
-  txtParseOptions.value = { chapter_rule: "auto", custom_pattern: "" };
+  txtParseOptions.value = {
+    chapter_rule: "auto",
+    custom_pattern: "",
+    normalize_full_width_space: false,
+    replacements: [],
+  };
+  txtReplacementDraft.value = "";
 }
 
 function ensureTxtPattern() {
@@ -1894,9 +1913,25 @@ function ensureTxtPattern() {
   }
 }
 
+function applyTxtReplacementDraft() {
+  txtParseOptions.value.replacements = txtReplacementDraft.value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.includes("=>"))
+    .map((line) => {
+      const separator = line.indexOf("=>");
+      return {
+        from: line.slice(0, separator).trim(),
+        to: line.slice(separator + 2).trim(),
+      };
+    })
+    .filter((rule) => rule.from.length > 0);
+}
+
 async function refreshBookImportPreview() {
   if (!bookImportFileName.value) return;
 
+  applyTxtReplacementDraft();
   bookImportBusy.value = true;
   errorMessage.value = "";
   try {
@@ -1919,6 +1954,7 @@ async function confirmBookImport() {
   const preview = bookImportPreview.value;
   if (!fileName || !preview) return;
 
+  applyTxtReplacementDraft();
   isImporting.value = true;
   errorMessage.value = "";
   status.value = "正在导入《" + fileName + "》…";
@@ -2203,6 +2239,19 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
               placeholder="例如：^第\s*\d+章"
               @keyup.enter="refreshBookImportPreview"
             />
+          </label>
+          <label class="book-import-preview-check">
+            <input v-model="txtParseOptions.normalize_full_width_space" type="checkbox" />
+            <span>将全角空格归一化为普通空格</span>
+          </label>
+          <label class="book-import-preview-field book-import-preview-wide">
+            <span>文本替换（可选，每行一条：旧词 =&gt; 新词）</span>
+            <textarea
+              v-model="txtReplacementDraft"
+              rows="2"
+              placeholder="例如：旧书名 =&gt; 新书名"
+              @keyup.ctrl.enter="refreshBookImportPreview"
+            ></textarea>
           </label>
         </div>
         <ul v-if="bookImportPreview.warnings.length" class="book-import-preview-warnings">
@@ -3401,7 +3450,8 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 }
 
 .book-import-preview-field input,
-.book-import-preview-field select {
+.book-import-preview-field select,
+.book-import-preview-field textarea {
   width: 100%;
   padding: 10px 11px;
   border: 1px solid rgba(148, 163, 184, 0.22);
@@ -3410,9 +3460,34 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   background: #0c111b;
 }
 
+.book-import-preview-field textarea {
+  min-height: 54px;
+  resize: vertical;
+}
+
 .book-import-preview-field input:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.book-import-preview-check {
+  display: flex;
+  align-items: center;
+  align-self: end;
+  gap: 8px;
+  min-height: 40px;
+  color: #aebbd0;
+  font-size: 12px;
+}
+
+.book-import-preview-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #86dfc2;
+}
+
+.book-import-preview-wide {
+  grid-column: 1 / -1;
 }
 
 .book-import-preview-warnings {
