@@ -245,9 +245,6 @@ fn decode_text(bytes: &[u8]) -> Result<Cow<'_, str>, ImportError> {
     ))
 }
 
-fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, ImportError> {
-    validate_txt_replacements(options)?;
-
 fn validate_txt_replacements(options: &TxtParseOptions) -> Result<(), ImportError> {
     if options.replacements.len() > MAX_TXT_REPLACEMENTS {
         return Err(ImportError::InvalidTxtOptions(format!(
@@ -278,6 +275,9 @@ fn validate_txt_replacements(options: &TxtParseOptions) -> Result<(), ImportErro
 
     Ok(())
 }
+
+fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, ImportError> {
+    validate_txt_replacements(options)?;
 
     let mut normalized = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
@@ -522,12 +522,7 @@ fn split_txt_with_replacements_streaming(
 
     for_each_text_chunk(text, |chunk| {
         let mut normalized = String::new();
-        normalize_txt_chunk(
-            chunk,
-            options,
-            &mut normalized_pending_cr,
-            &mut normalized,
-        );
+        normalize_txt_chunk(chunk, options, &mut normalized_pending_cr, &mut normalized);
         if normalized.is_empty() {
             return;
         }
@@ -2236,8 +2231,9 @@ mod tests {
                 to: "新词".to_string(),
             }],
         };
-        let book = parse_book_bytes_with_options("chunked-replacements.txt", input.as_bytes(), &options)
-            .expect("replacement should cross the streaming chunk boundary");
+        let book =
+            parse_book_bytes_with_options("chunked-replacements.txt", input.as_bytes(), &options)
+                .expect("replacement should cross the streaming chunk boundary");
 
         assert_eq!(book.chapters.len(), 1);
         assert!(book.chapters[0].content.ends_with("新词\n尾"));
