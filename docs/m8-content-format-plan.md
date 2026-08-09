@@ -44,7 +44,8 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - M8.5.1 只读格式探测已完成：新增 `BookFormatProbe` 与 `probe_book_format` Tauri 命令，按扩展名和内容签名识别 TXT、EPUB、MOBI/AZW/AZW3、PDF 与 PNG/JPEG/GIF/WebP；MOBI/AZW 使用 PalmDB 记录偏移和 `MOBI` 标记校验，PDF/图片只返回探测结果，不进入文本导入。扩展名与签名不一致会明确拒绝，未知扩展名可按安全魔数提示候选格式。
 - M8.5.1 夹具覆盖有效/伪造 MOBI、PDF、图片、TXT、重命名 PDF 和扩展名不匹配；run [31334929174](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31334929174) 的前端、Linux Rust fmt/check、100 个 Rust 测试和 Windows 测试编译/采样通过，性能 artifact [9044080190](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31334929174#artifacts) 正常上传。
 - M8.5.2 已增加有界元数据探测：PDF 版本、PNG/GIF/WebP/JPEG 尺寸与 MIME、MOBI/AZW 记录偏移和 MOBI 头长度；图片尺寸限制为 100,000×100,000，JPEG 扫描最多 1 MiB，仍不解码、不导入。run [31335820920](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31335820920) 通过前端、Linux fmt/check、100 个 Rust 测试和 Windows 编译/采样，artifact [9044331289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31335820920#artifacts) 已上传。
-- MOBI/AZW：探测已完成；下一步只在许可证、解析器维护性、内存上限和 DRM 拒绝策略都明确后评估只读解析器。
+- M8.5.3 已落实统一导入闸门：`require_importable_format` 同时用于导入与预览；已知魔数与扩展名冲突会拒绝，MOBI/AZW/AZW3 仍只读探测并明确不会绕过 DRM；AZW 变体与 MOBI 容器的签名兼容规则有夹具覆盖。run [31336890258](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31336890258) 通过前端、Rust fmt/check、100 个 Rust 测试、TXT 性能证据和 Windows 编译/峰值 RSS 采样，artifact [9044645355](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31336890258#artifacts) 已上传。
+- MOBI/AZW：探测和导入边界已完成；后续只有在许可证、解析器维护性、内存上限和 DRM 拒绝策略都明确后，才评估只读解析器。
 
 - PDF：独立评估渲染、搜索、目录和页码定位模型，不转成普通文本章节。
 - 漫画/图片：独立建模缓存、缩放、双页和阅读方向；不复用文本章节字段。
