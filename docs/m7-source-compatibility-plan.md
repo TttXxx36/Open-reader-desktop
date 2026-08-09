@@ -141,7 +141,10 @@ M7.3d 已把离线指标接入导入预览：每条发现同时展示受限语�
 M7.3e 已补充授权合成 XPath 夹具和耗时分布：导入预览透传 `offline_elapsed_us`，界面显示每条规则的微秒级离线解析耗时；测试覆盖受限语法、函数/联合/轴/父节点等拒绝语法，并断言 p95 解析耗时处于 2 秒上限内。所有输入仍只使用合成 HTML，不翻译为 CSS、不访问网络。
 - 远程证据：[GitHub Actions run 31303684736](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31303684736)（68 个 Rust 测试、前端 typecheck/build/UI contract/release preflight 通过）。
 
-下一步继续补充边界/回归夹具并记录跨版本结果；任何失败都不得静默改写为 CSS，只有固定节点数、表达式长度、执行时间和网络权限后，才决定是否进入可执行档。
+M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组合属性谓词、属性读取非末端、无效规则和合成 HTML 节点预算均明确拒绝；修复了尾部分隔符被误接受、同引号组合谓词被误解析的风险。节点预算断言只检查超过阈值，不依赖 scraper 隐式 html/head/body 节点数量。
+- 远程证据：[GitHub Actions run 31307700513](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31307700513)（70 个 Rust 测试、前端 typecheck/build/UI contract/release preflight 通过）。
+
+下一步记录跨版本结果并继续保持安全拒绝边界；任何失败都不得静默改写为 CSS，只有固定节点数、表达式长度、执行时间和网络权限后，才决定是否进入可执行档。
 
 ## M7.4 JavaScript 评估闸门
 
