@@ -195,10 +195,16 @@ M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组
 ### M7.5i 规则执行指标（首个实现切片已完成）
 
 - 新增 SQLite 0011 `source_rule_metrics`，按 `source_id + stage + rule_key` 保存四个解析阶段（`search`、`book_info`、`toc`、`content`）的 attempts、successes、no_matches 和 failures；`delete_source`、replace-all 导入和迁移路径都会清理或保留一致的指标状态。
-- SourceEngine 在搜索分页、书籍标题、目录条目、章节正文及受限 next-page 正文成功路径发出规则评估事件；解析错误和明确 no-match 错误分类为 failure/no_match，网络、取消、缓存和策略拒绝不会伪装成规则失败。首个切片使用 `item`、`title`、`content` 等必需输出代理键，字段级可选规则仍留待后续。
+- SourceEngine 在搜索分页、书籍标题、目录条目、章节正文及受限 next-page 正文成功路径发出规则评估事件；解析错误和明确 no-match 错误分类为 failure/no_match，网络、取消、缓存和策略拒绝不会伪装成规则失败。首个切片使用 `item`、`title`、`content` 等必需输出代理键。
 - 新增 `get_source_rule_metrics` 命令和书源页汇总，展示 attempts、success/no-match/failure、成功率/失败率和按规则分解；没有观测值时保留 `observed=false`。诊断报告的 `source_metrics.rule_metrics` 为可选字段，继续遵守本地-only 和脱敏边界。
 - 分母固定为 `attempts = successes + no_matches + failures`；新鲜缓存命中、stale 回退和取消不重复执行或进入规则分母。GitHub Actions run [31320769641](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31320769641) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 **76 个 Rust 测试**。
-- 后续小步：补充字段级规则键和 `skipped` 的显式可观测展示，再用授权合成夹具验证分页/next URL、缓存和取消边界；继续保持默认不执行脚本和 XPath。
+
+### M7.5j 字段级规则键与 skipped 可观测性（已完成）
+
+- SQLite 0012 为 `source_rule_metrics` 增加 `skipped` 列；未配置或策略跳过只增加 skipped，不增加 attempts，因此不会改变成功率/失败率分母；旧 0011 数据库启动时自动升级。
+- 搜索、书籍信息、目录和正文事件现在按字段级键发出：`item`、`title`、`author`、`url`、`intro`、`cover`、`content`、`next`；未配置字段明确记录为 skipped，正文分页/受限追链按响应页分别评估。
+- 书源页显示 skipped 总量和按规则分解；零观测时给出“尚未采集规则执行”的说明。规则状态枚举包含 success/no_match/failure/skipped，但 skipped 始终不进入成功/失败率。
+- GitHub Actions run [31322235077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31322235077) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 **76 个 Rust 测试**；下一步可转入 M8 内容格式 v2，同时保留授权合成边界夹具的持续补充。
 ## GitHub 执行方式
 
 每个子阶段拆为 Issue → 小 PR → CI → 兼容性矩阵更新 → 路线图记录。前端 typecheck/build/UI contract、Rust fmt/check/test 必须通过；涉及安装器的任务额外等待 M6.5 Windows Actions 验收。本地不执行构建或安装。
