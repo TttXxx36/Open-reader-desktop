@@ -1713,6 +1713,7 @@ mod tests {
                     kind: "image".to_string(),
                     level: None,
                     anchor: None,
+                    style: None,
                     spans: Vec::new(),
                     alt: None,
                     src: Some("https://example.test/cover.jpg".to_string()),
