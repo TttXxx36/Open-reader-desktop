@@ -313,11 +313,15 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
               </div>
             </template>
             <template v-if="sourceMetrics.rule_metrics">
+              <p v-if="!sourceMetrics.rule_metrics.observed">
+                尚未采集到规则执行（缓存命中、取消和策略跳过不会计入成功率）
+              </p>
               <p>
                 规则评估 {{ sourceMetrics.rule_metrics.total_attempts }} 次 ·
                 成功 {{ sourceMetrics.rule_metrics.total_successes }} ·
                 无匹配 {{ sourceMetrics.rule_metrics.total_no_matches }} ·
-                失败 {{ sourceMetrics.rule_metrics.total_failures }}
+                失败 {{ sourceMetrics.rule_metrics.total_failures }} ·
+                跳过 {{ sourceMetrics.rule_metrics.total_skipped }}
               </p>
               <p>
                 规则产出成功率 {{ formatPercent(sourceMetrics.rule_metrics.success_rate) }} ·
@@ -327,7 +331,8 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
                 <small v-for="item in sourceMetrics.rule_metrics.by_rule" :key="'rule-metric-' + item.stage + '-' + item.rule_key">
                   {{ item.stage }}.{{ item.rule_key }}：{{ item.attempts }} 次 ·
                   成功 {{ formatPercent(item.success_rate) }} ·
-                  无匹配 {{ item.no_matches }} · 错误 {{ item.failures }}
+                  无匹配 {{ item.no_matches }} · 错误 {{ item.failures }} ·
+                  跳过 {{ item.skipped }}
                 </small>
               </div>
             </template>
