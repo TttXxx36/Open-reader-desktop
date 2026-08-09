@@ -185,7 +185,7 @@ M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组
 
 ### M7.5f 后续维护切片
 
-- 细化超时、HTTP 状态、解析、配置和响应体限制等重试原因，并为诊断快照与本地报告增加版本兼容/迁移策略。
+- 失败原因码已细化为 `timeout`、`cancelled`、`rate_limit`、`auth`、`http_status`、`body_limit`、`parse`、`config`、`network`、`request`，并用回归夹具锁定有限集合；GitHub Actions run [31313787317](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31313787317) 已通过前端检查、Rust fmt/check 和 72 个 Rust 测试。诊断快照与本地报告的版本兼容/迁移仍待后续切片。
 - 导入 diff、配置版本迁移、冲突提示和可回滚快照继续覆盖旧数据库、重复来源 URL 和失败回滚。
 - 继续扩展启用源、失败率、缓存命中和规则兼容性指标，但保持本地导出，不建立远程遥测。
 
