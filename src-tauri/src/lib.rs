@@ -1314,7 +1314,11 @@ mod tests {
         ];
 
         for (message, expected) in cases {
-            assert_eq!(classify_source_failure(message), expected, "message: {message}");
+            assert_eq!(
+                classify_source_failure(message),
+                expected,
+                "message: {message}"
+            );
         }
     }
 }
