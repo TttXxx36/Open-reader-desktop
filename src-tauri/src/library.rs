@@ -1721,8 +1721,8 @@ mod tests {
     fn parses_large_txt_fixture_with_line_accumulator() {
         let mut text = String::with_capacity(1024 * 1024);
         for index in 0..512 {
-            text.push_str(&format!("第 {index} 章\\n"));
-            text.push_str("正文内容。\\n\\n第二段内容。\\n");
+            text.push_str(&format!("第 {index} 章\n"));
+            text.push_str("正文内容。\n\n第二段内容。\n");
         }
 
         let book = parse_book_bytes("large.txt", text.as_bytes()).expect("large TXT should parse");
