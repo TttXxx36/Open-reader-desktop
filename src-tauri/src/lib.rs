@@ -1342,6 +1342,7 @@ fn record_source_rule_evaluations(
             source::SourceRuleEvaluationStatus::Success => SourceRuleOutcome::Success,
             source::SourceRuleEvaluationStatus::NoMatch => SourceRuleOutcome::NoMatch,
             source::SourceRuleEvaluationStatus::Failure => SourceRuleOutcome::Failure,
+            source::SourceRuleEvaluationStatus::Skipped => SourceRuleOutcome::Skipped,
         };
         if let Err(error) = database.record_source_rule_outcome(
             source_id,
