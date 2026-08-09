@@ -49,11 +49,21 @@ impl Default for TxtChapterRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TxtReplacement {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TxtParseOptions {
     #[serde(default)]
     pub chapter_rule: TxtChapterRule,
     #[serde(default)]
     pub custom_pattern: Option<String>,
+    #[serde(default)]
+    pub normalize_full_width_space: bool,
+    #[serde(default)]
+    pub replacements: Vec<TxtReplacement>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +83,9 @@ const MAX_EMBEDDED_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_EPUB_ARCHIVE_ENTRIES: usize = 2_048;
 const MAX_EPUB_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_EPUB_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_TXT_REPLACEMENTS: usize = 32;
+const MAX_TXT_REPLACEMENT_FROM_BYTES: usize = 128;
+const MAX_TXT_REPLACEMENT_TO_BYTES: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct ParsedChapter {
@@ -213,6 +226,46 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
     Ok(text.into_owned().trim_start_matches('\u{feff}').to_string())
 }
 
+fn normalize_txt_text(
+    text: &str,
+    options: &TxtParseOptions,
+) -> Result<String, ImportError> {
+    let mut normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    if options.normalize_full_width_space {
+        normalized = normalized.replace('\u{3000}', " ");
+    }
+
+    if options.replacements.len() > MAX_TXT_REPLACEMENTS {
+        return Err(ImportError::InvalidTxtOptions(format!(
+            "替换规则不能超过 {} 条",
+            MAX_TXT_REPLACEMENTS
+        )));
+    }
+
+    for replacement in &options.replacements {
+        if replacement.from.trim().is_empty() {
+            return Err(ImportError::InvalidTxtOptions(
+                "替换规则的原文本不能为空".to_string(),
+            ));
+        }
+        if replacement.from.len() > MAX_TXT_REPLACEMENT_FROM_BYTES {
+            return Err(ImportError::InvalidTxtOptions(format!(
+                "替换规则原文本不能超过 {} 字节",
+                MAX_TXT_REPLACEMENT_FROM_BYTES
+            )));
+        }
+        if replacement.to.len() > MAX_TXT_REPLACEMENT_TO_BYTES {
+            return Err(ImportError::InvalidTxtOptions(format!(
+                "替换规则目标文本不能超过 {} 字节",
+                MAX_TXT_REPLACEMENT_TO_BYTES
+            )));
+        }
+        normalized = normalized.replace(&replacement.from, &replacement.to);
+    }
+
+    Ok(normalized)
+}
+
 fn split_txt(text: &str) -> Vec<ParsedChapter> {
     split_txt_with_options(text, &TxtParseOptions::default()).unwrap_or_default()
 }
@@ -221,7 +274,7 @@ fn split_txt_with_options(
     text: &str,
     options: &TxtParseOptions,
 ) -> Result<Vec<ParsedChapter>, ImportError> {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = normalize_txt_text(text, options)?;
     let custom_pattern = match options.chapter_rule {
         TxtChapterRule::Regex => {
             let pattern = options
@@ -296,22 +349,65 @@ fn push_text_chapter(chapters: &mut Vec<ParsedChapter>, title: &str, lines: &[St
 }
 
 fn looks_like_chapter(line: &str) -> bool {
+    let line = line.trim();
     if line.is_empty() || line.chars().count() > 80 {
         return false;
     }
 
-    if ["序章", "楔子", "番外", "正文"]
-        .iter()
-        .any(|prefix| line.starts_with(prefix))
+    for prefix in ["序章", "楔子", "番外", "正文", "后记", "尾声", "终章", "引子", "卷首", "卷末"] {
+        if line == prefix
+            || line
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.is_empty() || is_title_separator(rest))
+        {
+            return true;
+        }
+    }
+
+    let lower = line.to_ascii_lowercase();
+    if lower.starts_with("chapter ")
+        && lower[8..]
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
     {
         return true;
     }
 
-    line.starts_with('第')
-        && ["章", "节", "回", "卷", "篇"]
-            .iter()
-            .any(|marker| line.contains(marker))
+    if !line.starts_with('第') {
+        return false;
+    }
+
+    let Some((marker_index, _)) = ["章", "节", "回", "卷", "篇"]
+        .iter()
+        .filter_map(|marker| line.find(marker).map(|index| (index, *marker)))
+        .min_by_key(|(index, _)| *index)
+    else {
+        return false;
+    };
+    if marker_index > 24 {
+        return false;
+    }
+
+    let number = &line['第'.len_utf8()..marker_index];
+    let compact: String = number
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    !compact.is_empty() && compact.chars().all(is_chapter_number_character)
 }
+
+fn is_title_separator(rest: &str) -> bool {
+    rest.chars()
+        .next()
+        .is_some_and(|character| matches!(character, ' ' | '\t' | ':' | '：' | '-' | '—' | '·'))
+}
+
+fn is_chapter_number_character(character: char) -> bool {
+    character.is_ascii_digit()
+        || "零〇一二两三四五六七八九十百千万".contains(character)
+}
+
 
 fn title_from_file_name(file_name: &str) -> String {
     Path::new(file_name)
@@ -1255,6 +1351,57 @@ mod tests {
         let error = parse_book_bytes_with_options("bad.txt", "正文".as_bytes(), &options)
             .expect_err("invalid regex should be rejected");
         assert!(error.to_string().contains("自定义章节规则无效"));
+    }
+
+    #[test]
+    fn detects_extended_chapter_headings() {
+        assert!(looks_like_chapter("第一卷 风起"));
+        assert!(looks_like_chapter("第2篇 远行"));
+        assert!(looks_like_chapter("后记"));
+        assert!(looks_like_chapter("Chapter 3"));
+        assert!(!looks_like_chapter("第二个章节内容"));
+    }
+
+    #[test]
+    fn normalizes_full_width_spaces_and_applies_replacements() {
+        let options = TxtParseOptions {
+            chapter_rule: TxtChapterRule::Auto,
+            custom_pattern: None,
+            normalize_full_width_space: true,
+            replacements: vec![TxtReplacement {
+                from: "旧词".to_string(),
+                to: "新词".to_string(),
+            }],
+        };
+        let book = parse_book_bytes_with_options(
+            "normalized.txt",
+            "第一章
+　旧词
+第二章
+旧词".as_bytes(),
+            &options,
+        )
+        .expect("TXT normalization should parse");
+
+        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters[0].content, " 新词");
+        assert_eq!(book.chapters[1].content, "新词");
+    }
+
+    #[test]
+    fn rejects_empty_txt_replacement_source() {
+        let options = TxtParseOptions {
+            chapter_rule: TxtChapterRule::Auto,
+            custom_pattern: None,
+            normalize_full_width_space: false,
+            replacements: vec![TxtReplacement {
+                from: " ".to_string(),
+                to: "新词".to_string(),
+            }],
+        };
+        let error = parse_book_bytes_with_options("bad.txt", "正文".as_bytes(), &options)
+            .expect_err("empty replacement should be rejected");
+        assert!(error.to_string().contains("替换规则"));
     }
 
     #[test]
