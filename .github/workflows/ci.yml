@@ -57,7 +57,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: txt-performance-\${{ github.sha }}
+          name: txt-performance-${{ github.sha }}
           path: |
             txt-performance-output.log
             txt-performance-time.log
