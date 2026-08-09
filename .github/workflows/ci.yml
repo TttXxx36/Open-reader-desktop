@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          /usr/bin/time -v cargo test --manifest-path src-tauri/Cargo.toml records_txt_size_matrix_baseline -- --exact --nocapture 2>txt-performance-time.log | tee txt-performance-output.log
+          /usr/bin/time -v cargo test --manifest-path src-tauri/Cargo.toml library::tests::records_txt_size_matrix_baseline -- --exact --nocapture 2>txt-performance-time.log | tee txt-performance-output.log
           cat txt-performance-time.log
       - name: Upload TXT performance evidence
         if: always()
