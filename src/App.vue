@@ -48,6 +48,21 @@ interface BookImportPreview {
   warnings: string[];
 }
 
+type BookFormatSupport = "importable" | "probe_only" | "unsupported" | "signature_mismatch";
+
+type FormatProbeMetadata =
+  | { kind: "pdf"; version: string }
+  | { kind: "image"; mime: string; width: number | null; height: number | null }
+  | { kind: "mobi"; record_offset: number; header_length: number | null };
+
+interface BookFormatProbe {
+  format: string;
+  support: BookFormatSupport;
+  signature_match: boolean;
+  message: string;
+  metadata?: FormatProbeMetadata | null;
+}
+
 interface ChapterSummary {
   id: string;
   title: string;
@@ -2046,6 +2061,21 @@ function applyTxtReplacementDraft() {
     .filter((rule) => rule.from.length > 0);
 }
 
+function describeBookFormatProbe(probe: BookFormatProbe) {
+  if (!probe.metadata) return probe.message;
+
+  if (probe.metadata.kind === "image") {
+    const size = probe.metadata.width && probe.metadata.height
+      ? `，${probe.metadata.width}×${probe.metadata.height}`
+      : "";
+    return `${probe.message}（${probe.metadata.mime}${size}）`;
+  }
+  if (probe.metadata.kind === "pdf") {
+    return `${probe.message}（PDF ${probe.metadata.version}）`;
+  }
+  return `${probe.message}（记录偏移 ${probe.metadata.record_offset}，MOBI 头长度 ${probe.metadata.header_length ?? "未知"}）`;
+}
+
 async function refreshBookImportPreview() {
   if (!bookImportFileName.value) return;
 
@@ -2113,9 +2143,20 @@ async function importFile(event: Event) {
   errorMessage.value = "";
   try {
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-    const isTxt = file.name.toLowerCase().endsWith(".txt");
     resetBookImportPreview();
 
+    const probe = await invoke<BookFormatProbe>("probe_book_format", {
+      fileName: file.name,
+      bytes,
+    });
+    const probeMessage = describeBookFormatProbe(probe);
+    if (probe.support !== "importable") {
+      errorMessage.value = probeMessage;
+      status.value = probeMessage;
+      return;
+    }
+
+    const isTxt = file.name.toLowerCase().endsWith(".txt");
     if (isTxt) {
       bookImportFileName.value = file.name;
       bookImportBytes.value = bytes;
