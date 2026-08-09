@@ -6,8 +6,8 @@ mod xpath_poc;
 
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceFailureHistory,
-    SourceFailureStats, SourceMetadata, SourceRequestMetrics, SourceSnapshotSummary, SourceSummary,
-    SourceWrite,
+    SourceFailureStats, SourceMetadata, SourceRequestMetrics, SourceRuleMetrics,
+    SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
@@ -1079,9 +1079,11 @@ async fn fetch_source_book(
     let detail: SourceBookDetail = match fetch_result {
         Ok(detail) => {
             record_source_request_success(&database, &summary.id, "book");
+            record_source_rule_evaluations(&database, &summary.id, &detail.rule_evaluations);
             detail
         }
         Err(message) => {
+            record_source_rule_error(&database, &summary.id, "book", &message);
             record_source_failure(
                 &database,
                 &summary.id,
@@ -1200,11 +1202,13 @@ async fn fetch_source_chapter(
     let result = match fetch_result {
         Ok(content) => {
             record_source_request_success(&database, &summary.id, "chapter");
+            record_source_rule_evaluations(&database, &summary.id, &content.rule_evaluations);
             let mut result = RemoteChapterContent::from(content);
             result.debug_steps = debug_steps;
             result
         }
         Err(message) => {
+            record_source_rule_error(&database, &summary.id, "chapter", &message);
             record_source_failure(
                 &database,
                 &summary.id,
@@ -1328,6 +1332,45 @@ mod tests {
     }
 }
 
+fn record_source_rule_evaluations(
+    database: &Database,
+    source_id: &str,
+    evaluations: &[source::SourceRuleEvaluation],
+) {
+    for evaluation in evaluations {
+        let outcome = match evaluation.status {
+            source::SourceRuleEvaluationStatus::Success => SourceRuleOutcome::Success,
+            source::SourceRuleEvaluationStatus::NoMatch => SourceRuleOutcome::NoMatch,
+            source::SourceRuleEvaluationStatus::Failure => SourceRuleOutcome::Failure,
+        };
+        if let Err(error) = database.record_source_rule_outcome(
+            source_id,
+            &evaluation.stage,
+            &evaluation.rule_key,
+            outcome,
+        ) {
+            eprintln!("unable to record source rule metric: {error}");
+        }
+    }
+}
+
+fn record_source_rule_error(
+    database: &Database,
+    source_id: &str,
+    request_stage: &str,
+    message: &str,
+) {
+    let (stage, key) = match request_stage {
+        "book" if message.contains("toc") => ("toc", "item"),
+        "book" => ("book_info", "title"),
+        "chapter" => ("content", "content"),
+        _ => return,
+    };
+    if let Some(evaluation) = source::rule_evaluation_from_error(stage, key, message) {
+        record_source_rule_evaluations(database, source_id, &[evaluation]);
+    }
+}
+
 fn record_source_request_success(database: &Database, source_id: &str, stage: &str) {
     if let Err(error) = database.record_source_request_outcome(source_id, stage, true) {
         eprintln!("unable to record source request success metric: {error}");
@@ -1366,6 +1409,7 @@ fn record_source_failures(
     operation_id: Option<&str>,
 ) {
     for failure in failures {
+        record_source_rule_evaluations(database, &failure.source_id, &failure.rule_evaluations);
         record_source_failure(
             database,
             &failure.source_id,
@@ -1383,6 +1427,11 @@ fn record_source_search_successes(
     failures: &[SourceSearchFailure],
 ) {
     for diagnostic in diagnostics {
+        record_source_rule_evaluations(
+            database,
+            &diagnostic.source_id,
+            &diagnostic.rule_evaluations,
+        );
         if failures
             .iter()
             .any(|failure| failure.source_id == diagnostic.source_id)
@@ -1419,6 +1468,15 @@ fn get_source_request_metrics(
 ) -> Result<SourceRequestMetrics, String> {
     database
         .source_request_metrics()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_source_rule_metrics(
+    database: tauri::State<'_, Database>,
+) -> Result<SourceRuleMetrics, String> {
+    database
+        .source_rule_metrics()
         .map_err(|error| error.to_string())
 }
 
@@ -1464,6 +1522,7 @@ async fn search_sources(
                 source_id: summary.id,
                 source_name: summary.name,
                 message: format!("配置解析失败：{}", error),
+                rule_evaluations: Vec::new(),
             }),
         }
     }
@@ -1621,6 +1680,7 @@ pub fn run() {
             clear_source_failure_history,
             get_source_failure_stats,
             get_source_request_metrics,
+            get_source_rule_metrics,
             fetch_source_book,
             fetch_source_chapter,
             run_source_pipeline,
