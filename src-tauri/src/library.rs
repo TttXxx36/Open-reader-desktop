@@ -1372,8 +1372,7 @@ mod tests {
         };
         let book = parse_book_bytes_with_options(
             "normalized.txt",
-            "第一章\n　旧词\n第二章\n旧词"
-                .as_bytes(),
+            "第一章\n　旧词\n第二章\n旧词".as_bytes(),
             &options,
         )
         .expect("TXT normalization should parse");
