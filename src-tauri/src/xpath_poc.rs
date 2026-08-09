@@ -161,6 +161,9 @@ fn parse_expression(expression: &str) -> Result<Vec<XPathStep>, String> {
             return Err("XPath 路径分隔符无效".to_string());
         };
         remaining = &remaining[separator_len..];
+        if remaining.is_empty() {
+            return Err("XPath 路径不能以分隔符结尾".to_string());
+        }
 
         let end = remaining.find('/').unwrap_or(remaining.len());
         let raw_step = &remaining[..end];
@@ -250,6 +253,9 @@ fn parse_predicate(predicate: &str) -> Result<XPathPredicate, String> {
         return Err("XPath 属性谓词引号不完整".to_string());
     }
     let value = expected[1..expected.len() - 1].to_string();
+    if value.contains(quote) {
+        return Err("XPath 仅支持单一属性等值谓词".to_string());
+    }
     Ok(XPathPredicate::AttributeEquals { name, value })
 }
 
@@ -387,6 +393,39 @@ mod tests {
             p95 < 2_000_000,
             "synthetic XPath fixture parse p95 exceeded 2 seconds: {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn rejects_malformed_xpath_regressions() {
+        for expression in [
+            "",
+            "article",
+            "/",
+            "//",
+            "//article/",
+            "//article[]",
+            "//article[0]",
+            "//article[@class]",
+            "//article[@class='book' and @id='1']",
+            "//article[foo]",
+            "//article[@class='book']/@href/text()",
+        ] {
+            let analysis = analyze(expression, "<main><article class="book"><a>demo</a></article></main>");
+            assert!(!analysis.accepted, "{expression}: {analysis:?}");
+            assert!(analysis.reason.is_some(), "{expression}: {analysis:?}");
+        }
+    }
+
+    #[test]
+    fn enforces_synthetic_html_node_budget() {
+        let html = format!("<main>{}</main>", "<a></a>".repeat(MAX_XPATH_NODE_BUDGET));
+        let analysis = analyze("//a", &html);
+        assert!(!analysis.accepted, "{analysis:?}");
+        assert_eq!(analysis.html_nodes, MAX_XPATH_NODE_BUDGET + 1);
+        assert!(analysis
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("节点数超过")));
     }
 
     #[test]
