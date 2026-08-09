@@ -58,7 +58,7 @@
 - 运行安装器 smoke：安装、启动、设置/书源/书架入口、导入授权夹具、退出重启、卸载残留。
 - 验证升级路径、WebView2 缺失提示、中文字体、窄窗口、键盘 Tab 焦点和数据目录迁移。
 - 生成并保存验收证据；签名方案在用户可提供证书前继续暂缓。
-- 当前已知外部阻塞：当前环境未安装 GitHub CLI，连接器未暴露 workflow dispatch；尝试使用内置浏览器时浏览器内核因 Windows sandbox ACL 错误退出。待 CLI 或浏览器连接恢复后，只触发 main，不在本地构建或安装。
+- 当前已知外部阻塞：用于 dispatch 的 PAT 返回 `Resource not accessible by personal access token`，缺少 Actions workflow dispatch 写权限；当前环境也未安装 GitHub CLI，连接器未暴露 dispatch 工具，内置浏览器内核曾因 Windows sandbox ACL 错误退出。待重新授权 Actions workflow dispatch 后，只触发 main，不在本地构建或安装。
 
 ### M7 — 书源兼容性 v2（当前开发阶段）
 
