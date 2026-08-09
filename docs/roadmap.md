@@ -76,7 +76,7 @@
 
 ### M8 — 阅读内容与本地格式 v2
 
-详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界已完成：EPUB ZIP 最多 2,048 个条目、单条 16 MiB、解压总量 64 MiB，并拒绝绝对/穿越路径；M8.2 TXT 解析可配置化已完成：支持导入预览、编码提示、内置/不拆分/自定义正则章节规则、全角空格归一化和文本替换，CI run [31325019515](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31325019515) 通过，Rust 85 tests。下一步进入 M8.3 EPUB 内部链接与目录定位。
+详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界与 M8.2 TXT 解析可配置化均已完成；M8.3 首个切片已完成：EPUB blocks-v1 保留安全内部链接元数据并拒绝危险目标，CI run [31325599182](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31325599182) 通过，Rust 86 tests。下一步补齐前端目录定位、章节跳转和 CSS 白名单。
 
 - EPUB：完善目录、章节标题、字体、图片、链接和基础 CSS 白名单，继续禁止脚本、事件属性、危险 URL 和无限资源。
 - TXT：编码探测、章节规则配置、全角空格/缩进、替换词和大文件流式解析。
