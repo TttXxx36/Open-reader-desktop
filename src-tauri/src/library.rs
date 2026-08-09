@@ -3,6 +3,7 @@ use encoding_rs::{GB18030, UTF_16BE, UTF_16LE};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io::{Cursor, Read, Seek},
     path::Path,
@@ -191,7 +192,7 @@ fn parse_txt_with_options(
     options: &TxtParseOptions,
 ) -> Result<ParsedBook, ImportError> {
     let text = decode_text(bytes)?;
-    let chapters = split_txt_with_options(&text, options)?;
+    let chapters = split_txt_with_options(text.as_ref(), options)?;
     if chapters.is_empty() {
         return Err(ImportError::TextDecode);
     }
@@ -218,24 +219,28 @@ fn detect_text_encoding(bytes: &[u8]) -> &'static str {
     }
 }
 
-fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
+fn decode_text(bytes: &[u8]) -> Result<Cow<'_, str>, ImportError> {
     if bytes.starts_with(&[0xFF, 0xFE]) {
-        return Ok(UTF_16LE.decode(&bytes[2..]).0.into_owned());
+        return Ok(Cow::Owned(UTF_16LE.decode(&bytes[2..]).0.into_owned()));
     }
     if bytes.starts_with(&[0xFE, 0xFF]) {
-        return Ok(UTF_16BE.decode(&bytes[2..]).0.into_owned());
+        return Ok(Cow::Owned(UTF_16BE.decode(&bytes[2..]).0.into_owned()));
     }
 
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     if let Ok(text) = std::str::from_utf8(bytes) {
-        return Ok(text.trim_start_matches('\u{feff}').to_string());
+        return Ok(Cow::Borrowed(text.trim_start_matches('\u{feff}')));
     }
 
     let (text, _, had_errors) = GB18030.decode(bytes);
     if had_errors {
         return Err(ImportError::TextDecode);
     }
-    Ok(text.into_owned().trim_start_matches('\u{feff}').to_string())
+    Ok(Cow::Owned(
+        text.into_owned()
+            .trim_start_matches('\u{feff}')
+            .to_string(),
+    ))
 }
 
 fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, ImportError> {
@@ -296,7 +301,6 @@ fn split_txt_with_options(
     text: &str,
     options: &TxtParseOptions,
 ) -> Result<Vec<ParsedChapter>, ImportError> {
-    let normalized = normalize_txt_text(text, options)?;
     let custom_pattern = match options.chapter_rule {
         TxtChapterRule::Regex => {
             let pattern = options
@@ -321,26 +325,28 @@ fn split_txt_with_options(
     let mut current_title = String::new();
     let mut current_content = String::new();
 
-    for line in normalized.lines() {
-        let trimmed = line.trim();
-        let is_chapter = match options.chapter_rule {
-            TxtChapterRule::Auto => looks_like_chapter(trimmed),
-            TxtChapterRule::Disabled => false,
-            TxtChapterRule::Regex => custom_pattern
-                .as_ref()
-                .is_some_and(|pattern| pattern.is_match(trimmed)),
-        };
-        if is_chapter {
-            if !current_title.is_empty() || !current_content.is_empty() {
-                push_text_chapter(&mut chapters, &current_title, &current_content);
-                current_content.clear();
-            }
-            current_title = trimmed.to_string();
-        } else {
-            if !current_content.is_empty() {
-                current_content.push('\n');
-            }
-            current_content.push_str(line.trim_end());
+    if options.replacements.is_empty() {
+        for_each_normalized_txt_line(text, options, |line| {
+            append_txt_line(
+                line,
+                options,
+                custom_pattern.as_ref(),
+                &mut chapters,
+                &mut current_title,
+                &mut current_content,
+            );
+        });
+    } else {
+        let normalized = normalize_txt_text(text, options)?;
+        for line in normalized.lines() {
+            append_txt_line(
+                line,
+                options,
+                custom_pattern.as_ref(),
+                &mut chapters,
+                &mut current_title,
+                &mut current_content,
+            );
         }
     }
 
@@ -349,6 +355,62 @@ fn split_txt_with_options(
     }
 
     Ok(chapters)
+}
+
+fn for_each_normalized_txt_line<F>(text: &str, options: &TxtParseOptions, mut callback: F)
+where
+    F: FnMut(&str),
+{
+    let mut line = String::new();
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\r' {
+            if characters.peek().is_some_and(|next| *next == '\n') {
+                characters.next();
+            }
+            callback(&line);
+            line.clear();
+        } else if character == '\n' {
+            callback(&line);
+            line.clear();
+        } else if options.normalize_full_width_space && character == '\u{3000}' {
+            line.push(' ');
+        } else {
+            line.push(character);
+        }
+    }
+
+    if !line.is_empty() {
+        callback(&line);
+    }
+}
+
+fn append_txt_line(
+    line: &str,
+    options: &TxtParseOptions,
+    custom_pattern: Option<&Regex>,
+    chapters: &mut Vec<ParsedChapter>,
+    current_title: &mut String,
+    current_content: &mut String,
+) {
+    let trimmed = line.trim();
+    let is_chapter = match options.chapter_rule {
+        TxtChapterRule::Auto => looks_like_chapter(trimmed),
+        TxtChapterRule::Disabled => false,
+        TxtChapterRule::Regex => custom_pattern.is_some_and(|pattern| pattern.is_match(trimmed)),
+    };
+    if is_chapter {
+        if !current_title.is_empty() || !current_content.is_empty() {
+            push_text_chapter(chapters, current_title, current_content);
+            current_content.clear();
+        }
+        *current_title = trimmed.to_string();
+    } else {
+        if !current_content.is_empty() {
+            current_content.push('\n');
+        }
+        current_content.push_str(line.trim_end());
+    }
 }
 
 fn push_text_chapter(chapters: &mut Vec<ParsedChapter>, title: &str, content: &str) {
@@ -1714,10 +1776,16 @@ mod tests {
         assert!(looks_like_chapter("第一章"));
         assert!(looks_like_chapter("第二章"));
 
-        let chapters = split_txt_with_options(&normalized, &TxtParseOptions::default())
-            .expect("normalized text should split");
+        let chapters = split_txt_with_options(input, &TxtParseOptions::default())
+            .expect("mixed line endings should split");
         assert_eq!(chapters.len(), 2);
         assert_eq!(chapters[0].content, "首行\n第二行");
+    }
+
+    #[test]
+    fn borrows_valid_utf8_without_decode_copy() {
+        let decoded = decode_text("第一章\n正文内容".as_bytes()).expect("UTF-8 should decode");
+        assert!(matches!(decoded, Cow::Borrowed(_)));
     }
 
     #[test]
