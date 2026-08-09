@@ -428,17 +428,23 @@ where
     }
 
     let (encoding, encoded) = if bytes.starts_with(&[0xFF, 0xFE]) {
-        (&UTF_16LE, &bytes[2..])
+        (UTF_16LE, &bytes[2..])
     } else if bytes.starts_with(&[0xFE, 0xFF]) {
-        (&UTF_16BE, &bytes[2..])
+        (UTF_16BE, &bytes[2..])
     } else {
-        (&GB18030, bytes)
+        (GB18030, bytes)
     };
-    let mut decoder = encoding.new_decoder();
+    let mut decoder = encoding.new_decoder_without_bom_handling();
+    const CHUNK_SIZE: usize = 64 * 1024;
+    let chunk_count = encoded.chunks(CHUNK_SIZE).len();
 
-    for (index, chunk) in encoded.chunks(64 * 1024).enumerate() {
-        let last = index + 1 == encoded.chunks(64 * 1024).len();
-        let mut decoded = String::new();
+    for (index, chunk) in encoded.chunks(CHUNK_SIZE).enumerate() {
+        let last = index + 1 == chunk_count;
+        let capacity = decoder
+            .max_utf8_buffer_length(chunk.len())
+            .ok_or(ImportError::TextDecode)?
+            .max(4);
+        let mut decoded = String::with_capacity(capacity);
         let (_, _, had_errors) = decoder.decode_to_string(chunk, &mut decoded, last);
         if had_errors {
             return Err(ImportError::TextDecode);
@@ -461,13 +467,12 @@ fn consume_normalized_txt_chunk<F>(
 {
     for character in chunk.chars() {
         if *pending_cr {
-            if character == '\n' {
-                *pending_cr = false;
-                continue;
-            }
             callback(line);
             line.clear();
             *pending_cr = false;
+            if character == '\n' {
+                continue;
+            }
         }
 
         if character == '\r' {
