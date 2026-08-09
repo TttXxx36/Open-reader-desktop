@@ -558,7 +558,8 @@ impl Database {
             "DELETE FROM source_rule_metrics WHERE source_id = ?1",
             params![source_id],
         )?;
-        let changed = connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
+        let changed =
+            connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
         if changed == 0 {
             return Err(DbError::NotFound);
         }
@@ -809,7 +810,6 @@ impl Database {
             by_stage,
         })
     }
-
 
     pub fn record_source_rule_outcome(
         &self,
@@ -1311,7 +1311,6 @@ fn record_source_cache_hit_locked(
 }
 
 fn bounded_history_text(value: &str, max_chars: usize) -> String {
-
     value.chars().take(max_chars).collect()
 }
 
@@ -1742,20 +1741,10 @@ mod tests {
         ));
         let database = Database::open(&directory).expect("database should open");
         database
-            .record_source_rule_outcome(
-                "source-a",
-                "search",
-                "item",
-                SourceRuleOutcome::Success,
-            )
+            .record_source_rule_outcome("source-a", "search", "item", SourceRuleOutcome::Success)
             .expect("success should record");
         database
-            .record_source_rule_outcome(
-                "source-a",
-                "search",
-                "item",
-                SourceRuleOutcome::NoMatch,
-            )
+            .record_source_rule_outcome("source-a", "search", "item", SourceRuleOutcome::NoMatch)
             .expect("no-match should record");
         database
             .record_source_rule_outcome(
