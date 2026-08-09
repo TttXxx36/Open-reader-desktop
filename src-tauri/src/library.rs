@@ -1717,6 +1717,76 @@ fn decode_entity(entity: &str) -> Option<char> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    fn peak_rss_bytes() -> Option<u64> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        status.lines().find_map(|line| {
+            let value = line.strip_prefix("VmHWM:")?.split_whitespace().next()?;
+            value.parse::<u64>().ok().map(|kilobytes| kilobytes.saturating_mul(1024))
+        })
+    }
+
+    #[cfg(target_os = "windows")]
+    #[allow(non_snake_case)]
+    #[repr(C)]
+    struct ProcessMemoryCounters {
+        cb: u32,
+        PageFaultCount: u32,
+        PeakWorkingSetSize: usize,
+        WorkingSetSize: usize,
+        QuotaPeakPagedPoolUsage: usize,
+        QuotaPagedPoolUsage: usize,
+        QuotaPeakNonPagedPoolUsage: usize,
+        QuotaNonPagedPoolUsage: usize,
+        PagefileUsage: usize,
+        PeakPagefileUsage: usize,
+    }
+
+    #[cfg(target_os = "windows")]
+    #[link(name = "psapi")]
+    unsafe extern "system" {
+        fn GetProcessMemoryInfo(
+            process: *mut std::ffi::c_void,
+            counters: *mut ProcessMemoryCounters,
+            size: u32,
+        ) -> i32;
+    }
+
+    #[cfg(target_os = "windows")]
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+    }
+
+    #[cfg(target_os = "windows")]
+    fn peak_rss_bytes() -> Option<u64> {
+        let mut counters = ProcessMemoryCounters {
+            cb: std::mem::size_of::<ProcessMemoryCounters>() as u32,
+            PageFaultCount: 0,
+            PeakWorkingSetSize: 0,
+            WorkingSetSize: 0,
+            QuotaPeakPagedPoolUsage: 0,
+            QuotaPagedPoolUsage: 0,
+            QuotaPeakNonPagedPoolUsage: 0,
+            QuotaNonPagedPoolUsage: 0,
+            PagefileUsage: 0,
+            PeakPagefileUsage: 0,
+        };
+        let result = unsafe {
+            GetProcessMemoryInfo(
+                GetCurrentProcess(),
+                &mut counters,
+                counters.cb,
+            )
+        };
+        (result != 0).then_some(counters.PeakWorkingSetSize as u64)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    fn peak_rss_bytes() -> Option<u64> {
+        None
+    }
+
     #[test]
     fn rejects_unsafe_epub_entry_paths() {
         assert!(!is_safe_zip_entry_path("../META-INF/container.xml"));
@@ -1957,14 +2027,17 @@ mod tests {
                 .expect("size fixture should parse");
             let elapsed = started.elapsed();
             eprintln!(
-                "txt_perf size_bytes={} elapsed_ms={} chapters={} content_bytes={}",
+                "txt_perf size_bytes={} elapsed_ms={} peak_rss_bytes={:?} chapters={} content_bytes={}",
                 size,
                 elapsed.as_millis(),
+                peak_rss_bytes(),
                 book.chapters.len(),
                 book.chapters
                     .first()
                     .map_or(0, |chapter| chapter.content.len())
             );
+            #[cfg(target_os = "linux")]
+            assert!(peak_rss_bytes().is_some());
 
             assert_eq!(book.chapters.len(), 1);
             assert!(book.chapters[0].content.len() > size / 2);
