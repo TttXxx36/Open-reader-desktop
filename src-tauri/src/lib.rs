@@ -1407,6 +1407,7 @@ pub fn run() {
             import_sources_from_url,
             fetch_source_preview,
             search_sources,
+            retry_source_search,
             fetch_source_book,
             fetch_source_chapter,
             run_source_pipeline,
