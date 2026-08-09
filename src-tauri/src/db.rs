@@ -218,6 +218,7 @@ pub enum SourceRuleOutcome {
     Success,
     NoMatch,
     Failure,
+    Skipped,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -228,6 +229,7 @@ pub struct SourceRuleMetric {
     pub successes: usize,
     pub no_matches: usize,
     pub failures: usize,
+    pub skipped: usize,
     pub success_rate: f64,
     pub failure_rate: f64,
     pub observed: bool,
@@ -239,6 +241,7 @@ pub struct SourceRuleMetrics {
     pub total_successes: usize,
     pub total_no_matches: usize,
     pub total_failures: usize,
+    pub total_skipped: usize,
     pub success_rate: f64,
     pub failure_rate: f64,
     pub observed: bool,
@@ -819,20 +822,22 @@ impl Database {
         outcome: SourceRuleOutcome,
     ) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let (successes, no_matches, failures) = match outcome {
-            SourceRuleOutcome::Success => (1_i64, 0_i64, 0_i64),
-            SourceRuleOutcome::NoMatch => (0_i64, 1_i64, 0_i64),
-            SourceRuleOutcome::Failure => (0_i64, 0_i64, 1_i64),
+        let (successes, no_matches, failures, skipped) = match outcome {
+            SourceRuleOutcome::Success => (1_i64, 0_i64, 0_i64, 0_i64),
+            SourceRuleOutcome::NoMatch => (0_i64, 1_i64, 0_i64, 0_i64),
+            SourceRuleOutcome::Failure => (0_i64, 0_i64, 1_i64, 0_i64),
+            SourceRuleOutcome::Skipped => (0_i64, 0_i64, 0_i64, 1_i64),
         };
         connection.execute(
             "INSERT INTO source_rule_metrics
-                (source_id, stage, rule_key, attempts, successes, no_matches, failures)
-             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)
+                (source_id, stage, rule_key, attempts, successes, no_matches, failures, skipped)
+             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7)
              ON CONFLICT(source_id, stage, rule_key) DO UPDATE SET
                 attempts = attempts + 1,
                 successes = successes + excluded.successes,
                 no_matches = no_matches + excluded.no_matches,
                 failures = failures + excluded.failures,
+                skipped = skipped + excluded.skipped,
                 updated_at = CURRENT_TIMESTAMP",
             params![
                 bounded_history_text(source_id, 256),
@@ -841,6 +846,7 @@ impl Database {
                 successes,
                 no_matches,
                 failures,
+                skipped,
             ],
         )?;
         Ok(())
@@ -848,20 +854,30 @@ impl Database {
 
     pub fn source_rule_metrics(&self) -> Result<SourceRuleMetrics, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let (total_attempts, total_successes, total_no_matches, total_failures): (
-            i64,
-            i64,
-            i64,
-            i64,
-        ) = connection.query_row(
+        let (
+            total_attempts,
+            total_successes,
+            total_no_matches,
+            total_failures,
+            total_skipped,
+        ): (i64, i64, i64, i64, i64) = connection.query_row(
             "SELECT
                 COALESCE(SUM(attempts), 0),
                 COALESCE(SUM(successes), 0),
                 COALESCE(SUM(no_matches), 0),
-                COALESCE(SUM(failures), 0)
+                COALESCE(SUM(failures), 0),
+                COALESCE(SUM(skipped), 0)
              FROM source_rule_metrics",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )?;
 
         let mut statement = connection.prepare(
@@ -869,7 +885,8 @@ impl Database {
                     COALESCE(SUM(attempts), 0),
                     COALESCE(SUM(successes), 0),
                     COALESCE(SUM(no_matches), 0),
-                    COALESCE(SUM(failures), 0)
+                    COALESCE(SUM(failures), 0),
+                    COALESCE(SUM(skipped), 0)
              FROM source_rule_metrics
              GROUP BY stage, rule_key
              ORDER BY stage, rule_key",
@@ -880,6 +897,7 @@ impl Database {
                 let successes: i64 = row.get(3)?;
                 let no_matches: i64 = row.get(4)?;
                 let failures: i64 = row.get(5)?;
+                let skipped: i64 = row.get(6)?;
                 Ok(SourceRuleMetric {
                     stage: row.get(0)?,
                     rule_key: row.get(1)?,
@@ -887,6 +905,7 @@ impl Database {
                     successes: non_negative_usize(successes),
                     no_matches: non_negative_usize(no_matches),
                     failures: non_negative_usize(failures),
+                    skipped: non_negative_usize(skipped),
                     success_rate: ratio(successes, attempts),
                     failure_rate: ratio(failures, attempts),
                     observed: attempts > 0,
@@ -899,6 +918,7 @@ impl Database {
             total_successes: non_negative_usize(total_successes),
             total_no_matches: non_negative_usize(total_no_matches),
             total_failures: non_negative_usize(total_failures),
+            total_skipped: non_negative_usize(total_skipped),
             success_rate: ratio(total_successes, total_attempts),
             failure_rate: ratio(total_failures, total_attempts),
             observed: total_attempts > 0,
@@ -1166,6 +1186,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
         (
             11_i64,
             include_str!("../migrations/0011_source_rule_metrics.sql"),
+        ),
+        (
+            12_i64,
+            include_str!("../migrations/0012_source_rule_skipped.sql"),
         ),
     ] {
         let applied: Option<i64> = connection
@@ -1754,6 +1778,9 @@ mod tests {
                 SourceRuleOutcome::Failure,
             )
             .expect("failure should record");
+        database
+            .record_source_rule_outcome("source-a", "search", "item", SourceRuleOutcome::Skipped)
+            .expect("skipped should record");
 
         let metrics = database
             .source_rule_metrics()
@@ -1762,6 +1789,7 @@ mod tests {
         assert_eq!(metrics.total_successes, 1);
         assert_eq!(metrics.total_no_matches, 1);
         assert_eq!(metrics.total_failures, 1);
+        assert_eq!(metrics.total_skipped, 1);
         assert!(metrics.observed);
         assert!((metrics.success_rate - (1.0 / 3.0)).abs() < 0.001);
         assert!((metrics.failure_rate - (1.0 / 3.0)).abs() < 0.001);
@@ -1772,6 +1800,7 @@ mod tests {
         assert_eq!(metrics.by_rule[1].stage, "search");
         assert_eq!(metrics.by_rule[1].no_matches, 1);
         assert_eq!(metrics.by_rule[1].successes, 1);
+        assert_eq!(metrics.by_rule[1].skipped, 1);
 
         drop(database);
         let _ = fs::remove_dir_all(directory);
