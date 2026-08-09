@@ -304,9 +304,7 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
     })
 }
 
-fn validate_epub_archive<R: Read + Seek>(
-    archive: &mut ZipArchive<R>,
-) -> Result<(), ImportError> {
+fn validate_epub_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), ImportError> {
     if archive.len() > MAX_EPUB_ARCHIVE_ENTRIES {
         return Err(ImportError::InvalidEpub(format!(
             "EPUB 条目数量超过 {} 个上限",
