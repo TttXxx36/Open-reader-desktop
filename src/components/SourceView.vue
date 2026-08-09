@@ -7,7 +7,7 @@ const formatDebugVariables = (variables: Record<string, string> = {}) =>
   Object.entries(variables)
     .map(([key, value]) => `${key}=${value}`)
     .join(" · ");
-const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
+const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
 </script>
 
 <template>
@@ -275,7 +275,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
         </section>
       </div>
 
-      <section v-if="sourceAudit || sourceCacheStatus" class="source-audit-panel" aria-live="polite">
+      <section v-if="sourceAudit || sourceCacheStatus || sourceFailureHistory || sourceFailureHistoryBusy" class="source-audit-panel" aria-live="polite">
         <div class="source-section-heading">
           <div>
             <span class="eyebrow">SECURITY & CACHE</span>
@@ -291,6 +291,27 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
             <button class="source-link-button" type="button" :disabled="sourceCacheBusy" @click="refreshSourceCacheStatus">
               {{ sourceCacheBusy ? "刷新中…" : "刷新" }}
             </button>
+          </article>
+          <article v-if="sourceFailureHistory" class="source-audit-card source-audit-list">
+            <span class="eyebrow">FAILURE HISTORY</span>
+            <p>仅保存本机最近 64 条脱敏失败摘要，不上传关键词、正文或请求头。</p>
+            <p v-if="!sourceFailureHistory.length">没有失败历史。</p>
+            <div v-for="failure in sourceFailureHistory" :key="failure.id" class="source-audit-row">
+              <div>
+                <strong>{{ failure.source_name }}</strong>
+                <span>{{ failure.reason_code }}</span>
+              </div>
+              <p>{{ failure.stage }} · {{ failure.created_at }}</p>
+              <p>{{ failure.message }}</p>
+            </div>
+            <div class="source-meta-actions">
+              <button class="source-link-button" type="button" :disabled="sourceFailureHistoryBusy" @click="loadSourceFailureHistory">
+                {{ sourceFailureHistoryBusy ? "刷新中…" : "刷新" }}
+              </button>
+              <button class="source-link-button danger" type="button" :disabled="sourceFailureHistoryBusy || !sourceFailureHistory.length" @click="clearSourceFailureHistory">
+                清空
+              </button>
+            </div>
           </article>
           <article v-if="sourceAudit" class="source-audit-card source-audit-list">
             <span class="eyebrow">SOURCE SECURITY</span>
