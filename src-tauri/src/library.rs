@@ -212,7 +212,7 @@ fn detect_text_encoding(bytes: &[u8]) -> &'static str {
         return "UTF-16BE";
     }
     if bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).is_some()
-        || String::from_utf8(bytes.to_vec()).is_ok()
+        || std::str::from_utf8(bytes).is_ok()
     {
         "UTF-8"
     } else {
@@ -229,7 +229,7 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
     }
 
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
+    if let Ok(text) = std::str::from_utf8(bytes) {
         return Ok(text.trim_start_matches('\u{feff}').to_string());
     }
 
@@ -241,11 +241,6 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
 }
 
 fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, ImportError> {
-    let mut normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    if options.normalize_full_width_space {
-        normalized = normalized.replace('\u{3000}', " ");
-    }
-
     if options.replacements.len() > MAX_TXT_REPLACEMENTS {
         return Err(ImportError::InvalidTxtOptions(format!(
             "替换规则不能超过 {} 条",
@@ -271,6 +266,24 @@ fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, I
                 MAX_TXT_REPLACEMENT_TO_BYTES
             )));
         }
+    }
+
+    let mut normalized = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\r' {
+            if characters.peek().is_some_and(|next| *next == '\n') {
+                characters.next();
+            }
+            normalized.push('\n');
+        } else if options.normalize_full_width_space && character == '\u{3000}' {
+            normalized.push(' ');
+        } else {
+            normalized.push(character);
+        }
+    }
+
+    for replacement in &options.replacements {
         normalized = normalized.replace(&replacement.from, &replacement.to);
     }
 
@@ -1692,6 +1705,18 @@ mod tests {
         assert_eq!(book.chapters.len(), 2);
         assert_eq!(book.chapters[0].content, " 新词");
         assert_eq!(book.chapters[1].content, "新词");
+    }
+
+    #[test]
+    fn normalizes_mixed_line_endings_in_one_pass() {
+        let book = parse_book_bytes(
+            "mixed-newlines.txt",
+            "第一章\r\n首行\r第二行\n\n第二章\n正文".as_bytes(),
+        )
+        .expect("mixed line endings should parse");
+
+        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters[0].content, "首行\n第二行");
     }
 
     #[test]
