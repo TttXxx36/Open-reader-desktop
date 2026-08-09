@@ -46,3 +46,18 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: TXT performance evidence
+        if: success()
+        shell: bash
+        run: |
+          set -o pipefail
+          /usr/bin/time -v cargo test --manifest-path src-tauri/Cargo.toml records_txt_size_matrix_baseline -- --exact --nocapture 2>txt-performance-time.log | tee txt-performance-output.log
+          cat txt-performance-time.log
+      - name: Upload TXT performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: txt-performance-\${{ github.sha }}
+          path: |
+            txt-performance-output.log
+            txt-performance-time.log
