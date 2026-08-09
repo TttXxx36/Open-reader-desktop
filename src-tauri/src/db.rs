@@ -834,7 +834,7 @@ impl Database {
                 (source_id, stage, rule_key, attempts, successes, no_matches, failures, skipped)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(source_id, stage, rule_key) DO UPDATE SET
-                attempts = attempts + 1,
+                attempts = attempts + excluded.attempts,
                 successes = successes + excluded.successes,
                 no_matches = no_matches + excluded.no_matches,
                 failures = failures + excluded.failures,
