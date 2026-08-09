@@ -199,6 +199,26 @@ interface SourceFailureStats {
   by_stage: Array<{ code: string; count: number }>;
 }
 
+interface SourceRequestMetric {
+  stage: string;
+  attempts: number;
+  successes: number;
+  failures: number;
+  cache_hits: number;
+  failure_rate: number;
+  cache_hit_rate: number;
+}
+
+interface SourceRequestMetrics {
+  total_attempts: number;
+  total_successes: number;
+  total_failures: number;
+  total_cache_hits: number;
+  failure_rate: number;
+  cache_hit_rate: number;
+  by_stage: SourceRequestMetric[];
+}
+
 interface SourceMetrics {
   total_sources: number;
   enabled_sources: number;
@@ -208,6 +228,7 @@ interface SourceMetrics {
   failure_events: number;
   cache_entries: number;
   cache_bytes: number;
+  request_metrics: SourceRequestMetrics | null;
 }
 
 interface SourceDebugStep {
@@ -454,6 +475,7 @@ const sourceCacheStatus = ref<SourceCacheStatus | null>(null);
 const sourceFailureHistory = ref<SourceFailureHistory[] | null>(null);
 const sourceFailureHistoryBusy = ref(false);
 const sourceFailureStats = ref<SourceFailureStats | null>(null);
+const sourceRequestMetrics = ref<SourceRequestMetrics | null>(null);
 const sourceMetrics = computed<SourceMetrics>(() => {
   const audits = sourceAudit.value ?? [];
   return {
@@ -465,6 +487,7 @@ const sourceMetrics = computed<SourceMetrics>(() => {
     failure_events: sourceFailureStats.value?.total ?? 0,
     cache_entries: sourceCacheStatus.value?.entries ?? 0,
     cache_bytes: sourceCacheStatus.value?.bytes ?? 0,
+    request_metrics: sourceRequestMetrics.value,
   };
 });
 const remoteBusy = ref(false);
@@ -727,7 +750,7 @@ async function loadBooks() {
 async function openSources() {
   view.value = "sources";
   errorMessage.value = "";
-  await Promise.all([loadSources(), loadSourceSnapshots(), refreshSourceCacheStatus(), loadSourceFailureHistory(), loadSourceFailureStats()]);
+  await Promise.all([loadSources(), loadSourceSnapshots(), refreshSourceCacheStatus(), loadSourceFailureHistory(), loadSourceFailureStats(), loadSourceRequestMetrics()]);
 }
 
 function openSettings() {
@@ -784,6 +807,14 @@ async function loadSourceFailureHistory() {
   }
 }
 
+async function loadSourceRequestMetrics() {
+  try {
+    sourceRequestMetrics.value = await invoke<SourceRequestMetrics>("get_source_request_metrics");
+  } catch (error) {
+    errorMessage.value = String(error);
+  }
+}
+
 async function loadSourceFailureStats() {
   try {
     sourceFailureStats.value = await invoke<SourceFailureStats>("get_source_failure_stats");
@@ -834,6 +865,11 @@ function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+}
+
+function formatPercent(value: number) {
+  const normalized = Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+  return `${Math.round(normalized * 100)}%`;
 }
 
 function selectSource(source: SourceSummary) {
@@ -1923,7 +1959,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceRequestMetrics, sourceMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, loadSourceRequestMetrics, formatBytes, formatPercent, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
