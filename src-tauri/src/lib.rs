@@ -1078,7 +1078,14 @@ async fn fetch_source_book(
     let detail: SourceBookDetail = match fetch_result {
         Ok(detail) => detail,
         Err(message) => {
-            record_source_failure(&database, &summary.id, &summary.name, "book", &message);
+            record_source_failure(
+                &database,
+                &summary.id,
+                &summary.name,
+                "book",
+                Some(&operation_id),
+                &message,
+            );
             if message == "书源请求已取消" {
                 return Err(message);
             }
@@ -1193,7 +1200,14 @@ async fn fetch_source_chapter(
             result
         }
         Err(message) => {
-            record_source_failure(&database, &summary.id, &summary.name, "chapter", &message);
+            record_source_failure(
+                &database,
+                &summary.id,
+                &summary.name,
+                "chapter",
+                Some(&operation_id),
+                &message,
+            );
             if message == "书源请求已取消" {
                 return Err(message);
             }
@@ -1253,6 +1267,7 @@ fn record_source_failure(
     source_id: &str,
     source_name: &str,
     stage: &str,
+    operation_id: Option<&str>,
     message: &str,
 ) {
     if message == "书源请求已取消" {
@@ -1263,19 +1278,25 @@ fn record_source_failure(
         source_name,
         stage,
         classify_source_failure(message),
+        operation_id,
         message,
     ) {
         eprintln!("unable to record source failure history: {error}");
     }
 }
 
-fn record_source_failures(database: &Database, failures: &[SourceSearchFailure]) {
+fn record_source_failures(
+    database: &Database,
+    failures: &[SourceSearchFailure],
+    operation_id: Option<&str>,
+) {
     for failure in failures {
         record_source_failure(
             database,
             &failure.source_id,
             &failure.source_name,
             "search",
+            operation_id,
             &failure.message,
         );
     }
@@ -1362,7 +1383,7 @@ async fn search_sources(
     let mut result = search_result?;
     result.enabled_sources = enabled_sources;
     result.failures.splice(0..0, failures);
-    record_source_failures(&database, &result.failures);
+    record_source_failures(&database, &result.failures, Some(&operation_id));
     Ok(result)
 }
 
@@ -1415,7 +1436,7 @@ async fn retry_source_search(
     cancellation.remove(&operation_id);
     let mut result = search_result?;
     result.enabled_sources = 1;
-    record_source_failures(&database, &result.failures);
+    record_source_failures(&database, &result.failures, Some(&operation_id));
     Ok(result)
 }
 
