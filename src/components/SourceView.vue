@@ -93,7 +93,8 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
                   不执行 · {{ rule.context }}：{{ rule.value }}（{{ rule.reason }}）
                   <small>
                     离线结构：{{ rule.offline_accepted ? "受限语法可解析" : "静态解析拒绝" }} ·
-                    {{ rule.offline_steps }} 步 · {{ rule.offline_estimated_work }} work
+                    {{ rule.offline_steps }} 步 · {{ rule.offline_estimated_work }} work ·
+                    {{ rule.offline_elapsed_us }} μs
                   </small>
                 </span>
               </div>
