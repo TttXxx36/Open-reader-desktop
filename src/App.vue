@@ -78,12 +78,14 @@ interface ContentSpan {
 interface ContentLink {
   label: string;
   href: string;
+  targetChapter?: number | null;
 }
 
 interface ContentBlock {
   kind: ContentBlockKind;
   level?: number | null;
   anchor?: string | null;
+  style?: string | null;
   spans: ContentSpan[];
   alt?: string | null;
   src?: string | null;
@@ -651,6 +653,33 @@ watch(nextPagePolicy, (value) => {
   }
 }, { deep: true });
 
+function parseSafeContentStyle(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim() || value.length > 512) return null;
+
+  const declarations: string[] = [];
+  for (const rawDeclaration of value.split(";").slice(0, 8)) {
+    const separator = rawDeclaration.indexOf(":");
+    if (separator <= 0) continue;
+    const property = rawDeclaration.slice(0, separator).trim().toLowerCase();
+    const cssValue = rawDeclaration.slice(separator + 1).trim().toLowerCase();
+    if (!cssValue || cssValue.length > 64 || /[{}<>"']/.test(cssValue)) continue;
+
+    const allowed = property === "text-align"
+      ? ["left", "right", "center", "justify"].includes(cssValue)
+      : property === "font-style"
+        ? ["normal", "italic", "oblique"].includes(cssValue)
+        : property === "font-weight"
+          ? ["normal", "bold", "bolder", "lighter"].includes(cssValue) || /^[1-9]\d{2}$/.test(cssValue)
+          : property === "text-decoration"
+            ? ["none", "underline", "line-through"].includes(cssValue)
+            : false;
+    if (allowed && declarations.length < 4) {
+      declarations.push(property + ": " + cssValue);
+    }
+  }
+  return declarations.length ? declarations.join("; ") : null;
+}
+
 function parseContentBlocks(value: ChapterContent | null): ContentBlock[] {
   if (!value || value.content_format !== "blocks-v1") return [];
 
@@ -686,6 +715,7 @@ function parseContentBlocks(value: ChapterContent | null): ContentBlock[] {
         kind,
         level: typeof record.level === "number" ? record.level : null,
         anchor: typeof record.anchor === "string" ? record.anchor : null,
+        style: parseSafeContentStyle(record.style),
         spans,
         alt: typeof record.alt === "string" ? record.alt : null,
         src: typeof record.src === "string" && /^data:image\/(png|jpeg|gif|webp|bmp);base64,/i.test(record.src)
@@ -728,7 +758,13 @@ function parseContentLinks(value: ChapterContent | null): ContentLink[] {
         return [];
       }
 
-      return [{ label: record.label.trim(), href }];
+      const targetChapter = typeof record.target_chapter === "number"
+        && Number.isSafeInteger(record.target_chapter)
+        && record.target_chapter >= 0
+        && record.target_chapter < 100000
+        ? record.target_chapter
+        : null;
+      return [{ label: record.label.trim(), href, targetChapter }];
     });
   } catch {
     return [];
@@ -741,6 +777,35 @@ function scrollToFragment(href: string) {
   }
   const target = document.getElementById(href.slice(1));
   target?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function fragmentFromHref(href: string): string {
+  const hashIndex = href.indexOf("#");
+  if (hashIndex < 0) return "";
+  const fragment = href.slice(hashIndex);
+  if (!fragment || fragment.length > 129 || /[\s"'<>/]/.test(fragment.slice(1))) {
+    return "";
+  }
+  return fragment;
+}
+
+async function openContentLink(targetChapter: number | null | undefined, href: string) {
+  if (!detail.value || !Number.isSafeInteger(targetChapter) || (targetChapter ?? -1) < 0) {
+    return;
+  }
+  const chapterItem = detail.value.chapters[targetChapter as number];
+  if (!chapterItem) return;
+
+  const fragment = fragmentFromHref(href);
+  if (chapterItem.id === chapter.value?.id) {
+    if (fragment) scrollToFragment(fragment);
+    return;
+  }
+
+  await loadChapter(chapterItem.id);
+  if (fragment) {
+    window.setTimeout(() => scrollToFragment(fragment), 0);
+  }
 }
 
 function contentBlockTag(block: ContentBlock): string {
@@ -2183,7 +2248,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceRequestMetrics, sourceRuleMetrics, sourceMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, chapterLinks, scrollToFragment, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, loadSourceRequestMetrics, loadSourceRuleMetrics, formatBytes, formatPercent, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceRequestMetrics, sourceRuleMetrics, sourceMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, chapterLinks, scrollToFragment, openContentLink, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, loadSourceRequestMetrics, loadSourceRuleMetrics, formatBytes, formatPercent, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
