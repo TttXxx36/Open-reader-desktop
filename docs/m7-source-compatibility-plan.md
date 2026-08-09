@@ -187,10 +187,11 @@ M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组
 
 - 失败原因码已细化为 `timeout`、`cancelled`、`rate_limit`、`auth`、`http_status`、`body_limit`、`parse`、`config`、`network`、`request`，并用回归夹具锁定有限集合；SQLite 0008 → 0009 升级夹具确认旧数据库可继续读写 `operation_id`；GitHub Actions run [31314339077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31314339077) 已通过前端检查、Rust fmt/check 和 73 个 Rust 测试。
 
-### M7.5g 报告版本兼容与后续指标（已完成首个设计切片）
+### M7.5g 报告版本兼容与后续指标（已完成首个实现切片）
 
 - 新增 [本地书源失败报告格式](source-failure-report-schema.md)，固定 `schema_version: 1`、字段语义、旧记录 `operation_id = null` 的迁移规则、未知字段处理和隐私边界。
-- 导入 diff、配置版本迁移、冲突提示、可回滚快照，以及启用源/失败率/缓存命中/规则兼容性指标继续扩展；保持本地导出，不建立远程遥测。
+- 书源安全面板与诊断/失败报告增加 `source_metrics`：总/启用书源、审计通过/关注数、失败记录数和缓存条目/字节数；这些是本地观测摘要，不冒充网络成功率。GitHub Actions run [31315176863](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31315176863) 已通过前端检查、Rust fmt/check 和 73 个 Rust 测试。
+- 真实请求分母、缓存命中次数和规则执行成功率仍需单独定义采集边界；保持本地导出，不建立远程遥测。
 
 ## GitHub 执行方式
 
