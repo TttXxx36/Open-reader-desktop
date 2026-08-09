@@ -191,6 +191,28 @@ pub struct SourceFailureStats {
     pub by_stage: Vec<SourceFailureCount>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceRequestMetric {
+    pub stage: String,
+    pub attempts: usize,
+    pub successes: usize,
+    pub failures: usize,
+    pub cache_hits: usize,
+    pub failure_rate: f64,
+    pub cache_hit_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceRequestMetrics {
+    pub total_attempts: usize,
+    pub total_successes: usize,
+    pub total_failures: usize,
+    pub total_cache_hits: usize,
+    pub failure_rate: f64,
+    pub cache_hit_rate: f64,
+    pub by_stage: Vec<SourceRequestMetric>,
+}
+
 impl Database {
     pub fn open(app_data_dir: &Path) -> Result<Self, DbError> {
         fs::create_dir_all(app_data_dir)?;
@@ -352,7 +374,11 @@ impl Database {
         let transaction = connection.transaction()?;
 
         if replace_all {
-            transaction.execute_batch("DELETE FROM source_cache; DELETE FROM book_sources;")?;
+            transaction.execute_batch(
+                "DELETE FROM source_cache;
+                 DELETE FROM source_request_metrics;
+                 DELETE FROM book_sources;",
+            )?;
         }
 
         for write in writes {
@@ -492,7 +518,11 @@ impl Database {
     pub fn delete_source(&self, source_id: &str) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let changed =
-            connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
+            connection.execute(
+            "DELETE FROM source_request_metrics WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
         if changed == 0 {
             return Err(DbError::NotFound);
         }
@@ -504,13 +534,23 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let payload = connection
             .query_row(
-                "SELECT payload
+                "SELECT payload, source_id, kind
                  FROM source_cache
                  WHERE cache_key = ?1 AND expires_at > ?2",
                 params![cache_key, now],
-                |row| row.get(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
             )
             .optional()?;
+
+        if let Some((_, source_id, kind)) = payload.as_ref() {
+            record_source_cache_hit_locked(&connection, source_id, kind)?;
+        }
 
         if payload.is_none() {
             connection.execute(
@@ -520,7 +560,7 @@ impl Database {
             )?;
         }
 
-        Ok(payload)
+        Ok(payload.map(|(payload, _, _)| payload))
     }
 
     pub fn get_source_cache_any(&self, cache_key: &str) -> Result<Option<String>, DbError> {
@@ -634,6 +674,96 @@ impl Database {
             bytes: usize::try_from(bytes.max(0)).unwrap_or(usize::MAX),
             expired_entries: usize::try_from(expired_entries.max(0)).unwrap_or(usize::MAX),
             oldest_fetched_at,
+        })
+    }
+
+    pub fn record_source_request_outcome(
+        &self,
+        source_id: &str,
+        stage: &str,
+        success: bool,
+    ) -> Result<(), DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let successes = i64::from(success);
+        let failures = i64::from(!success);
+        connection.execute(
+            "INSERT INTO source_request_metrics
+                (source_id, stage, attempts, successes, failures, cache_hits)
+             VALUES (?1, ?2, 1, ?3, ?4, 0)
+             ON CONFLICT(source_id, stage) DO UPDATE SET
+                attempts = attempts + 1,
+                successes = successes + excluded.successes,
+                failures = failures + excluded.failures,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                bounded_history_text(source_id, 256),
+                bounded_history_text(stage, 128),
+                successes,
+                failures,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_source_cache_hit(&self, source_id: &str, stage: &str) -> Result<(), DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        record_source_cache_hit_locked(
+            &connection,
+            &bounded_history_text(source_id, 256),
+            &bounded_history_text(stage, 128),
+        )?;
+        Ok(())
+    }
+
+    pub fn source_request_metrics(&self) -> Result<SourceRequestMetrics, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let (total_attempts, total_successes, total_failures, total_cache_hits): (i64, i64, i64, i64) =
+            connection.query_row(
+                "SELECT
+                    COALESCE(SUM(attempts), 0),
+                    COALESCE(SUM(successes), 0),
+                    COALESCE(SUM(failures), 0),
+                    COALESCE(SUM(cache_hits), 0)
+                 FROM source_request_metrics",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        let mut statement = connection.prepare(
+            "SELECT stage,
+                    COALESCE(SUM(attempts), 0),
+                    COALESCE(SUM(successes), 0),
+                    COALESCE(SUM(failures), 0),
+                    COALESCE(SUM(cache_hits), 0)
+             FROM source_request_metrics
+             GROUP BY stage
+             ORDER BY stage",
+        )?;
+        let by_stage = statement
+            .query_map([], |row| {
+                let attempts: i64 = row.get(1)?;
+                let successes: i64 = row.get(2)?;
+                let failures: i64 = row.get(3)?;
+                let cache_hits: i64 = row.get(4)?;
+                Ok(SourceRequestMetric {
+                    stage: row.get(0)?,
+                    attempts: non_negative_usize(attempts),
+                    successes: non_negative_usize(successes),
+                    failures: non_negative_usize(failures),
+                    cache_hits: non_negative_usize(cache_hits),
+                    failure_rate: ratio(failures, attempts),
+                    cache_hit_rate: ratio(cache_hits, attempts.saturating_add(cache_hits)),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(SourceRequestMetrics {
+            total_attempts: non_negative_usize(total_attempts),
+            total_successes: non_negative_usize(total_successes),
+            total_failures: non_negative_usize(total_failures),
+            total_cache_hits: non_negative_usize(total_cache_hits),
+            failure_rate: ratio(total_failures, total_attempts),
+            cache_hit_rate: ratio(total_cache_hits, total_attempts.saturating_add(total_cache_hits)),
+            by_stage,
         })
     }
 
@@ -890,6 +1020,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             9_i64,
             include_str!("../migrations/0009_source_failure_operation.sql"),
         ),
+        (
+            10_i64,
+            include_str!("../migrations/0010_source_request_metrics.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -1017,8 +1151,36 @@ fn generated_id(prefix: &str) -> String {
     )
 }
 
+fn record_source_cache_hit_locked(
+    connection: &Connection,
+    source_id: &str,
+    stage: &str,
+) -> rusqlite::Result<usize> {
+    connection.execute(
+        "INSERT INTO source_request_metrics
+            (source_id, stage, attempts, successes, failures, cache_hits)
+         VALUES (?1, ?2, 0, 0, 0, 1)
+         ON CONFLICT(source_id, stage) DO UPDATE SET
+            cache_hits = cache_hits + 1,
+            updated_at = CURRENT_TIMESTAMP",
+        params![source_id, stage],
+    )
+}
+
 fn bounded_history_text(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
+}
+
+fn non_negative_usize(value: i64) -> usize {
+    usize::try_from(value.max(0)).unwrap_or(usize::MAX)
+}
+
+fn ratio(numerator: i64, denominator: i64) -> f64 {
+    if denominator <= 0 {
+        0.0
+    } else {
+        (numerator.max(0) as f64 / denominator as f64).clamp(0.0, 1.0)
+    }
 }
 
 fn source_failure_history_from_row(row: &Row<'_>) -> rusqlite::Result<SourceFailureHistory> {
@@ -1382,6 +1544,45 @@ mod tests {
             entries[0].operation_id.as_deref(),
             Some("operation-upgraded")
         );
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn aggregates_source_request_metrics() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-source-request-metrics-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        database
+            .record_source_request_outcome("source-a", "search", true)
+            .expect("success should record");
+        database
+            .record_source_request_outcome("source-a", "search", false)
+            .expect("failure should record");
+        database
+            .record_source_cache_hit("source-a", "book")
+            .expect("cache hit should record");
+
+        let metrics = database
+            .source_request_metrics()
+            .expect("request metrics should read");
+        assert_eq!(metrics.total_attempts, 2);
+        assert_eq!(metrics.total_successes, 1);
+        assert_eq!(metrics.total_failures, 1);
+        assert_eq!(metrics.total_cache_hits, 1);
+        assert!((metrics.failure_rate - 0.5).abs() < 0.001);
+        assert!((metrics.cache_hit_rate - (1.0 / 3.0)).abs() < 0.001);
+        assert_eq!(metrics.by_stage.len(), 2);
+        assert_eq!(metrics.by_stage[0].stage, "book");
+        assert_eq!(metrics.by_stage[0].cache_hits, 1);
+        assert_eq!(metrics.by_stage[1].stage, "search");
+        assert_eq!(metrics.by_stage[1].attempts, 2);
+
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
