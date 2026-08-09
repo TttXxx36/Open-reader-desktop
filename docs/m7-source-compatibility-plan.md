@@ -191,7 +191,12 @@ M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组
 
 - 新增 [本地书源失败报告格式](source-failure-report-schema.md)，固定 `schema_version: 1`、字段语义、旧记录 `operation_id = null` 的迁移规则、未知字段处理和隐私边界。
 - 书源安全面板与诊断/失败报告增加 `source_metrics`：总/启用书源、审计通过/关注数、失败记录数、缓存占用，以及 SQLite 0010 聚合的网络请求成功/失败/缓存命中次数和明确分母的比例；取消请求和 stale 回退不计入成功/失败/命中。GitHub Actions run [31318523294](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31318523294) 已通过前端检查、Rust fmt/check 和 74 个 Rust 测试。
-- 规则执行成功率仍需单独定义采集边界；保持本地导出，不建立远程遥测。
+
+### M7.5i 规则执行指标边界设计（设计已完成，代码待实现）
+
+- 新增 [书源规则执行指标边界](source-rule-metrics.md)，把网络请求指标与响应体规则解析指标分开，固定 `search`、`book_info`、`toc`、`content` 四个阶段的评估单位、成功判定、`no_match`/`failure`/`skipped` 状态和分母公式。
+- 设计明确 URL 回退链、分页/next URL、缓存命中、stale 回退、取消/策略拒绝和未配置规则的排除边界；聚合键只使用 source_id、阶段和固定 rule_key，不记录规则原文、关键词、正文、请求头或完整 URL。
+- 已列出 8 类授权合成夹具与迁移/回滚验收；下一小步实现 SQLite 0011、纯分类函数和报告/UI 可选字段，继续保持本地-only、无远程遥测。
 
 ## GitHub 执行方式
 
