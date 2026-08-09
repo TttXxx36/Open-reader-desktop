@@ -314,6 +314,7 @@ pub enum SourceRuleEvaluationStatus {
     Success,
     NoMatch,
     Failure,
+    Skipped,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -348,6 +349,135 @@ pub fn rule_evaluation_for_output(
             SourceRuleEvaluationStatus::NoMatch
         },
     }
+}
+
+fn rule_evaluation_for_rule(
+    stage: &str,
+    rule_key: &str,
+    configured: bool,
+    has_output: bool,
+) -> SourceRuleEvaluation {
+    if !configured {
+        return SourceRuleEvaluation {
+            stage: stage.to_string(),
+            rule_key: rule_key.to_string(),
+            status: SourceRuleEvaluationStatus::Skipped,
+        };
+    }
+    rule_evaluation_for_output(stage, rule_key, has_output)
+}
+
+fn search_rule_evaluations(
+    source: &BookSource,
+    results: &[SearchResult],
+) -> Vec<SourceRuleEvaluation> {
+    let rules = source.search.as_ref();
+    vec![
+        rule_evaluation_for_rule("search", "item", rules.is_some(), !results.is_empty()),
+        rule_evaluation_for_rule(
+            "search",
+            "title",
+            rules.and_then(|value| value.title.as_ref()).is_some(),
+            results.iter().any(|item| !item.title.trim().is_empty()),
+        ),
+        rule_evaluation_for_rule(
+            "search",
+            "author",
+            rules.and_then(|value| value.author.as_ref()).is_some(),
+            results
+                .iter()
+                .any(|item| item.author.as_deref().is_some_and(|value| !value.trim().is_empty())),
+        ),
+        rule_evaluation_for_rule(
+            "search",
+            "url",
+            rules.and_then(|value| value.url.as_ref()).is_some(),
+            results.iter().any(|item| item.book_url.is_some()),
+        ),
+    ]
+}
+
+fn book_rule_evaluations(source: &BookSource, book_info: &BookInfo) -> Vec<SourceRuleEvaluation> {
+    let rules = source.book_info.as_ref();
+    vec![
+        rule_evaluation_for_rule(
+            "book_info",
+            "title",
+            rules.and_then(|value| value.title.as_ref()).is_some(),
+            book_info.title.trim() != "未命名书籍" && !book_info.title.trim().is_empty(),
+        ),
+        rule_evaluation_for_rule(
+            "book_info",
+            "author",
+            rules.and_then(|value| value.author.as_ref()).is_some(),
+            book_info
+                .author
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+        ),
+        rule_evaluation_for_rule(
+            "book_info",
+            "intro",
+            rules.and_then(|value| value.intro.as_ref()).is_some(),
+            book_info
+                .intro
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+        ),
+        rule_evaluation_for_rule(
+            "book_info",
+            "cover",
+            rules.and_then(|value| value.url.as_ref()).is_some(),
+            book_info
+                .cover_url
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+        ),
+    ]
+}
+
+fn toc_rule_evaluations(
+    source: &BookSource,
+    chapters: &[SourceChapter],
+) -> Vec<SourceRuleEvaluation> {
+    let rules = source.toc.as_ref();
+    vec![
+        rule_evaluation_for_rule("toc", "item", rules.is_some(), !chapters.is_empty()),
+        rule_evaluation_for_rule(
+            "toc",
+            "title",
+            rules.and_then(|value| value.title.as_ref()).is_some(),
+            chapters.iter().any(|chapter| !chapter.title.trim().is_empty()),
+        ),
+        rule_evaluation_for_rule(
+            "toc",
+            "url",
+            rules.and_then(|value| value.url.as_ref()).is_some(),
+            chapters.iter().any(|chapter| !chapter.url.trim().is_empty()),
+        ),
+    ]
+}
+
+fn content_rule_evaluations(
+    source: &BookSource,
+    content: &str,
+    next_url: Option<&str>,
+) -> Vec<SourceRuleEvaluation> {
+    let rules = source.content.as_ref();
+    vec![
+        rule_evaluation_for_rule(
+            "content",
+            "content",
+            rules.and_then(|value| value.content.as_ref()).is_some(),
+            !content.trim().is_empty(),
+        ),
+        rule_evaluation_for_rule(
+            "content",
+            "next",
+            rules.and_then(|value| value.next.as_ref()).is_some(),
+            next_url.is_some_and(|value| !value.trim().is_empty()),
+        ),
+    ]
 }
 
 pub fn rule_evaluation_from_error(
@@ -672,11 +802,7 @@ impl SourceEngine {
         for page in 1..=limit {
             pages_scanned += 1;
             let page_results = self.search_page(source, keyword, page).await?;
-            rule_evaluations.push(rule_evaluation_for_output(
-                "search",
-                "item",
-                !page_results.is_empty(),
-            ));
+            rule_evaluations.extend(search_rule_evaluations(source, &page_results));
             if page_results.is_empty() {
                 stop_reason = "empty_page";
                 break;
@@ -815,17 +941,9 @@ impl SourceEngine {
         let book_info = self
             .fetch_book_info(source, book_url, &mut debug_steps)
             .await?;
-        rule_evaluations.push(rule_evaluation_for_output(
-            "book_info",
-            "title",
-            book_info.title.trim() != "未命名书籍" && !book_info.title.trim().is_empty(),
-        ));
         let chapters = self.fetch_toc(source, book_url, &mut debug_steps).await?;
-        rule_evaluations.push(rule_evaluation_for_output(
-            "toc",
-            "item",
-            !chapters.is_empty(),
-        ));
+        rule_evaluations.extend(book_rule_evaluations(source, &book_info));
+        rule_evaluations.extend(toc_rule_evaluations(source, &chapters));
 
         Ok(SourceBookDetail {
             book_info,
@@ -1161,11 +1279,8 @@ impl SourceEngine {
             None
         };
         let content = apply_replace_rules(&content, &source.replace_rules)?;
-        let rule_evaluations = vec![rule_evaluation_for_output(
-            "content",
-            "content",
-            !content.trim().is_empty(),
-        )];
+        let rule_evaluations =
+            content_rule_evaluations(source, &content, next_url.as_deref());
 
         Ok(SourceChapterContent {
             title: chapter.title.clone(),
@@ -1277,10 +1392,10 @@ impl SourceEngine {
             };
 
             let page_content = apply_replace_rules(&page_content, &source.replace_rules)?;
-            rule_evaluations.push(rule_evaluation_for_output(
-                "content",
-                "content",
-                !page_content.trim().is_empty(),
+            rule_evaluations.extend(content_rule_evaluations(
+                source,
+                &page_content,
+                next_url.as_deref(),
             ));
             if !combined.is_empty() {
                 combined.push_str("\n\n");
