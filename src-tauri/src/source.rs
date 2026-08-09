@@ -900,12 +900,7 @@ impl SourceEngine {
             .await?;
 
         let mut rule_evaluations = Vec::new();
-        rule_evaluations.extend(
-            first_chapter_content
-                .rule_evaluations
-                .iter()
-                .cloned(),
-        );
+        rule_evaluations.extend(first_chapter_content.rule_evaluations.iter().cloned());
         Ok(SourcePipelineResult {
             search_results,
             book_info,
