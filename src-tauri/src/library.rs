@@ -1421,6 +1421,30 @@ mod tests {
     }
 
     #[test]
+    fn decodes_utf16_and_gb18030_txt() {
+        let input = "第一章\n内容";
+
+        let mut utf16le = vec![0xFF, 0xFE];
+        for unit in input.encode_utf16() {
+            utf16le.extend_from_slice(&unit.to_le_bytes());
+        }
+        let le_book = parse_book_bytes("le.txt", &utf16le).expect("UTF-16LE should parse");
+        assert_eq!(le_book.chapters[0].content, "内容");
+
+        let mut utf16be = vec![0xFE, 0xFF];
+        for unit in input.encode_utf16() {
+            utf16be.extend_from_slice(&unit.to_be_bytes());
+        }
+        let be_book = parse_book_bytes("be.txt", &utf16be).expect("UTF-16BE should parse");
+        assert_eq!(be_book.chapters[0].content, "内容");
+
+        let (gb18030, _, had_errors) = GB18030.encode(input);
+        assert!(!had_errors);
+        let gb_book = parse_book_bytes("gb.txt", gb18030.as_ref()).expect("GB18030 should parse");
+        assert_eq!(gb_book.chapters[0].content, "内容");
+    }
+
+    #[test]
     fn strips_utf8_bom_and_preserves_indentation() {
         let bytes = [
             vec![0xEF, 0xBB, 0xBF],
