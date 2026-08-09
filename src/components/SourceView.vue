@@ -306,7 +306,10 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
                 <strong>{{ failure.source_name }}</strong>
                 <span>{{ failure.reason_code }}</span>
               </div>
-              <p>{{ failure.stage }} · {{ failure.created_at }}</p>
+              <p>
+                {{ failure.stage }} · {{ failure.created_at }}
+                <span v-if="failure.operation_id"> · 任务 {{ failure.operation_id }}</span>
+              </p>
               <p>{{ failure.message }}</p>
             </div>
             <div class="source-meta-actions">
