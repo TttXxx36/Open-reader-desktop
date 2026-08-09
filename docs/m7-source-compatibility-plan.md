@@ -183,11 +183,14 @@ M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组
 - 书源页显示任务 ID，并可导出最近 64 条脱敏失败摘要、按原因/阶段统计和当前筛选范围；报告使用 `schema_version: 1`、256 KB 上限，不包含关键词、正文、Cookie、请求头或未脱敏 URL。
 - GitHub Actions run [31311905146](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31311905146) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 71 个 Rust 测试。
 
-### M7.5f 后续维护切片
+### M7.5f 原因分类与数据库升级（已完成首个切片）
 
-- 失败原因码已细化为 `timeout`、`cancelled`、`rate_limit`、`auth`、`http_status`、`body_limit`、`parse`、`config`、`network`、`request`，并用回归夹具锁定有限集合；SQLite 0008 → 0009 升级夹具确认旧数据库可继续读写 operation_id；GitHub Actions run [31314339077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31314339077) 已通过前端检查、Rust fmt/check 和 73 个 Rust 测试。报告 schema_version 迁移策略与后续兼容性指标仍待后续切片。
-- 导入 diff、配置版本迁移、冲突提示和可回滚快照继续覆盖旧数据库、重复来源 URL 和失败回滚。
-- 继续扩展启用源、失败率、缓存命中和规则兼容性指标，但保持本地导出，不建立远程遥测。
+- 失败原因码已细化为 `timeout`、`cancelled`、`rate_limit`、`auth`、`http_status`、`body_limit`、`parse`、`config`、`network`、`request`，并用回归夹具锁定有限集合；SQLite 0008 → 0009 升级夹具确认旧数据库可继续读写 `operation_id`；GitHub Actions run [31314339077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31314339077) 已通过前端检查、Rust fmt/check 和 73 个 Rust 测试。
+
+### M7.5g 报告版本兼容与后续指标（已完成首个设计切片）
+
+- 新增 [本地书源失败报告格式](source-failure-report-schema.md)，固定 `schema_version: 1`、字段语义、旧记录 `operation_id = null` 的迁移规则、未知字段处理和隐私边界。
+- 导入 diff、配置版本迁移、冲突提示、可回滚快照，以及启用源/失败率/缓存命中/规则兼容性指标继续扩展；保持本地导出，不建立远程遥测。
 
 ## GitHub 执行方式
 
