@@ -132,9 +132,7 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
     let signature_match = match format {
         BookFormatKind::Txt => !bytes.is_empty(),
         BookFormatKind::Epub => bytes.starts_with(b"PK\x03\x04"),
-        BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => {
-            has_mobi_header(bytes)
-        }
+        BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => has_mobi_header(bytes),
         BookFormatKind::Pdf => bytes.starts_with(b"%PDF-"),
         BookFormatKind::Image => has_image_signature(bytes),
         BookFormatKind::Unknown => false,
@@ -153,15 +151,12 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
         (_, false) => FormatSupport::SignatureMismatch,
     };
     let message = match (format, support) {
-        (BookFormatKind::Txt, FormatSupport::Importable) => {
-            "TXT 可进入现有导入流程".to_string()
-        }
-        (BookFormatKind::Epub, FormatSupport::Importable) => {
-            "EPUB 可进入现有导入流程".to_string()
-        }
-        (BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3, FormatSupport::ProbeOnly) => {
-            "已识别 MOBI/AZW 容器；当前仅做只读探测，尚未导入".to_string()
-        }
+        (BookFormatKind::Txt, FormatSupport::Importable) => "TXT 可进入现有导入流程".to_string(),
+        (BookFormatKind::Epub, FormatSupport::Importable) => "EPUB 可进入现有导入流程".to_string(),
+        (
+            BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3,
+            FormatSupport::ProbeOnly,
+        ) => "已识别 MOBI/AZW 容器；当前仅做只读探测，尚未导入".to_string(),
         (BookFormatKind::Pdf, FormatSupport::ProbeOnly) => {
             "已识别 PDF；需要独立的渲染、搜索和目录模型".to_string()
         }
@@ -201,8 +196,7 @@ fn has_mobi_header(bytes: &[u8]) -> bool {
     if bytes.len() < 82 {
         return false;
     }
-    let record_offset =
-        u32::from_be_bytes([bytes[78], bytes[79], bytes[80], bytes[81]]) as usize;
+    let record_offset = u32::from_be_bytes([bytes[78], bytes[79], bytes[80], bytes[81]]) as usize;
     record_offset
         .checked_add(20)
         .is_some_and(|end| end <= bytes.len())
@@ -216,9 +210,7 @@ fn has_image_signature(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"\xFF\xD8\xFF")
         || bytes.starts_with(b"GIF87a")
         || bytes.starts_with(b"GIF89a")
-        || (bytes.starts_with(b"RIFF")
-            && bytes.len() >= 12
-            && &bytes[8..12] == b"WEBP")
+        || (bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WEBP")
 }
 
 pub const CONTENT_FORMAT_TEXT: &str = "text";
@@ -2200,10 +2192,7 @@ mod tests {
         assert_eq!(pdf_probe.format, BookFormatKind::Pdf);
         assert_eq!(pdf_probe.support, FormatSupport::ProbeOnly);
 
-        let image_probe = probe_book_format(
-            "cover.png",
-            b"\x89PNG\r\n\x1A\nrest",
-        );
+        let image_probe = probe_book_format("cover.png", b"\x89PNG\r\n\x1A\nrest");
         assert_eq!(image_probe.format, BookFormatKind::Image);
         assert_eq!(image_probe.support, FormatSupport::ProbeOnly);
 
