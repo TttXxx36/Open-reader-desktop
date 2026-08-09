@@ -436,12 +436,13 @@ struct ManifestItem {
 }
 
 fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|error| ImportError::InvalidEpub(format!("EPUB ZIP 容器损坏：{error}")))?;
     validate_epub_archive(&mut archive)?;
-    let container = read_zip_text(&mut archive, "META-INF/container.xml")?;
+    let container = read_required_zip_text(&mut archive, "META-INF/container.xml", "container.xml")?;
     let opf_path = extract_attribute_from_xml(&container, "rootfile", "full-path")
         .ok_or_else(|| ImportError::InvalidEpub("缺少 OPF 根文件".to_string()))?;
-    let opf = read_zip_text(&mut archive, &opf_path)?;
+    let opf = read_required_zip_text(&mut archive, &opf_path, "OPF 文件")?;
     let base_path = opf_path
         .rsplit_once('/')
         .map(|(base, _)| base)
@@ -503,7 +504,9 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
         }
 
         let path = join_zip_path(base_path, &item.href);
-        let html = read_zip_text(&mut archive, &path)?;
+        let Ok(html) = read_zip_text(&mut archive, &path) else {
+            continue;
+        };
         let mut document = parse_html_document(&html);
         resolve_epub_images(&mut document, &path, &image_sources);
         if document.blocks.is_empty() {
@@ -599,6 +602,15 @@ fn read_zip_bytes<R: Read + Seek>(
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+fn read_required_zip_text<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    path: &str,
+    label: &str,
+) -> Result<String, ImportError> {
+    read_zip_text(archive, path)
+        .map_err(|error| ImportError::InvalidEpub(format!("缺少或无法读取 {label}：{error}")))
 }
 
 fn read_zip_text<R: Read + Seek>(
@@ -1515,6 +1527,73 @@ mod tests {
             ZipArchive::new(Cursor::new(cursor.into_inner())).expect("archive should open");
 
         validate_epub_archive(&mut archive).expect("empty archive should be within limits");
+    }
+
+    fn zip_text_entries(entries: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        for (path, content) in entries {
+            writer
+                .start_file(*path, options)
+                .expect("fixture entry should start");
+            writer
+                .write_all(content.as_bytes())
+                .expect("fixture entry should write");
+        }
+        writer
+            .finish()
+            .expect("fixture archive should finish")
+            .into_inner()
+    }
+
+    #[test]
+    fn rejects_corrupt_epub_zip_with_recoverable_error() {
+        let error = parse_book_bytes("broken.epub", b"not a zip").expect_err("broken ZIP must fail");
+        assert!(error.to_string().contains("ZIP"));
+    }
+
+    #[test]
+    fn reports_missing_epub_container_and_opf() {
+        let missing_container = parse_book_bytes(
+            "missing-container.epub",
+            &zip_text_entries(&[("OPS/content.opf", "<package/>")]),
+        )
+        .expect_err("missing container should fail");
+        assert!(missing_container.to_string().contains("container.xml"));
+
+        let missing_opf = parse_book_bytes(
+            "missing-opf.epub",
+            &zip_text_entries(&[(
+                "META-INF/container.xml",
+                r#"<container><rootfile full-path="OPS/content.opf"/></container>"#,
+            )]),
+        )
+        .expect_err("missing OPF should fail");
+        assert!(missing_opf.to_string().contains("OPF"));
+    }
+
+    #[test]
+    fn skips_missing_spine_chapters_and_keeps_readable_content() {
+        let bytes = zip_text_entries(&[
+            (
+                "META-INF/container.xml",
+                r#"<container><rootfile full-path="OPS/content.opf"/></container>"#,
+            ),
+            (
+                "OPS/content.opf",
+                r#"<package><metadata><dc:title>演示书</dc:title></metadata><manifest><item id="missing" href="Text/missing.xhtml" media-type="application/xhtml+xml"/><item id="good" href="Text/good.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="missing"/><itemref idref="good"/></spine></package>"#,
+            ),
+            (
+                "OPS/Text/good.xhtml",
+                "<h1>可读章节</h1><p>正文</p>",
+            ),
+        ]);
+
+        let book = parse_book_bytes("recover.epub", &bytes).expect("readable spine item should survive");
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].title, "可读章节");
     }
 
     #[test]
