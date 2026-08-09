@@ -759,9 +759,10 @@ impl SourceEngine {
                 }
                 Ok((definition, Err(error))) => {
                     let message = error.to_string();
-                    let rule_evaluations = rule_evaluation_from_error("search", "item", &message)
-                        .into_iter()
-                        .collect();
+                    let rule_evaluations: Vec<SourceRuleEvaluation> =
+                        rule_evaluation_from_error("search", "item", &message)
+                            .into_iter()
+                            .collect();
                     diagnostics.push(SourceSearchDiagnostics {
                         source_id: definition.id.clone(),
                         source_name: definition.name.clone(),
