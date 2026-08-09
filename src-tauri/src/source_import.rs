@@ -25,6 +25,7 @@ pub struct UnsupportedImportRule {
     pub offline_syntax: String,
     pub offline_steps: usize,
     pub offline_estimated_work: usize,
+    pub offline_elapsed_us: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,6 +271,7 @@ fn collect_unsupported_rules_at(
                 offline_syntax: offline.syntax,
                 offline_steps: offline.steps,
                 offline_estimated_work: offline.estimated_work,
+                offline_elapsed_us: offline.elapsed_us,
             });
         }
         Value::Array(entries) => {
@@ -1262,6 +1264,10 @@ mod tests {
             .unsupported_rules
             .iter()
             .all(|rule| rule.reason.contains("只读兼容性评估")));
+        assert!(entry
+            .unsupported_rules
+            .iter()
+            .all(|rule| rule.offline_elapsed_us >= 1));
         assert!(entry
             .error
             .as_deref()
