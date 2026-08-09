@@ -848,9 +848,9 @@ fn safe_epub_inline_style(raw: &str) -> Option<String> {
         let value = value.trim().to_ascii_lowercase();
         if value.is_empty()
             || value.len() > 64
-            || value.bytes().any(|byte| {
-                matches!(byte, b'{' | b'}' | b'<' | b'>' | b'"' | b'\'')
-            })
+            || value
+                .bytes()
+                .any(|byte| matches!(byte, b'{' | b'}' | b'<' | b'>' | b'"' | b'\''))
         {
             continue;
         }
@@ -860,7 +860,8 @@ fn safe_epub_inline_style(raw: &str) -> Option<String> {
             "font-style" => matches!(value.as_str(), "normal" | "italic" | "oblique"),
             "font-weight" => {
                 matches!(value.as_str(), "normal" | "bold" | "bolder" | "lighter")
-                    || (value.len() == 3 && value.chars().all(|character| character.is_ascii_digit()))
+                    || (value.len() == 3
+                        && value.chars().all(|character| character.is_ascii_digit()))
             }
             "text-decoration" => {
                 matches!(value.as_str(), "none" | "underline" | "line-through")
@@ -946,7 +947,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     quote_depth,
                     heading_level,
                     block_anchor.take(),
-                    block_style.take(),
+                block_style.take(),
                 );
                 quote_depth = quote_depth.saturating_sub(1);
             } else if is_block_html_tag(&name) {
@@ -958,7 +959,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     quote_depth,
                     heading_level,
                     block_anchor.take(),
-                    block_style.take(),
+                block_style.take(),
                 );
             }
         } else if name == "script" || name == "style" || name == "noscript" {
@@ -974,7 +975,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
-                    block_style.take(),
+                block_style.take(),
             );
             quote_depth = quote_depth.saturating_add(1);
             block_anchor = extract_html_attribute(&raw_tag, "id")
@@ -990,7 +991,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
-                    block_style.take(),
+                block_style.take(),
             );
             let alt = extract_html_attribute(&raw_tag, "alt")
                 .map(|value| decode_entities(&value).trim().to_string())
@@ -1016,7 +1017,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
-                    block_style.take(),
+                block_style.take(),
             );
         } else if is_emphasis_html_tag(&name) {
             push_html_span(
@@ -1035,11 +1036,13 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
-                    block_style.take(),
+                block_style.take(),
             );
             heading_level = heading_level_from_tag(&name);
             block_anchor = extract_html_attribute(&raw_tag, "id")
                 .and_then(|value| safe_epub_anchor_id(&value));
+            block_style = extract_html_attribute(&raw_tag, "style")
+                .and_then(|value| safe_epub_inline_style(&value));
         }
 
         index = tag_end + 1;
@@ -1053,7 +1056,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
         quote_depth,
         heading_level,
         block_anchor.take(),
-                    block_style.take(),
+        block_style.take(),
     );
 
     ContentDocument {
@@ -1754,11 +1757,7 @@ mod tests {
         chapter_indices.insert("OPS/Text/chapter-1.xhtml".to_string(), 0);
         chapter_indices.insert("OPS/Text/chapter-2.xhtml".to_string(), 1);
 
-        resolve_epub_link_targets(
-            &mut document,
-            "OPS/Text/chapter-1.xhtml",
-            &chapter_indices,
-        );
+        resolve_epub_link_targets(&mut document, "OPS/Text/chapter-1.xhtml", &chapter_indices);
 
         assert_eq!(document.links[0].target_chapter, Some(0));
         assert_eq!(document.links[1].target_chapter, Some(1));
