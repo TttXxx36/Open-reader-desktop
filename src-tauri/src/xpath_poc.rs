@@ -113,7 +113,11 @@ pub fn analyze(expression: &str, html: &str) -> XPathAnalysis {
             }
         }
     };
-    analysis.elapsed_us = started.elapsed().as_micros().max(1).min(u128::from(u64::MAX)) as u64;
+    analysis.elapsed_us = started
+        .elapsed()
+        .as_micros()
+        .max(1)
+        .min(u128::from(u64::MAX)) as u64;
     analysis
 }
 
