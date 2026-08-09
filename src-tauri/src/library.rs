@@ -1215,11 +1215,11 @@ mod tests {
     fn parses_txt_with_custom_chapter_regex() {
         let options = TxtParseOptions {
             chapter_rule: TxtChapterRule::Regex,
-            custom_pattern: Some(r"^卷\\d+".to_string()),
+            custom_pattern: Some(r"^卷\d+".to_string()),
         };
         let book = parse_book_bytes_with_options(
             "custom.txt",
-            "卷1 开始\\n正文\\n卷2 继续\\n更多".as_bytes(),
+            "卷1 开始\n正文\n卷2 继续\n更多".as_bytes(),
             &options,
         )
         .expect("custom TXT rule should parse");
@@ -1237,7 +1237,7 @@ mod tests {
         };
         let book = parse_book_bytes_with_options(
             "plain.txt",
-            "第一章\\n正文\\n第二章\\n更多".as_bytes(),
+            "第一章\n正文\n第二章\n更多".as_bytes(),
             &options,
         )
         .expect("disabled TXT rule should parse");
