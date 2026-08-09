@@ -854,13 +854,13 @@ impl Database {
 
     pub fn source_rule_metrics(&self) -> Result<SourceRuleMetrics, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let (
-            total_attempts,
-            total_successes,
-            total_no_matches,
-            total_failures,
-            total_skipped,
-        ): (i64, i64, i64, i64, i64) = connection.query_row(
+        let (total_attempts, total_successes, total_no_matches, total_failures, total_skipped): (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+        ) = connection.query_row(
             "SELECT
                 COALESCE(SUM(attempts), 0),
                 COALESCE(SUM(successes), 0),
