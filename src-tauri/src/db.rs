@@ -213,6 +213,38 @@ pub struct SourceRequestMetrics {
     pub by_stage: Vec<SourceRequestMetric>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRuleOutcome {
+    Success,
+    NoMatch,
+    Failure,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceRuleMetric {
+    pub stage: String,
+    pub rule_key: String,
+    pub attempts: usize,
+    pub successes: usize,
+    pub no_matches: usize,
+    pub failures: usize,
+    pub success_rate: f64,
+    pub failure_rate: f64,
+    pub observed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceRuleMetrics {
+    pub total_attempts: usize,
+    pub total_successes: usize,
+    pub total_no_matches: usize,
+    pub total_failures: usize,
+    pub success_rate: f64,
+    pub failure_rate: f64,
+    pub observed: bool,
+    pub by_rule: Vec<SourceRuleMetric>,
+}
+
 impl Database {
     pub fn open(app_data_dir: &Path) -> Result<Self, DbError> {
         fs::create_dir_all(app_data_dir)?;
@@ -377,6 +409,7 @@ impl Database {
             transaction.execute_batch(
                 "DELETE FROM source_cache;
                  DELETE FROM source_request_metrics;
+                 DELETE FROM source_rule_metrics;
                  DELETE FROM book_sources;",
             )?;
         }
@@ -517,11 +550,15 @@ impl Database {
 
     pub fn delete_source(&self, source_id: &str) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let changed = connection.execute(
+        connection.execute(
             "DELETE FROM source_request_metrics WHERE source_id = ?1",
             params![source_id],
         )?;
-        connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
+        connection.execute(
+            "DELETE FROM source_rule_metrics WHERE source_id = ?1",
+            params![source_id],
+        )?;
+        let changed = connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
         if changed == 0 {
             return Err(DbError::NotFound);
         }
@@ -770,6 +807,102 @@ impl Database {
                 total_attempts.saturating_add(total_cache_hits),
             ),
             by_stage,
+        })
+    }
+
+
+    pub fn record_source_rule_outcome(
+        &self,
+        source_id: &str,
+        stage: &str,
+        rule_key: &str,
+        outcome: SourceRuleOutcome,
+    ) -> Result<(), DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let (successes, no_matches, failures) = match outcome {
+            SourceRuleOutcome::Success => (1_i64, 0_i64, 0_i64),
+            SourceRuleOutcome::NoMatch => (0_i64, 1_i64, 0_i64),
+            SourceRuleOutcome::Failure => (0_i64, 0_i64, 1_i64),
+        };
+        connection.execute(
+            "INSERT INTO source_rule_metrics
+                (source_id, stage, rule_key, attempts, successes, no_matches, failures)
+             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)
+             ON CONFLICT(source_id, stage, rule_key) DO UPDATE SET
+                attempts = attempts + 1,
+                successes = successes + excluded.successes,
+                no_matches = no_matches + excluded.no_matches,
+                failures = failures + excluded.failures,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                bounded_history_text(source_id, 256),
+                bounded_history_text(stage, 128),
+                bounded_history_text(rule_key, 128),
+                successes,
+                no_matches,
+                failures,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn source_rule_metrics(&self) -> Result<SourceRuleMetrics, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let (total_attempts, total_successes, total_no_matches, total_failures): (
+            i64,
+            i64,
+            i64,
+            i64,
+        ) = connection.query_row(
+            "SELECT
+                COALESCE(SUM(attempts), 0),
+                COALESCE(SUM(successes), 0),
+                COALESCE(SUM(no_matches), 0),
+                COALESCE(SUM(failures), 0)
+             FROM source_rule_metrics",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+
+        let mut statement = connection.prepare(
+            "SELECT stage, rule_key,
+                    COALESCE(SUM(attempts), 0),
+                    COALESCE(SUM(successes), 0),
+                    COALESCE(SUM(no_matches), 0),
+                    COALESCE(SUM(failures), 0)
+             FROM source_rule_metrics
+             GROUP BY stage, rule_key
+             ORDER BY stage, rule_key",
+        )?;
+        let by_rule = statement
+            .query_map([], |row| {
+                let attempts: i64 = row.get(2)?;
+                let successes: i64 = row.get(3)?;
+                let no_matches: i64 = row.get(4)?;
+                let failures: i64 = row.get(5)?;
+                Ok(SourceRuleMetric {
+                    stage: row.get(0)?,
+                    rule_key: row.get(1)?,
+                    attempts: non_negative_usize(attempts),
+                    successes: non_negative_usize(successes),
+                    no_matches: non_negative_usize(no_matches),
+                    failures: non_negative_usize(failures),
+                    success_rate: ratio(successes, attempts),
+                    failure_rate: ratio(failures, attempts),
+                    observed: attempts > 0,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(SourceRuleMetrics {
+            total_attempts: non_negative_usize(total_attempts),
+            total_successes: non_negative_usize(total_successes),
+            total_no_matches: non_negative_usize(total_no_matches),
+            total_failures: non_negative_usize(total_failures),
+            success_rate: ratio(total_successes, total_attempts),
+            failure_rate: ratio(total_failures, total_attempts),
+            observed: total_attempts > 0,
+            by_rule,
         })
     }
 
@@ -1030,6 +1163,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             10_i64,
             include_str!("../migrations/0010_source_request_metrics.sql"),
         ),
+        (
+            11_i64,
+            include_str!("../migrations/0011_source_rule_metrics.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -1174,6 +1311,7 @@ fn record_source_cache_hit_locked(
 }
 
 fn bounded_history_text(value: &str, max_chars: usize) -> String {
+
     value.chars().take(max_chars).collect()
 }
 
@@ -1588,6 +1726,63 @@ mod tests {
         assert_eq!(metrics.by_stage[0].cache_hits, 1);
         assert_eq!(metrics.by_stage[1].stage, "search");
         assert_eq!(metrics.by_stage[1].attempts, 2);
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn aggregates_source_rule_metrics() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-source-rule-metrics-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        database
+            .record_source_rule_outcome(
+                "source-a",
+                "search",
+                "item",
+                SourceRuleOutcome::Success,
+            )
+            .expect("success should record");
+        database
+            .record_source_rule_outcome(
+                "source-a",
+                "search",
+                "item",
+                SourceRuleOutcome::NoMatch,
+            )
+            .expect("no-match should record");
+        database
+            .record_source_rule_outcome(
+                "source-a",
+                "content",
+                "content",
+                SourceRuleOutcome::Failure,
+            )
+            .expect("failure should record");
+
+        let metrics = database
+            .source_rule_metrics()
+            .expect("rule metrics should read");
+        assert_eq!(metrics.total_attempts, 3);
+        assert_eq!(metrics.total_successes, 1);
+        assert_eq!(metrics.total_no_matches, 1);
+        assert_eq!(metrics.total_failures, 1);
+        assert!(metrics.observed);
+        assert!((metrics.success_rate - (1.0 / 3.0)).abs() < 0.001);
+        assert!((metrics.failure_rate - (1.0 / 3.0)).abs() < 0.001);
+        assert_eq!(metrics.by_rule.len(), 2);
+        assert_eq!(metrics.by_rule[0].stage, "content");
+        assert_eq!(metrics.by_rule[0].rule_key, "content");
+        assert_eq!(metrics.by_rule[0].failures, 1);
+        assert_eq!(metrics.by_rule[1].stage, "search");
+        assert_eq!(metrics.by_rule[1].no_matches, 1);
+        assert_eq!(metrics.by_rule[1].successes, 1);
 
         drop(database);
         let _ = fs::remove_dir_all(directory);
