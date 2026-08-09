@@ -44,6 +44,12 @@
 
 远程证据：[GitHub Actions run 30773702655](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30773702655)（前端检查、Rust fmt/check、62 个 Rust 测试通过）。该证据只证明受限 opt-in 链路可运行，不代表已把自动追链接入默认阅读流程。 `fetch_source_chapter` 现接受可选 `next_page_policy`，并在同一取消 token 的 `tokio::select!` 中运行；缺省或 `enabled=false` 仍走原单页路径。远程证据：[GitHub Actions run 30775360305](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30775360305)（前端检查与 Rust fmt/check/test 通过）。
 
+## 用户可见开关（首轮已接入）
+
+设置页已增加“正文分页追链”开关及深度、页面数、总响应体、总耗时和同源限制；开启后章节请求携带 `next_page_policy`，关闭或未传仍保持旧单页路径。远端阅读页显示“追链已完成/已停止”及稳定停止原因，已有取消按钮继续复用同一 operation token。启用后刷新会跳过旧的单页缓存，避免策略开启却返回旧缓存；Windows 安装包手工验收仍待执行。
+
+远程证据：[GitHub Actions run 31302166671](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31302166671)（前端 typecheck/build/UI contract、Rust fmt/check/test 全部通过）。
+
 边界夹具又覆盖后续请求失败时保留部分正文、环路停止、跨源候选拒绝、累计响应体超限和阶段请求超时；失败步骤会写入稳定 stage，默认路径仍不改变。远程证据：[GitHub Actions run 30774860219](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30774860219)（67 个 Rust 测试、前端检查通过）。
 
 ## 失败与回退语义
