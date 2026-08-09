@@ -1247,6 +1247,32 @@ fn classify_source_failure(message: &str) -> &'static str {
         "timeout"
     } else if normalized.contains("cancel") || message.contains("取消") {
         "cancelled"
+    } else if normalized.contains("429")
+        || normalized.contains("rate limit")
+        || normalized.contains("too many requests")
+        || message.contains("限流")
+    {
+        "rate_limit"
+    } else if normalized.contains("401")
+        || normalized.contains("403")
+        || normalized.contains("unauthorized")
+        || normalized.contains("forbidden")
+        || message.contains("授权")
+        || message.contains("权限")
+    {
+        "auth"
+    } else if normalized.contains("status code")
+        || normalized.contains("http 4")
+        || normalized.contains("http 5")
+        || message.contains("状态码")
+        || message.contains("响应状态")
+    {
+        "http_status"
+    } else if normalized.contains("body")
+        || normalized.contains("response body")
+        || message.contains("响应体")
+    {
+        "body_limit"
     } else if normalized.contains("parse")
         || normalized.contains("json")
         || message.contains("解析")
@@ -1255,10 +1281,41 @@ fn classify_source_failure(message: &str) -> &'static str {
         "parse"
     } else if normalized.contains("config") || message.contains("配置") {
         "config"
-    } else if normalized.contains("body") || message.contains("响应体") {
-        "body_limit"
+    } else if normalized.contains("dns")
+        || normalized.contains("connection")
+        || normalized.contains("connect")
+        || normalized.contains("tls")
+        || message.contains("网络")
+        || message.contains("连接")
+    {
+        "network"
     } else {
         "request"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_source_failure;
+
+    #[test]
+    fn classifies_finite_source_failure_reasons() {
+        let cases = [
+            ("request timeout", "timeout"),
+            ("operation cancelled", "cancelled"),
+            ("HTTP 429 Too Many Requests", "rate_limit"),
+            ("HTTP 403 Forbidden", "auth"),
+            ("HTTP 500 status code", "http_status"),
+            ("response body exceeded limit", "body_limit"),
+            ("JSON parse failed", "parse"),
+            ("source 配置无效", "config"),
+            ("TLS connection failed", "network"),
+            ("unexpected failure", "request"),
+        ];
+
+        for (message, expected) in cases {
+            assert_eq!(classify_source_failure(message), expected, "message: {message}");
+        }
     }
 }
 
