@@ -226,10 +226,7 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
     Ok(text.into_owned().trim_start_matches('\u{feff}').to_string())
 }
 
-fn normalize_txt_text(
-    text: &str,
-    options: &TxtParseOptions,
-) -> Result<String, ImportError> {
+fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, ImportError> {
     let mut normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     if options.normalize_full_width_space {
         normalized = normalized.replace('\u{3000}', " ");
@@ -354,7 +351,9 @@ fn looks_like_chapter(line: &str) -> bool {
         return false;
     }
 
-    for prefix in ["序章", "楔子", "番外", "正文", "后记", "尾声", "终章", "引子", "卷首", "卷末"] {
+    for prefix in [
+        "序章", "楔子", "番外", "正文", "后记", "尾声", "终章", "引子", "卷首", "卷末",
+    ] {
         if line == prefix
             || line
                 .strip_prefix(prefix)
@@ -404,10 +403,8 @@ fn is_title_separator(rest: &str) -> bool {
 }
 
 fn is_chapter_number_character(character: char) -> bool {
-    character.is_ascii_digit()
-        || "零〇一二两三四五六七八九十百千万".contains(character)
+    character.is_ascii_digit() || "零〇一二两三四五六七八九十百千万".contains(character)
 }
-
 
 fn title_from_file_name(file_name: &str) -> String {
     Path::new(file_name)
@@ -1375,10 +1372,8 @@ mod tests {
         };
         let book = parse_book_bytes_with_options(
             "normalized.txt",
-            "第一章
-　旧词
-第二章
-旧词".as_bytes(),
+            "第一章\n　旧词\n第二章\n旧词"
+                .as_bytes(),
             &options,
         )
         .expect("TXT normalization should parse");
