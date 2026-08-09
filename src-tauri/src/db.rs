@@ -828,10 +828,11 @@ impl Database {
             SourceRuleOutcome::Failure => (0_i64, 0_i64, 1_i64, 0_i64),
             SourceRuleOutcome::Skipped => (0_i64, 0_i64, 0_i64, 1_i64),
         };
+        let attempts = successes + no_matches + failures;
         connection.execute(
             "INSERT INTO source_rule_metrics
                 (source_id, stage, rule_key, attempts, successes, no_matches, failures, skipped)
-             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?7)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(source_id, stage, rule_key) DO UPDATE SET
                 attempts = attempts + 1,
                 successes = successes + excluded.successes,
@@ -843,6 +844,7 @@ impl Database {
                 bounded_history_text(source_id, 256),
                 bounded_history_text(stage, 128),
                 bounded_history_text(rule_key, 128),
+                attempts,
                 successes,
                 no_matches,
                 failures,
