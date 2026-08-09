@@ -28,7 +28,7 @@
 `source_metrics` 包含书源/审计/缓存摘要，以及可选的 `request_metrics`：`total_attempts`、`total_successes`、`total_failures`、`total_cache_hits`、`failure_rate`、`cache_hit_rate` 和按阶段统计。请求指标只统计已完成的网络请求；取消的请求不计入成功或失败。缓存命中率的分母是网络请求次数加缓存命中次数，失败率的分母是已完成网络请求次数；没有观测值时比例为 0，不代表真实网络成功率。
 
 
-规则指标（`source_metrics.rule_metrics`）为可选对象，包含 `total_attempts`、`total_successes`、`total_no_matches`、`total_failures`、`success_rate`、`failure_rate`、`observed` 和 `by_rule`。首个实现按 `source_id + stage + rule_key` 聚合四个解析阶段（`search`、`book_info`、`toc`、`content`），其中成功率/失败率分母为 `attempts = successes + no_matches + failures`；没有观测值时必须保留 `observed = false`，不能把 0 当成成功率。规则指标只记录已执行的响应解析；新鲜缓存命中、stale 回退和取消不会重复执行或计入规则分母。`by_rule` 不得包含正文、关键词、请求头、Cookie、认证信息或原始 URL。
+规则指标（`source_metrics.rule_metrics`）为可选对象，包含 `total_attempts`、`total_successes`、`total_no_matches`、`total_failures`、`success_rate`、`failure_rate`、`observed` 和 `by_rule`。首个实现按 `source_id + stage + rule_key` 聚合四个解析阶段（`search`、`book_info`、`toc`、`content`），其中成功率/失败率分母为 `attempts = successes + no_matches + failures`；没有观测值时必须保留 `observed = false`，不能把 0 当成成功率。规则指标只记录已执行的响应解析；新鲜缓存命中、stale 回退和取消不会重复执行或计入规则分母。`by_rule` 不得包含正文、关键词、请求头、Cookie、认证信息或原始 URL。 `total_skipped` 和每个 `by_rule` 项的 `skipped` 只表示未配置/策略跳过次数，不进入 attempts；旧报告缺少该字段时按 0 读取。SQLite 0012 负责为已存在的 0011 表补充该列。
 
 每条 `entries` 记录包含：
 
