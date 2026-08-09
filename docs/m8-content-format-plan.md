@@ -31,7 +31,8 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 ## M8.4 大文件与性能基线
 
 - 首个性能切片已让 TXT 按行累积单个章节正文，移除每章 `Vec<String>` 行缓存，并通过字节范围裁剪首尾空行，保留缩进与段落空行。
-- CI 合成夹具覆盖 512 章约 1 MiB 文本；run [31328789321](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31328789321) 的前端检查、Rust fmt/check 和 93 个 Rust 测试通过。
+- `normalize_txt_text` 已改为单次字符扫描，同时归一化 CRLF/CR 换行和全角空格，避免先复制整段文本再做多轮换行替换。
+- CI 合成夹具覆盖 512 章约 1 MiB 文本；run [31328789321](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31328789321) 验证行累积，run [31329875168](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31329875168) 验证混合换行归一化；最新运行的前端检查、Rust fmt/check 和 94 个 Rust 测试通过。
 - 后续在 64 MiB 默认导入上限下接入分块/流式编码解码，避免一次性复制多份正文；EPUB 继续使用 ZIP 条目配额。
 - 记录导入耗时、峰值章节数和失败原因的本地测试摘要，不上传遥测；以 1 MiB、16 MiB、64 MiB 合成文件建立 CI 时间和内存回归阈值。
 
