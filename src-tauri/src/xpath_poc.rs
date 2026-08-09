@@ -410,7 +410,7 @@ mod tests {
             "//article[foo]",
             "//article[@class='book']/@href/text()",
         ] {
-            let analysis = analyze(expression, "<main><article class="book"><a>demo</a></article></main>");
+            let analysis = analyze(expression, r#"<main><article class="book"><a>demo</a></article></main>"#);
             assert!(!analysis.accepted, "{expression}: {analysis:?}");
             assert!(analysis.reason.is_some(), "{expression}: {analysis:?}");
         }
