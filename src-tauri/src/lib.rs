@@ -1078,6 +1078,7 @@ async fn fetch_source_book(
     let detail: SourceBookDetail = match fetch_result {
         Ok(detail) => detail,
         Err(message) => {
+            record_source_failure(&database, &summary.id, &summary.name, "book", &message);
             if message == "书源请求已取消" {
                 return Err(message);
             }
@@ -1192,6 +1193,7 @@ async fn fetch_source_chapter(
             result
         }
         Err(message) => {
+            record_source_failure(&database, &summary.id, &summary.name, "chapter", &message);
             if message == "书源请求已取消" {
                 return Err(message);
             }
@@ -1246,17 +1248,36 @@ fn classify_source_failure(message: &str) -> &'static str {
     }
 }
 
+fn record_source_failure(
+    database: &Database,
+    source_id: &str,
+    source_name: &str,
+    stage: &str,
+    message: &str,
+) {
+    if message == "书源请求已取消" {
+        return;
+    }
+    if let Err(error) = database.record_source_failure_history(
+        source_id,
+        source_name,
+        stage,
+        classify_source_failure(message),
+        message,
+    ) {
+        eprintln!("unable to record source failure history: {error}");
+    }
+}
+
 fn record_source_failures(database: &Database, failures: &[SourceSearchFailure]) {
     for failure in failures {
-        if let Err(error) = database.record_source_failure_history(
+        record_source_failure(
+            database,
             &failure.source_id,
             &failure.source_name,
             "search",
-            classify_source_failure(&failure.message),
             &failure.message,
-        ) {
-            eprintln!("unable to record source failure history: {error}");
-        }
+        );
     }
 }
 
