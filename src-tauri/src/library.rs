@@ -77,6 +77,150 @@ pub struct BookImportPreview {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BookFormatKind {
+    Txt,
+    Epub,
+    Mobi,
+    Azw,
+    Azw3,
+    Pdf,
+    Image,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FormatSupport {
+    Importable,
+    ProbeOnly,
+    Unsupported,
+    SignatureMismatch,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookFormatProbe {
+    pub format: BookFormatKind,
+    pub support: FormatSupport,
+    pub signature_match: bool,
+    pub message: String,
+}
+
+pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let extension_kind = match extension.as_str() {
+        "txt" => BookFormatKind::Txt,
+        "epub" => BookFormatKind::Epub,
+        "mobi" => BookFormatKind::Mobi,
+        "azw" => BookFormatKind::Azw,
+        "azw3" => BookFormatKind::Azw3,
+        "pdf" => BookFormatKind::Pdf,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" => BookFormatKind::Image,
+        _ => BookFormatKind::Unknown,
+    };
+    let magic_kind = detect_magic_format(bytes);
+    let format = if extension_kind == BookFormatKind::Unknown {
+        magic_kind
+    } else {
+        extension_kind
+    };
+    let signature_match = match format {
+        BookFormatKind::Txt => !bytes.is_empty(),
+        BookFormatKind::Epub => bytes.starts_with(b"PK\\x03\\x04"),
+        BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => {
+            has_mobi_header(bytes)
+        }
+        BookFormatKind::Pdf => bytes.starts_with(b"%PDF-"),
+        BookFormatKind::Image => has_image_signature(bytes),
+        BookFormatKind::Unknown => false,
+    };
+    let support = match (format, signature_match) {
+        (BookFormatKind::Txt | BookFormatKind::Epub, true) => FormatSupport::Importable,
+        (
+            BookFormatKind::Mobi
+            | BookFormatKind::Azw
+            | BookFormatKind::Azw3
+            | BookFormatKind::Pdf
+            | BookFormatKind::Image,
+            true,
+        ) => FormatSupport::ProbeOnly,
+        (BookFormatKind::Unknown, _) => FormatSupport::Unsupported,
+        (_, false) => FormatSupport::SignatureMismatch,
+    };
+    let message = match (format, support) {
+        (BookFormatKind::Txt, FormatSupport::Importable) => {
+            "TXT 可进入现有导入流程".to_string()
+        }
+        (BookFormatKind::Epub, FormatSupport::Importable) => {
+            "EPUB 可进入现有导入流程".to_string()
+        }
+        (BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3, FormatSupport::ProbeOnly) => {
+            "已识别 MOBI/AZW 容器；当前仅做只读探测，尚未导入".to_string()
+        }
+        (BookFormatKind::Pdf, FormatSupport::ProbeOnly) => {
+            "已识别 PDF；需要独立的渲染、搜索和目录模型".to_string()
+        }
+        (BookFormatKind::Image, FormatSupport::ProbeOnly) => {
+            "已识别图片；需要独立的缓存、缩放和阅读方向模型".to_string()
+        }
+        (_, FormatSupport::SignatureMismatch) => "文件扩展名与内容签名不匹配".to_string(),
+        (_, FormatSupport::Unsupported) => "暂不支持该文件格式".to_string(),
+        _ => "格式已识别".to_string(),
+    };
+
+    BookFormatProbe {
+        format,
+        support,
+        signature_match,
+        message,
+    }
+}
+
+fn detect_magic_format(bytes: &[u8]) -> BookFormatKind {
+    if bytes.starts_with(b"%PDF-") {
+        return BookFormatKind::Pdf;
+    }
+    if bytes.starts_with(b"PK\\x03\\x04") {
+        return BookFormatKind::Epub;
+    }
+    if has_mobi_header(bytes) {
+        return BookFormatKind::Mobi;
+    }
+    if has_image_signature(bytes) {
+        return BookFormatKind::Image;
+    }
+    BookFormatKind::Unknown
+}
+
+fn has_mobi_header(bytes: &[u8]) -> bool {
+    if bytes.len() < 82 {
+        return false;
+    }
+    let record_offset =
+        u32::from_be_bytes([bytes[78], bytes[79], bytes[80], bytes[81]]) as usize;
+    record_offset
+        .checked_add(20)
+        .is_some_and(|end| end <= bytes.len())
+        && bytes
+            .get(record_offset + 16..record_offset + 20)
+            .is_some_and(|marker| marker == b"MOBI")
+}
+
+fn has_image_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\\x89PNG\\r\\n\\x1A\\n")
+        || bytes.starts_with(b"\\xFF\\xD8\\xFF")
+        || bytes.starts_with(b"GIF87a")
+        || bytes.starts_with(b"GIF89a")
+        || (bytes.starts_with(b"RIFF")
+            && bytes.len() >= 12
+            && &bytes[8..12] == b"WEBP")
+}
+
 pub const CONTENT_FORMAT_TEXT: &str = "text";
 pub const CONTENT_FORMAT_BLOCKS_V1: &str = "blocks-v1";
 const MAX_EMBEDDED_IMAGE_BYTES: usize = 2 * 1024 * 1024;
@@ -2035,6 +2179,43 @@ mod tests {
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     fn peak_rss_bytes() -> Option<u64> {
         None
+    }
+
+    #[test]
+    fn probes_format_signatures_without_parsing() {
+        let mut mobi = vec![0_u8; 128];
+        mobi[78..82].copy_from_slice(&80_u32.to_be_bytes());
+        mobi[96..100].copy_from_slice(b"MOBI");
+
+        let mobi_probe = probe_book_format("book.mobi", &mobi);
+        assert_eq!(mobi_probe.format, BookFormatKind::Mobi);
+        assert_eq!(mobi_probe.support, FormatSupport::ProbeOnly);
+        assert!(mobi_probe.signature_match);
+
+        let azw_probe = probe_book_format("book.azw3", &mobi);
+        assert_eq!(azw_probe.format, BookFormatKind::Azw3);
+        assert_eq!(azw_probe.support, FormatSupport::ProbeOnly);
+
+        let pdf_probe = probe_book_format("book.pdf", b"%PDF-1.7");
+        assert_eq!(pdf_probe.format, BookFormatKind::Pdf);
+        assert_eq!(pdf_probe.support, FormatSupport::ProbeOnly);
+
+        let image_probe = probe_book_format(
+            "cover.png",
+            b"\\x89PNG\\r\\n\\x1A\\nrest",
+        );
+        assert_eq!(image_probe.format, BookFormatKind::Image);
+        assert_eq!(image_probe.support, FormatSupport::ProbeOnly);
+
+        let txt_probe = probe_book_format("book.txt", "第一章\\n正文".as_bytes());
+        assert_eq!(txt_probe.support, FormatSupport::Importable);
+
+        let mismatch = probe_book_format("book.pdf", b"not a pdf");
+        assert_eq!(mismatch.support, FormatSupport::SignatureMismatch);
+
+        let renamed_pdf = probe_book_format("book.bin", b"%PDF-1.7");
+        assert_eq!(renamed_pdf.format, BookFormatKind::Pdf);
+        assert_eq!(renamed_pdf.support, FormatSupport::ProbeOnly);
     }
 
     #[test]
