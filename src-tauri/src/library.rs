@@ -246,6 +246,9 @@ fn decode_text(bytes: &[u8]) -> Result<Cow<'_, str>, ImportError> {
 }
 
 fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, ImportError> {
+    validate_txt_replacements(options)?;
+
+fn validate_txt_replacements(options: &TxtParseOptions) -> Result<(), ImportError> {
     if options.replacements.len() > MAX_TXT_REPLACEMENTS {
         return Err(ImportError::InvalidTxtOptions(format!(
             "替换规则不能超过 {} 条",
@@ -272,6 +275,9 @@ fn normalize_txt_text(text: &str, options: &TxtParseOptions) -> Result<String, I
             )));
         }
     }
+
+    Ok(())
+}
 
     let mut normalized = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
@@ -322,6 +328,266 @@ fn compile_txt_chapter_pattern(options: &TxtParseOptions) -> Result<Option<Regex
     }
 }
 
+struct StreamingTxtReplacementStage {
+    from: String,
+    to: String,
+    pending: String,
+}
+
+impl StreamingTxtReplacementStage {
+    fn new(replacement: &TxtReplacement) -> Self {
+        Self {
+            from: replacement.from.clone(),
+            to: replacement.to.clone(),
+            pending: String::new(),
+        }
+    }
+
+    fn push(&mut self, input: &str, output: &mut String) {
+        self.pending.push_str(input);
+        self.drain(output, false);
+    }
+
+    fn finish(&mut self, output: &mut String) {
+        self.drain(output, true);
+    }
+
+    fn drain(&mut self, output: &mut String, final_chunk: bool) {
+        loop {
+            if let Some(index) = self.pending.find(&self.from) {
+                output.push_str(&self.pending[..index]);
+                output.push_str(&self.to);
+                self.pending.drain(..index + self.from.len());
+                continue;
+            }
+
+            if final_chunk {
+                output.push_str(&self.pending);
+                self.pending.clear();
+            } else {
+                let keep = self.from.len().saturating_sub(1);
+                if self.pending.len() > keep {
+                    let mut split = self.pending.len() - keep;
+                    while split > 0 && !self.pending.is_char_boundary(split) {
+                        split -= 1;
+                    }
+                    output.push_str(&self.pending[..split]);
+                    self.pending.drain(..split);
+                }
+            }
+            break;
+        }
+    }
+}
+
+struct StreamingTxtReplacements {
+    stages: Vec<StreamingTxtReplacementStage>,
+}
+
+impl StreamingTxtReplacements {
+    fn new(replacements: &[TxtReplacement]) -> Self {
+        Self {
+            stages: replacements
+                .iter()
+                .map(StreamingTxtReplacementStage::new)
+                .collect(),
+        }
+    }
+
+    fn push(&mut self, input: &str, output: &mut String) {
+        let mut carry = input.to_string();
+        for stage in &mut self.stages {
+            let mut next = String::new();
+            stage.push(&carry, &mut next);
+            carry = next;
+        }
+        output.push_str(&carry);
+    }
+
+    fn finish(&mut self, output: &mut String) {
+        let mut carry = String::new();
+        for index in 0..self.stages.len() {
+            let mut next = String::new();
+            if index == 0 {
+                self.stages[index].finish(&mut next);
+            } else {
+                self.stages[index].push(&carry, &mut next);
+                let mut tail = String::new();
+                self.stages[index].finish(&mut tail);
+                next.push_str(&tail);
+            }
+            carry = next;
+        }
+        output.push_str(&carry);
+    }
+}
+
+fn for_each_text_chunk<F>(text: &str, mut callback: F)
+where
+    F: FnMut(&str),
+{
+    const CHUNK_SIZE: usize = 64 * 1024;
+    let mut start = 0;
+    while start < text.len() {
+        let mut end = (start + CHUNK_SIZE).min(text.len());
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = text[start..]
+                .char_indices()
+                .nth(1)
+                .map_or(text.len(), |(offset, _)| start + offset);
+        }
+        callback(&text[start..end]);
+        start = end;
+    }
+}
+
+fn normalize_txt_chunk(
+    chunk: &str,
+    options: &TxtParseOptions,
+    pending_cr: &mut bool,
+    normalized: &mut String,
+) {
+    for character in chunk.chars() {
+        if *pending_cr {
+            normalized.push('\n');
+            *pending_cr = false;
+            if character == '\n' {
+                continue;
+            }
+        }
+
+        if character == '\r' {
+            *pending_cr = true;
+        } else if options.normalize_full_width_space && character == '\u{3000}' {
+            normalized.push(' ');
+        } else {
+            normalized.push(character);
+        }
+    }
+}
+
+fn consume_txt_replacement_chunk<F>(chunk: &str, line: &mut String, callback: &mut F)
+where
+    F: FnMut(&str),
+{
+    for character in chunk.chars() {
+        if character == '\n' {
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            callback(line);
+            line.clear();
+        } else {
+            line.push(character);
+        }
+    }
+}
+
+fn consume_replaced_txt_chunk(
+    chunk: &str,
+    options: &TxtParseOptions,
+    custom_pattern: Option<&Regex>,
+    line: &mut String,
+    chapters: &mut Vec<ParsedChapter>,
+    current_title: &mut String,
+    current_content: &mut String,
+) {
+    consume_txt_replacement_chunk(chunk, line, &mut |value| {
+        append_txt_line(
+            value,
+            options,
+            custom_pattern,
+            chapters,
+            current_title,
+            current_content,
+        );
+    });
+}
+
+fn split_txt_with_replacements_streaming(
+    text: &str,
+    options: &TxtParseOptions,
+) -> Result<Vec<ParsedChapter>, ImportError> {
+    validate_txt_replacements(options)?;
+    let custom_pattern = compile_txt_chapter_pattern(options)?;
+    let mut replacements = StreamingTxtReplacements::new(&options.replacements);
+    let mut normalized_pending_cr = false;
+    let mut line = String::new();
+    let mut chapters = Vec::new();
+    let mut current_title = String::new();
+    let mut current_content = String::new();
+
+    for_each_text_chunk(text, |chunk| {
+        let mut normalized = String::new();
+        normalize_txt_chunk(
+            chunk,
+            options,
+            &mut normalized_pending_cr,
+            &mut normalized,
+        );
+        if normalized.is_empty() {
+            return;
+        }
+
+        let mut replaced = String::new();
+        replacements.push(&normalized, &mut replaced);
+        consume_replaced_txt_chunk(
+            &replaced,
+            options,
+            custom_pattern.as_ref(),
+            &mut line,
+            &mut chapters,
+            &mut current_title,
+            &mut current_content,
+        );
+    });
+
+    if normalized_pending_cr {
+        let mut replaced = String::new();
+        replacements.push("\n", &mut replaced);
+        consume_replaced_txt_chunk(
+            &replaced,
+            options,
+            custom_pattern.as_ref(),
+            &mut line,
+            &mut chapters,
+            &mut current_title,
+            &mut current_content,
+        );
+    }
+
+    let mut replaced = String::new();
+    replacements.finish(&mut replaced);
+    consume_replaced_txt_chunk(
+        &replaced,
+        options,
+        custom_pattern.as_ref(),
+        &mut line,
+        &mut chapters,
+        &mut current_title,
+        &mut current_content,
+    );
+
+    if !line.is_empty() {
+        append_txt_line(
+            &line,
+            options,
+            custom_pattern.as_ref(),
+            &mut chapters,
+            &mut current_title,
+            &mut current_content,
+        );
+    }
+    if !current_title.is_empty() || !current_content.is_empty() {
+        push_text_chapter(&mut chapters, &current_title, &current_content);
+    }
+
+    Ok(chapters)
+}
+
 fn split_txt_with_options(
     text: &str,
     options: &TxtParseOptions,
@@ -343,17 +609,7 @@ fn split_txt_with_options(
             );
         });
     } else {
-        let normalized = normalize_txt_text(text, options)?;
-        for line in normalized.lines() {
-            append_txt_line(
-                line,
-                options,
-                custom_pattern.as_ref(),
-                &mut chapters,
-                &mut current_title,
-                &mut current_content,
-            );
-        }
+        return split_txt_with_replacements_streaming(text, options);
     }
 
     if !current_title.is_empty() || !current_content.is_empty() {
@@ -1961,6 +2217,30 @@ mod tests {
         assert_eq!(book.chapters.len(), 2);
         assert_eq!(book.chapters[0].content, " 新词");
         assert_eq!(book.chapters[1].content, "新词");
+    }
+
+    #[test]
+    fn applies_txt_replacements_across_stream_chunks() {
+        let mut input = String::from("第一章\n");
+        while input.len() < 64 * 1024 - 2 {
+            input.push('a');
+        }
+        input.push_str("旧词\n尾");
+
+        let options = TxtParseOptions {
+            chapter_rule: TxtChapterRule::Auto,
+            custom_pattern: None,
+            normalize_full_width_space: false,
+            replacements: vec![TxtReplacement {
+                from: "旧词".to_string(),
+                to: "新词".to_string(),
+            }],
+        };
+        let book = parse_book_bytes_with_options("chunked-replacements.txt", input.as_bytes(), &options)
+            .expect("replacement should cross the streaming chunk boundary");
+
+        assert_eq!(book.chapters.len(), 1);
+        assert!(book.chapters[0].content.ends_with("新词\n尾"));
     }
 
     #[test]
