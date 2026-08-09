@@ -706,11 +706,10 @@ impl Database {
 
     pub fn source_failure_stats(&self) -> Result<SourceFailureStats, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let total: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM source_failure_history",
-            [],
-            |row| row.get(0),
-        )?;
+        let total: i64 =
+            connection.query_row("SELECT COUNT(*) FROM source_failure_history", [], |row| {
+                row.get(0)
+            })?;
 
         let mut reason_statement = connection.prepare(
             "SELECT reason_code, COUNT(*)
