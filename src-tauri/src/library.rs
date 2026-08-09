@@ -131,7 +131,7 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
     };
     let signature_match = match format {
         BookFormatKind::Txt => !bytes.is_empty(),
-        BookFormatKind::Epub => bytes.starts_with(b"PK\\x03\\x04"),
+        BookFormatKind::Epub => bytes.starts_with(b"PK\x03\x04"),
         BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => {
             has_mobi_header(bytes)
         }
@@ -185,7 +185,7 @@ fn detect_magic_format(bytes: &[u8]) -> BookFormatKind {
     if bytes.starts_with(b"%PDF-") {
         return BookFormatKind::Pdf;
     }
-    if bytes.starts_with(b"PK\\x03\\x04") {
+    if bytes.starts_with(b"PK\x03\x04") {
         return BookFormatKind::Epub;
     }
     if has_mobi_header(bytes) {
@@ -212,8 +212,8 @@ fn has_mobi_header(bytes: &[u8]) -> bool {
 }
 
 fn has_image_signature(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"\\x89PNG\\r\\n\\x1A\\n")
-        || bytes.starts_with(b"\\xFF\\xD8\\xFF")
+    bytes.starts_with(b"\x89PNG\r\n\x1A\n")
+        || bytes.starts_with(b"\xFF\xD8\xFF")
         || bytes.starts_with(b"GIF87a")
         || bytes.starts_with(b"GIF89a")
         || (bytes.starts_with(b"RIFF")
@@ -2202,7 +2202,7 @@ mod tests {
 
         let image_probe = probe_book_format(
             "cover.png",
-            b"\\x89PNG\\r\\n\\x1A\\nrest",
+            b"\x89PNG\r\n\x1A\nrest",
         );
         assert_eq!(image_probe.format, BookFormatKind::Image);
         assert_eq!(image_probe.support, FormatSupport::ProbeOnly);
