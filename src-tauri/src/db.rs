@@ -663,14 +663,12 @@ impl Database {
              ORDER BY created_at DESC, id DESC
              LIMIT ?2",
         )?;
-        let rows = statement.query_map(params![source_id, limit], source_failure_history_from_row)?;
+        let rows =
+            statement.query_map(params![source_id, limit], source_failure_history_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
 
-    pub fn clear_source_failure_history(
-        &self,
-        source_id: Option<&str>,
-    ) -> Result<usize, DbError> {
+    pub fn clear_source_failure_history(&self, source_id: Option<&str>) -> Result<usize, DbError> {
         let source_id = source_id.filter(|value| !value.trim().is_empty());
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let changed = match source_id {
@@ -1301,5 +1299,4 @@ mod tests {
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
-
 }
