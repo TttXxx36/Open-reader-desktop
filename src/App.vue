@@ -79,6 +79,15 @@ interface ReaderSettings {
   customAccent: string;
 }
 
+interface NextPagePolicy {
+  enabled: boolean;
+  max_depth: number;
+  max_pages: number;
+  max_bytes: number;
+  max_duration_secs: number;
+  same_host_only: boolean;
+}
+
 interface SourceValidation {
   valid: boolean;
   source: Record<string, unknown> | null;
@@ -278,6 +287,12 @@ interface RemoteChapterContent {
   debug_steps: SourceDebugStep[];
 }
 
+interface RemoteNextPageStatus {
+  label: string;
+  detail: string;
+  reason: string | null;
+}
+
 interface SourceSearchDiagnostics {
   source_id: string;
   source_name: string;
@@ -299,6 +314,15 @@ interface MultiSourceSearchResult {
 
 const SETTINGS_KEY = "open-reader.settings";
 const SETTINGS_VERSION = 2;
+const NEXT_PAGE_POLICY_KEY = "open-reader.next-page-policy";
+const DEFAULT_NEXT_PAGE_POLICY: NextPagePolicy = {
+  enabled: false,
+  max_depth: 2,
+  max_pages: 3,
+  max_bytes: 2 * 1024 * 1024,
+  max_duration_secs: 15,
+  same_host_only: true,
+};
 const DEFAULT_READER_SETTINGS: ReaderSettings = {
   version: SETTINGS_VERSION,
   fontFamily: "system",
@@ -337,6 +361,7 @@ const status = ref("正在加载书架…");
 const errorMessage = ref("");
 const isImporting = ref(false);
 const settings = ref<ReaderSettings>(loadSettings());
+const nextPagePolicy = ref<NextPagePolicy>(loadNextPagePolicy());
 const sourceBusy = ref(false);
 const sourceValidation = ref<SourceValidation | null>(null);
 const sources = ref<SourceSummary[]>([]);
@@ -410,6 +435,32 @@ const chapterBlocks = computed(() => parseContentBlocks(chapter.value));
 const remoteChapterParagraphs = computed(() =>
   remoteChapter.value?.content.split(/\n{2,}/).filter(Boolean) ?? [],
 );
+const remoteNextPageStatus = computed<RemoteNextPageStatus>(() => {
+  const content = remoteChapter.value;
+  if (!nextPagePolicy.value.enabled) {
+    return {
+      label: "自动追链已关闭",
+      detail: content?.next_url ? "后续链接已保留，不会发起额外请求。" : "本章没有待追踪的后续链接。",
+      reason: "disabled",
+    };
+  }
+  const policyStep = [...(content?.debug_steps ?? [])]
+    .reverse()
+    .find((step) => step.stage === "content.next.policy");
+  const reason = policyStep?.error?.match(/next URL\s+([a-z_]+)/)?.[1] ?? null;
+  if (reason) {
+    return {
+      label: "追链已停止：" + nextPageStopLabel(reason),
+      detail: content?.next_url ? "后续链接已保留，可手动刷新或关闭追链。" : "已保留已获取正文。",
+      reason,
+    };
+  }
+  return {
+    label: content?.next_url ? "追链已完成当前配额" : "追链已完成",
+    detail: content?.next_url ? "仍有后续链接，但不会超过安全配额。" : "没有待处理的后续链接。",
+    reason: null,
+  };
+});
 const readerStyle = computed(() => ({
   "--reader-font-family": readerFontStacks[settings.value.fontFamily],
   "--reader-font-size": String(settings.value.fontSize) + "px",
@@ -440,6 +491,13 @@ watch(settings, (value) => {
     }));
   } catch {
     // localStorage 不可用时保持阅读，不阻断正文渲染。
+  }
+}, { deep: true });
+watch(nextPagePolicy, (value) => {
+  try {
+    localStorage.setItem(NEXT_PAGE_POLICY_KEY, JSON.stringify(value));
+  } catch {
+    // 策略设置无法持久化时仍保持本次会话状态。
   }
 }, { deep: true });
 
@@ -511,12 +569,47 @@ function paginationStopLabel(reason: string) {
   } as Record<string, string>)[reason] ?? reason;
 }
 
+function nextPageStopLabel(reason: string) {
+  return ({
+    disabled: "未启用",
+    depth_limit: "达到深度上限",
+    page_limit: "达到页面上限",
+    byte_limit: "达到响应体上限",
+    time_limit: "达到时间上限",
+    same_origin: "跨源候选已拒绝",
+    cycle: "检测到环路",
+    invalid_next_url: "后续链接无效",
+    invalid_base_url: "基准链接无效",
+    quota_zero: "配额为零",
+    request_error: "后续请求失败",
+    parse_error: "后续页面解析失败",
+  } as Record<string, string>)[reason] ?? reason;
+}
+
 function normalizeHex(value: unknown, fallback: string) {
   return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function loadNextPagePolicy(): NextPagePolicy {
+  try {
+    const saved = JSON.parse(localStorage.getItem(NEXT_PAGE_POLICY_KEY) ?? "{}") as unknown;
+    const payload = isRecord(saved) ? saved : {};
+    return {
+      ...DEFAULT_NEXT_PAGE_POLICY,
+      enabled: payload.enabled === true,
+      max_depth: clampNumber(payload.max_depth, DEFAULT_NEXT_PAGE_POLICY.max_depth, 1, 2),
+      max_pages: clampNumber(payload.max_pages, DEFAULT_NEXT_PAGE_POLICY.max_pages, 1, 3),
+      max_bytes: clampNumber(payload.max_bytes, DEFAULT_NEXT_PAGE_POLICY.max_bytes, 64 * 1024, 2 * 1024 * 1024),
+      max_duration_secs: clampNumber(payload.max_duration_secs, DEFAULT_NEXT_PAGE_POLICY.max_duration_secs, 1, 15),
+      same_host_only: payload.same_host_only !== false,
+    };
+  } catch {
+    return { ...DEFAULT_NEXT_PAGE_POLICY };
+  }
 }
 
 function loadSettings(): ReaderSettings {
@@ -591,6 +684,10 @@ function closeSettings() {
 
 function resetSettings() {
   settings.value = { ...DEFAULT_READER_SETTINGS };
+}
+
+function resetNextPagePolicy() {
+  nextPagePolicy.value = { ...DEFAULT_NEXT_PAGE_POLICY };
 }
 
 async function loadSources() {
@@ -1082,6 +1179,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
       sourceId: loaded.source_id,
       chapter: firstChapter,
       forceRefresh: false,
+      nextPagePolicy: nextPagePolicy.value,
       operationId,
     });
     remoteBook.value = loaded;
@@ -1118,7 +1216,8 @@ async function loadRemoteChapter(chapterItem: RemoteChapter, forceRefresh = fals
     remoteChapter.value = await invoke<RemoteChapterContent>("fetch_source_chapter", {
       sourceId: remoteBook.value.source_id,
       chapter: chapterItem,
-      forceRefresh,
+      forceRefresh: forceRefresh || nextPagePolicy.value.enabled,
+      nextPagePolicy: nextPagePolicy.value,
       operationId,
     });
     remoteChapterRef.value = chapterItem;
@@ -1164,6 +1263,7 @@ async function refreshRemoteBook() {
       sourceId: loaded.source_id,
       chapter: target,
       forceRefresh: true,
+      nextPagePolicy: nextPagePolicy.value,
       operationId,
     });
     remoteBook.value = loaded;
@@ -1598,7 +1698,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
@@ -1773,6 +1873,46 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
       </header>
 
       <ReaderSettingsPanel v-model="settings" @reset="resetSettings" />
+
+      <section class="settings-panel next-page-settings">
+        <div class="settings-section-heading">
+          <div>
+            <span class="eyebrow">REMOTE SOURCE SAFETY</span>
+            <h2>正文分页追链</h2>
+          </div>
+          <label class="policy-toggle">
+            <input v-model="nextPagePolicy.enabled" type="checkbox" />
+            <span>{{ nextPagePolicy.enabled ? "已启用" : "默认关闭" }}</span>
+          </label>
+        </div>
+        <p class="settings-note">
+          仅对明确支持 nextUrl / nextPage 的书源生效；服务端仍会强制同源、深度、页面、响应体和时间上限。
+          开启后请点击“刷新内容”使当前章节重新请求；取消按钮可随时终止远端请求。
+        </p>
+        <div v-if="nextPagePolicy.enabled" class="settings-grid next-page-grid">
+          <label class="settings-field">
+            <span>最大深度 <strong>{{ nextPagePolicy.max_depth }}</strong></span>
+            <input v-model.number="nextPagePolicy.max_depth" type="range" min="1" max="2" step="1" />
+          </label>
+          <label class="settings-field">
+            <span>最大页面数 <strong>{{ nextPagePolicy.max_pages }}</strong></span>
+            <input v-model.number="nextPagePolicy.max_pages" type="range" min="1" max="3" step="1" />
+          </label>
+          <label class="settings-field">
+            <span>总响应体 <strong>{{ formatBytes(nextPagePolicy.max_bytes) }}</strong></span>
+            <input v-model.number="nextPagePolicy.max_bytes" type="range" min="65536" max="2097152" step="65536" />
+          </label>
+          <label class="settings-field">
+            <span>总耗时 <strong>{{ nextPagePolicy.max_duration_secs }} 秒</strong></span>
+            <input v-model.number="nextPagePolicy.max_duration_secs" type="range" min="1" max="15" step="1" />
+          </label>
+          <label class="policy-check">
+            <input v-model="nextPagePolicy.same_host_only" type="checkbox" />
+            <span>仅允许同源后续链接</span>
+          </label>
+        </div>
+        <button class="secondary-button policy-reset" type="button" @click="resetNextPagePolicy">恢复追链默认值</button>
+      </section>
     </section>
 
     <RemoteReaderView v-else-if="remoteBook && remoteChapter" />
@@ -3219,6 +3359,30 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   color: #8391a6;
   font-size: 12px;
   line-height: 1.7;
+}
+
+.next-page-settings {
+  margin-top: 18px;
+}
+
+.policy-toggle,
+.policy-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #c6d1e2;
+  font-size: 13px;
+}
+
+.policy-toggle input,
+.policy-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #86dfc2;
+}
+
+.policy-reset {
+  margin-top: 22px;
 }
 
 @media (max-width: 720px) {
