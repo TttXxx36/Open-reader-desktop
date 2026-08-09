@@ -18,11 +18,12 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - Rust 夹具覆盖自定义正则、不拆分章节、无效正则、全角空格/替换和 UTF-16LE/BE、GB18030 编码；GitHub Actions run [31325019515](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31325019515)：前端类型检查/构建/UI 合约、Rust fmt/check 和 85 个 Rust 测试通过。
 - 后续在 M8.4 增加 TXT 流式解析和性能阈值。
 
-## M8.3 EPUB 阅读结构完善
+## M8.3 EPUB 阅读结构完善（首个切片已完成）
 
-- 增加安全的内部链接/目录定位模型，拒绝脚本协议、外链自动跳转和跨文档未授权资源。
-- 继续完善有限 CSS 白名单、标题层级、强调、引用、图片替代文本和缺失资源提示；不执行脚本、事件属性或远程字体。
-- 为损坏 container/OPF/manifest/spine、重复 ID、循环目录和缺失章节增加可恢复错误夹具。
+- `ContentDocument` 已增加 `links` 元数据，收集片段链接和相对文档链接的可读文本；只保留安全的相对/片段目标。
+- 脚本协议、data/http/https 外链、协议相对链接、绝对路径和包含 `..` 的穿越路径均不会进入链接模型，也不会触发自动跳转。
+- GitHub Actions run [31325599182](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31325599182)：前端检查、Rust fmt/check 和 86 个 Rust 测试通过。
+- 剩余工作：前端目录定位与章节跳转、有限 CSS 白名单、标题层级/缺失资源提示，以及损坏 container/OPF/manifest/spine 的恢复夹具。
 
 ## M8.4 大文件与性能基线
 
