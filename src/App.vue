@@ -1683,6 +1683,61 @@ function exportSourceDiagnostics() {
   sourceTransferMessage.value = "已导出脱敏诊断快照（" + steps.length + " 个步骤）";
 }
 
+function exportSourceFailureReport() {
+  const history = (sourceFailureHistory.value ?? []).slice(0, 64).map((failure) => ({
+    id: truncateDiagnostic(failure.id, 128),
+    source_id: truncateDiagnostic(failure.source_id, 128),
+    source_name: truncateDiagnostic(failure.source_name, 128),
+    stage: truncateDiagnostic(failure.stage, 64),
+    reason_code: truncateDiagnostic(failure.reason_code, 64),
+    operation_id: failure.operation_id ? truncateDiagnostic(failure.operation_id, 128) : null,
+    message: sanitizeDiagnosticMessage(failure.message),
+    created_at: truncateDiagnostic(failure.created_at, 64),
+  }));
+  const stats = sourceFailureStats.value
+    ? {
+        total: Math.max(0, Math.round(sourceFailureStats.value.total)),
+        by_reason: sourceFailureStats.value.by_reason.slice(0, 32).map((item) => ({
+          code: truncateDiagnostic(item.code, 64),
+          count: Math.max(0, Math.round(item.count)),
+        })),
+        by_stage: sourceFailureStats.value.by_stage.slice(0, 32).map((item) => ({
+          code: truncateDiagnostic(item.code, 64),
+          count: Math.max(0, Math.round(item.count)),
+        })),
+      }
+    : null;
+  const report = {
+    schema_version: 1,
+    report_type: "source_failure_history",
+    generated_at: new Date().toISOString(),
+    scope: sourceId.value ? "current_source" : "all_sources",
+    source_id: sourceId.value ? truncateDiagnostic(sourceId.value, 128) : null,
+    stats,
+    entries: history,
+    truncated_entries: (sourceFailureHistory.value?.length ?? 0) > history.length,
+    privacy: [
+      "仅导出本机失败摘要，不上传或包含关键词、正文、Cookie、请求头",
+      "失败消息中的 URL 查询参数和片段已移除",
+      "任务 ID 仅用于关联同一次本地请求，不代表账号或身份信息",
+    ],
+  };
+  const payload = JSON.stringify(report, null, 2);
+  if (payload.length > MAX_DIAGNOSTIC_BYTES) {
+    errorMessage.value = "失败报告超过 256 KB 限制，请先清理历史后重试";
+    return;
+  }
+
+  const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "open-reader-source-failures-" + new Date().toISOString().slice(0, 10) + ".json";
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+  sourceTransferMessage.value = "已导出脱敏失败报告（" + history.length + " 条）";
+}
+
 async function validateSource() {
   sourceBusy.value = true;
   sourceValidation.value = null;
@@ -1841,7 +1896,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
