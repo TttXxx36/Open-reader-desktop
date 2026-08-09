@@ -237,9 +237,7 @@ fn decode_text(bytes: &[u8]) -> Result<Cow<'_, str>, ImportError> {
         return Err(ImportError::TextDecode);
     }
     Ok(Cow::Owned(
-        text.into_owned()
-            .trim_start_matches('\u{feff}')
-            .to_string(),
+        text.into_owned().trim_start_matches('\u{feff}').to_string(),
     ))
 }
 
