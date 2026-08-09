@@ -10,7 +10,7 @@ use db::{
     SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::{
-    parse_book_bytes_with_options, preview_book_bytes,
+    parse_book_bytes_with_options, preview_book_bytes, require_importable_format,
     probe_book_format as probe_book_format_bytes, BookFormatProbe, BookImportPreview,
     TxtParseOptions,
 };
@@ -122,6 +122,7 @@ fn import_book_impl(
         return Err("文件超过 64 MB 限制".to_string());
     }
 
+    require_importable_format(&file_name, &bytes).map_err(|error| error.to_string())?;
     let parsed = parse_book_bytes_with_options(&file_name, &bytes, &txt_options)
         .map_err(|error| error.to_string())?;
     database
@@ -159,6 +160,7 @@ fn preview_book_import(
         return Err("文件超过 64 MB 限制".to_string());
     }
 
+    require_importable_format(&file_name, &bytes).map_err(|error| error.to_string())?;
     preview_book_bytes(&file_name, &bytes, &txt_options.unwrap_or_default())
         .map_err(|error| error.to_string())
 }
