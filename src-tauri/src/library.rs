@@ -106,6 +106,8 @@ pub struct ContentDocument {
 pub struct ContentLink {
     pub label: String,
     pub href: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_chapter: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +117,8 @@ pub struct ContentBlock {
     pub level: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
     #[serde(default)]
     pub spans: Vec<ContentSpan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -489,7 +493,7 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
         .filter_map(|tag| extract_attribute(&tag, "idref"))
         .collect();
 
-    let mut chapters = Vec::new();
+    let mut parsed_chapters: Vec<(String, String, ContentDocument)> = Vec::new();
     for id in spine {
         let Some(item) = manifest.get(&id) else {
             continue;
@@ -505,24 +509,34 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
         if document.blocks.is_empty() {
             continue;
         }
-        let content = serde_json::to_string(&document)
-            .map_err(|error| ImportError::InvalidEpub(format!("内容块编码失败：{error}")))?;
 
-        let title = ["h1", "h2", "h3"]
+        let chapter_title = ["h1", "h2", "h3"]
             .iter()
             .find_map(|tag| extract_element_text(&html, tag))
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| format!("第 {} 章", chapters.len() + 1));
+            .unwrap_or_else(|| format!("第 {} 章", parsed_chapters.len() + 1));
+        parsed_chapters.push((path, chapter_title, document));
+    }
 
+    if parsed_chapters.is_empty() {
+        return Err(ImportError::InvalidEpub("未找到可阅读章节".to_string()));
+    }
+
+    let mut chapter_indices = HashMap::new();
+    for (index, (path, _, _)) in parsed_chapters.iter().enumerate() {
+        chapter_indices.insert(path.clone(), index);
+    }
+
+    let mut chapters = Vec::with_capacity(parsed_chapters.len());
+    for (path, chapter_title, mut document) in parsed_chapters {
+        resolve_epub_link_targets(&mut document, &path, &chapter_indices);
+        let content = serde_json::to_string(&document)
+            .map_err(|error| ImportError::InvalidEpub(format!("内容块编码失败：{error}")))?;
         chapters.push(ParsedChapter {
-            title,
+            title: chapter_title,
             content,
             content_format: CONTENT_FORMAT_BLOCKS_V1.to_string(),
         });
-    }
-
-    if chapters.is_empty() {
-        return Err(ImportError::InvalidEpub("未找到可阅读章节".to_string()));
     }
 
     Ok(ParsedBook {
@@ -769,12 +783,37 @@ fn extract_epub_internal_links(html: &str) -> Vec<ContentLink> {
                 .iter()
                 .any(|link: &ContentLink| link.href == href && link.label == label)
         {
-            links.push(ContentLink { label, href });
+            links.push(ContentLink {
+                label,
+                href,
+                target_chapter: None,
+            });
         }
         cursor = close_start + "</a>".len();
     }
 
     links
+}
+
+fn resolve_epub_link_targets(
+    document: &mut ContentDocument,
+    chapter_path: &str,
+    chapter_indices: &HashMap<String, usize>,
+) {
+    let chapter_base = chapter_path
+        .rsplit_once('/')
+        .map(|(base, _)| base)
+        .unwrap_or_default();
+
+    for link in &mut document.links {
+        let target_path = link.href.split('#').next().unwrap_or_default();
+        let target_path = if target_path.is_empty() {
+            chapter_path.to_string()
+        } else {
+            join_zip_path(chapter_base, target_path)
+        };
+        link.target_chapter = chapter_indices.get(&target_path).copied();
+    }
 }
 
 fn safe_epub_anchor_id(raw: &str) -> Option<String> {
@@ -794,6 +833,48 @@ fn safe_epub_anchor_id(raw: &str) -> Option<String> {
     Some(value)
 }
 
+fn safe_epub_inline_style(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.len() > 512 {
+        return None;
+    }
+
+    let mut declarations = Vec::new();
+    for declaration in raw.split(';').take(8) {
+        let Some((property, value)) = declaration.split_once(':') else {
+            continue;
+        };
+        let property = property.trim().to_ascii_lowercase();
+        let value = value.trim().to_ascii_lowercase();
+        if value.is_empty()
+            || value.len() > 64
+            || value.bytes().any(|byte| {
+                matches!(byte, b'{' | b'}' | b'<' | b'>' | b'"' | b'\'')
+            })
+        {
+            continue;
+        }
+
+        let allowed = match property.as_str() {
+            "text-align" => matches!(value.as_str(), "left" | "right" | "center" | "justify"),
+            "font-style" => matches!(value.as_str(), "normal" | "italic" | "oblique"),
+            "font-weight" => {
+                matches!(value.as_str(), "normal" | "bold" | "bolder" | "lighter")
+                    || (value.len() == 3 && value.chars().all(|character| character.is_ascii_digit()))
+            }
+            "text-decoration" => {
+                matches!(value.as_str(), "none" | "underline" | "line-through")
+            }
+            _ => false,
+        };
+        if allowed && declarations.len() < 4 {
+            declarations.push(format!("{property}: {value}"));
+        }
+    }
+
+    (!declarations.is_empty()).then(|| declarations.join("; "))
+}
+
 fn parse_html_document(html: &str) -> ContentDocument {
     let chars: Vec<char> = html.chars().collect();
     let mut blocks = Vec::new();
@@ -803,6 +884,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
     let mut quote_depth = 0usize;
     let mut heading_level = None;
     let mut block_anchor: Option<String> = None;
+    let mut block_style: Option<String> = None;
     let mut emphasis_stack: Vec<String> = Vec::new();
     let mut ignored_tag: Option<String> = None;
     let mut index = 0usize;
@@ -864,6 +946,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     quote_depth,
                     heading_level,
                     block_anchor.take(),
+                    block_style.take(),
                 );
                 quote_depth = quote_depth.saturating_sub(1);
             } else if is_block_html_tag(&name) {
@@ -875,6 +958,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     quote_depth,
                     heading_level,
                     block_anchor.take(),
+                    block_style.take(),
                 );
             }
         } else if name == "script" || name == "style" || name == "noscript" {
@@ -890,10 +974,13 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
+                    block_style.take(),
             );
             quote_depth = quote_depth.saturating_add(1);
             block_anchor = extract_html_attribute(&raw_tag, "id")
                 .and_then(|value| safe_epub_anchor_id(&value));
+            block_style = extract_html_attribute(&raw_tag, "style")
+                .and_then(|value| safe_epub_inline_style(&value));
         } else if name == "img" {
             push_html_block(
                 &mut blocks,
@@ -903,6 +990,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
+                    block_style.take(),
             );
             let alt = extract_html_attribute(&raw_tag, "alt")
                 .map(|value| decode_entities(&value).trim().to_string())
@@ -914,6 +1002,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 kind: "image".to_string(),
                 level: None,
                 anchor: None,
+                style: None,
                 spans: Vec::new(),
                 alt,
                 src,
@@ -927,6 +1016,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
+                    block_style.take(),
             );
         } else if is_emphasis_html_tag(&name) {
             push_html_span(
@@ -945,6 +1035,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 quote_depth,
                 heading_level,
                 block_anchor.take(),
+                    block_style.take(),
             );
             heading_level = heading_level_from_tag(&name);
             block_anchor = extract_html_attribute(&raw_tag, "id")
@@ -962,6 +1053,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
         quote_depth,
         heading_level,
         block_anchor.take(),
+                    block_style.take(),
     );
 
     ContentDocument {
@@ -1059,6 +1151,7 @@ fn push_html_block(
     quote_depth: usize,
     heading_level: Option<u8>,
     anchor: Option<String>,
+    style: Option<String>,
 ) {
     push_html_span(spans, current, &[], pending_space);
     if spans.is_empty() {
@@ -1076,6 +1169,7 @@ fn push_html_block(
         kind: kind.to_string(),
         level: heading_level,
         anchor,
+        style,
         spans: std::mem::take(spans),
         alt: None,
         src: None,
@@ -1607,6 +1701,7 @@ mod tests {
                     kind: "image".to_string(),
                     level: None,
                     anchor: None,
+                    style: None,
                     spans: Vec::new(),
                     alt: Some("封面".to_string()),
                     src: Some("../Images/cover.jpg".to_string()),
@@ -1635,6 +1730,51 @@ mod tests {
             Some("data:image/jpeg;base64,AAAA")
         );
         assert!(document.blocks[1].src.is_none());
+    }
+
+    #[test]
+    fn resolves_epub_links_to_readable_chapters() {
+        let mut document = ContentDocument {
+            version: 1,
+            blocks: Vec::new(),
+            links: vec![
+                ContentLink {
+                    label: "本章".to_string(),
+                    href: "#intro".to_string(),
+                    target_chapter: None,
+                },
+                ContentLink {
+                    label: "下一章".to_string(),
+                    href: "chapter-2.xhtml#part".to_string(),
+                    target_chapter: None,
+                },
+            ],
+        };
+        let mut chapter_indices = HashMap::new();
+        chapter_indices.insert("OPS/Text/chapter-1.xhtml".to_string(), 0);
+        chapter_indices.insert("OPS/Text/chapter-2.xhtml".to_string(), 1);
+
+        resolve_epub_link_targets(
+            &mut document,
+            "OPS/Text/chapter-1.xhtml",
+            &chapter_indices,
+        );
+
+        assert_eq!(document.links[0].target_chapter, Some(0));
+        assert_eq!(document.links[1].target_chapter, Some(1));
+    }
+
+    #[test]
+    fn keeps_only_whitelisted_epub_inline_styles() {
+        let document = parse_html_document(
+            r##"<p id="body" style="text-align: center; color: red; font-weight: 700">正文</p>"##,
+        );
+
+        assert_eq!(
+            document.blocks[0].style.as_deref(),
+            Some("text-align: center; font-weight: 700")
+        );
+        assert!(safe_epub_inline_style("position: fixed").is_none());
     }
 
     #[test]
