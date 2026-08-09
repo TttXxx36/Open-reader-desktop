@@ -177,6 +177,19 @@ pub struct SourceFailureHistory {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceFailureCount {
+    pub code: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceFailureStats {
+    pub total: usize,
+    pub by_reason: Vec<SourceFailureCount>,
+    pub by_stage: Vec<SourceFailureCount>,
+}
+
 impl Database {
     pub fn open(app_data_dir: &Path) -> Result<Self, DbError> {
         fs::create_dir_all(app_data_dir)?;
@@ -645,6 +658,16 @@ impl Database {
                 bounded_history_text(message, 512),
             ],
         )?;
+        connection.execute(
+            "DELETE FROM source_failure_history
+             WHERE id IN (
+                 SELECT id
+                 FROM source_failure_history
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT -1 OFFSET 512
+             )",
+            [],
+        )?;
         Ok(())
     }
 
@@ -679,6 +702,51 @@ impl Database {
             None => connection.execute("DELETE FROM source_failure_history", [])?,
         };
         Ok(changed)
+    }
+
+    pub fn source_failure_stats(&self) -> Result<SourceFailureStats, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let total: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM source_failure_history",
+            [],
+            |row| row.get(0),
+        )?;
+
+        let mut reason_statement = connection.prepare(
+            "SELECT reason_code, COUNT(*)
+             FROM source_failure_history
+             GROUP BY reason_code
+             ORDER BY reason_code",
+        )?;
+        let by_reason = reason_statement
+            .query_map([], |row| {
+                Ok(SourceFailureCount {
+                    code: row.get(0)?,
+                    count: usize::try_from(row.get::<_, i64>(1)?.max(0)).unwrap_or(usize::MAX),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut stage_statement = connection.prepare(
+            "SELECT stage, COUNT(*)
+             FROM source_failure_history
+             GROUP BY stage
+             ORDER BY stage",
+        )?;
+        let by_stage = stage_statement
+            .query_map([], |row| {
+                Ok(SourceFailureCount {
+                    code: row.get(0)?,
+                    count: usize::try_from(row.get::<_, i64>(1)?.max(0)).unwrap_or(usize::MAX),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(SourceFailureStats {
+            total: usize::try_from(total.max(0)).unwrap_or(usize::MAX),
+            by_reason,
+            by_stage,
+        })
     }
 
     pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
@@ -1291,11 +1359,12 @@ mod tests {
                 .expect("all history should clear"),
             1
         );
-        assert!(database
-            .list_source_failure_history(None, 10)
-            .expect("history should be empty")
-            .is_empty());
-
+        let stats = database
+            .source_failure_stats()
+            .expect("failure stats should read");
+        assert_eq!(stats.total, 0);
+        assert!(stats.by_reason.is_empty());
+        assert!(stats.by_stage.is_empty());
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
