@@ -40,9 +40,9 @@ URL 回退链中只有首个成功响应会执行一次规则评估；失败候�
 
 ## 4. 聚合键、隐私与生命周期
 
-聚合键为 `source_id + stage + rule_key`。`rule_key` 只允许固定字段名：`item`、`title`、`author`、`url`、`intro`、`content`、`next`、`replaceRules`；不得存储原始规则、关键词、正文、请求头、Cookie 或完整 URL。
+聚合键为 `source_id + stage + rule_key`。`rule_key` 只允许固定字段名：`item`、`title`、`author`、`url`、`intro`、`cover`、`content`、`next`；不得存储原始规则、关键词、正文、请求头、Cookie 或完整 URL。
 
-建议的 SQLite 0011 表字段：
+SQLite 0011 创建基础表，0012 为现有表增加 `skipped` 字段；当前实现字段如下：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -53,6 +53,7 @@ URL 回退链中只有首个成功响应会执行一次规则评估；失败候�
 | `successes` | 阶段/字段成功次数 |
 | `no_matches` | 语法有效但没有值的次数 |
 | `failures` | 确定性规则错误次数 |
+| `skipped` | 未配置或被策略跳过的次数；不进入 attempts 分母 |
 | `updated_at` | 最近更新时间 |
 
 删除书源、replace-all 导入或恢复快照时一并删除对应聚合；旧数据库迁移失败不得删除原书源。指标表不做远程同步，不建立按关键词或正文的历史明细。
@@ -60,7 +61,7 @@ URL 回退链中只有首个成功响应会执行一次规则评估；失败候�
 ## 5. 报告与 UI 约定
 
 - `source_metrics.request_metrics` 保持现有语义；新增可选 `rule_metrics`，旧报告读取方缺少该字段时按“未采集”处理。
-- 书源页按阶段展示 attempts、success、no-match、failure、success rate；字段明细只展示固定 `rule_key`，不展示规则原文。
+- 书源页按阶段展示 attempts、success、no-match、failure、skipped、success rate；字段明细只展示固定 `rule_key`，不展示规则原文；零观测时显示 `observed=false` 的可操作提示。
 - 诊断报告明确写出两个分母：网络失败率的分母是已完成网络请求，规则成功率的分母是规则评估 attempts；取消、缓存和未配置规则的排除原因要保留在隐私/语义说明中。
 - 所有指标继续本地导出；不新增自动上报、站点健康评分或跨用户排行榜。
 
@@ -74,7 +75,7 @@ URL 回退链中只有首个成功响应会执行一次规则评估；失败候�
 4. URL 回退链：失败候选不计规则 attempts，首个成功候选只计一次。
 5. 分页/next URL：每个成功响应各计一次；策略拒绝、取消、超时和超体积不计规则 attempts。
 6. 新鲜缓存命中与 stale 回退：都不计规则 attempts；分别保持现有 cache hit 和失败语义。
-7. `source_id + stage + rule_key` 聚合、0011 升级、删除书源和 replace-all 回滚；旧报告缺少 `rule_metrics` 仍可读取。
+7. `source_id + stage + rule_key` 聚合、0011/0012 升级、删除书源和 replace-all 回滚；旧报告缺少 `rule_metrics` 仍可读取。
 8. 统计边界：零观测返回 `observed=false`；计数和比率不允许为负数，`success + no_matches + failures == attempts` 始终成立。
 
-完成以上设计和夹具后，才进入 M7.5i 的代码切片；在此之前不把任何规则成功率写入现有请求指标，也不引入远程遥测。
+M7.5i 的 SQLite 0011、规则事件、报告/UI 可选字段已实现；M7.5j 又补齐字段级 rule_key、skipped 计数和 SQLite 0012 升级，远程 CI run 31322235077 的 76 个 Rust 测试通过。仍保持本地-only、无远程遥测；后续只补更细的授权夹具和 M8 内容格式能力。
