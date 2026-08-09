@@ -6,7 +6,8 @@ mod xpath_poc;
 
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceFailureHistory,
-    SourceFailureStats, SourceMetadata, SourceSnapshotSummary, SourceSummary, SourceWrite,
+    SourceFailureStats, SourceMetadata, SourceRequestMetrics, SourceSnapshotSummary, SourceSummary,
+    SourceWrite,
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
@@ -1076,7 +1077,10 @@ async fn fetch_source_book(
     };
     cancellation.remove(&operation_id);
     let detail: SourceBookDetail = match fetch_result {
-        Ok(detail) => detail,
+        Ok(detail) => {
+            record_source_request_success(&database, &summary.id, "book");
+            detail
+        },
         Err(message) => {
             record_source_failure(
                 &database,
@@ -1195,6 +1199,7 @@ async fn fetch_source_chapter(
     cancellation.remove(&operation_id);
     let result = match fetch_result {
         Ok(content) => {
+            record_source_request_success(&database, &summary.id, "chapter");
             let mut result = RemoteChapterContent::from(content);
             result.debug_steps = debug_steps;
             result
@@ -1323,6 +1328,12 @@ mod tests {
     }
 }
 
+fn record_source_request_success(database: &Database, source_id: &str, stage: &str) {
+    if let Err(error) = database.record_source_request_outcome(source_id, stage, true) {
+        eprintln!("unable to record source request success metric: {error}");
+    }
+}
+
 fn record_source_failure(
     database: &Database,
     source_id: &str,
@@ -1333,6 +1344,9 @@ fn record_source_failure(
 ) {
     if message == "书源请求已取消" {
         return;
+    }
+    if let Err(error) = database.record_source_request_outcome(source_id, stage, false) {
+        eprintln!("unable to record source request failure metric: {error}");
     }
     if let Err(error) = database.record_source_failure_history(
         source_id,
@@ -1363,6 +1377,22 @@ fn record_source_failures(
     }
 }
 
+fn record_source_search_successes(
+    database: &Database,
+    diagnostics: &[source::SourceSearchDiagnostics],
+    failures: &[SourceSearchFailure],
+) {
+    for diagnostic in diagnostics {
+        if failures
+            .iter()
+            .any(|failure| failure.source_id == diagnostic.source_id)
+        {
+            continue;
+        }
+        record_source_request_success(database, &diagnostic.source_id, "search");
+    }
+}
+
 #[tauri::command]
 fn list_source_failure_history(
     database: tauri::State<'_, Database>,
@@ -1380,6 +1410,15 @@ fn get_source_failure_stats(
 ) -> Result<SourceFailureStats, String> {
     database
         .source_failure_stats()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_source_request_metrics(
+    database: tauri::State<'_, Database>,
+) -> Result<SourceRequestMetrics, String> {
+    database
+        .source_request_metrics()
         .map_err(|error| error.to_string())
 }
 
@@ -1445,6 +1484,7 @@ async fn search_sources(
     result.enabled_sources = enabled_sources;
     result.failures.splice(0..0, failures);
     record_source_failures(&database, &result.failures, Some(&operation_id));
+    record_source_search_successes(&database, &result.diagnostics, &result.failures);
     Ok(result)
 }
 
@@ -1498,6 +1538,7 @@ async fn retry_source_search(
     let mut result = search_result?;
     result.enabled_sources = 1;
     record_source_failures(&database, &result.failures, Some(&operation_id));
+    record_source_search_successes(&database, &result.diagnostics, &result.failures);
     Ok(result)
 }
 
@@ -1579,6 +1620,7 @@ pub fn run() {
             list_source_failure_history,
             clear_source_failure_history,
             get_source_failure_stats,
+            get_source_request_metrics,
             fetch_source_book,
             fetch_source_chapter,
             run_source_pipeline,
