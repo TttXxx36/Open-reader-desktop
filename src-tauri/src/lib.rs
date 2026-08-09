@@ -1326,11 +1326,10 @@ async fn retry_source_search(
         }
     };
     cancellation.remove(&operation_id);
-    search_result
-        .map(|mut result| {
-            result.enabled_sources = 1;
-            result
-        })
+    search_result.map(|mut result| {
+        result.enabled_sources = 1;
+        result
+    })
 }
 
 #[tauri::command]
