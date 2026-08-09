@@ -1787,6 +1787,15 @@ mod tests {
     }
 
     #[test]
+    fn reports_peak_rss_on_supported_platforms() {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        assert!(peak_rss_bytes().is_some());
+
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        assert!(peak_rss_bytes().is_none());
+    }
+
+    #[test]
     fn rejects_unsafe_epub_entry_paths() {
         assert!(!is_safe_zip_entry_path("../META-INF/container.xml"));
         assert!(!is_safe_zip_entry_path("/OPS/content.xhtml"));
