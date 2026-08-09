@@ -76,7 +76,7 @@
 
 ### M8 — 阅读内容与本地格式 v2
 
-详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界与 M8.2 TXT 解析可配置化均已完成；M8.3 已完成安全链接索引、块锚点、跨章节片段跳转、有限 CSS 白名单和损坏 EPUB 恢复边界。M8.4 首个 TXT 行累积切片已完成，移除每章行字符串缓存并通过约 1 MiB/512 章夹具；CI run [31328789321](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31328789321) 通过，Rust 93 tests。下一步补齐分块编码解码、时间/内存阈值。
+详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界与 M8.2 TXT 解析可配置化均已完成；M8.3 已完成安全链接索引、块锚点、跨章节片段跳转、有限 CSS 白名单和损坏 EPUB 恢复边界。M8.4 首个 TXT 行累积切片已完成，移除每章行字符串缓存并通过约 1 MiB/512 章夹具；随后完成单次字符扫描的 CRLF/CR 与全角空格归一化，CI run [31329875168](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31329875168) 通过，Rust 94 tests。下一步补齐分块编码解码、时间/内存阈值。
 
 - EPUB：完善目录、章节标题、字体、图片、链接和基础 CSS 白名单，继续禁止脚本、事件属性、危险 URL 和无限资源。
 - TXT：编码探测、章节规则配置、全角空格/缩进、替换词和大文件流式解析。
