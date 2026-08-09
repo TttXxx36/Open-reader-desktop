@@ -192,12 +192,13 @@ M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组
 - 新增 [本地书源失败报告格式](source-failure-report-schema.md)，固定 `schema_version: 1`、字段语义、旧记录 `operation_id = null` 的迁移规则、未知字段处理和隐私边界。
 - 书源安全面板与诊断/失败报告增加 `source_metrics`：总/启用书源、审计通过/关注数、失败记录数、缓存占用，以及 SQLite 0010 聚合的网络请求成功/失败/缓存命中次数和明确分母的比例；取消请求和 stale 回退不计入成功/失败/命中。GitHub Actions run [31318523294](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31318523294) 已通过前端检查、Rust fmt/check 和 74 个 Rust 测试。
 
-### M7.5i 规则执行指标边界设计（设计已完成，代码待实现）
+### M7.5i 规则执行指标（首个实现切片已完成）
 
-- 新增 [书源规则执行指标边界](source-rule-metrics.md)，把网络请求指标与响应体规则解析指标分开，固定 `search`、`book_info`、`toc`、`content` 四个阶段的评估单位、成功判定、`no_match`/`failure`/`skipped` 状态和分母公式。
-- 设计明确 URL 回退链、分页/next URL、缓存命中、stale 回退、取消/策略拒绝和未配置规则的排除边界；聚合键只使用 source_id、阶段和固定 rule_key，不记录规则原文、关键词、正文、请求头或完整 URL。
-- 已列出 8 类授权合成夹具与迁移/回滚验收；下一小步实现 SQLite 0011、纯分类函数和报告/UI 可选字段，继续保持本地-only、无远程遥测。
-
+- 新增 SQLite 0011 `source_rule_metrics`，按 `source_id + stage + rule_key` 保存四个解析阶段（`search`、`book_info`、`toc`、`content`）的 attempts、successes、no_matches 和 failures；`delete_source`、replace-all 导入和迁移路径都会清理或保留一致的指标状态。
+- SourceEngine 在搜索分页、书籍标题、目录条目、章节正文及受限 next-page 正文成功路径发出规则评估事件；解析错误和明确 no-match 错误分类为 failure/no_match，网络、取消、缓存和策略拒绝不会伪装成规则失败。首个切片使用 `item`、`title`、`content` 等必需输出代理键，字段级可选规则仍留待后续。
+- 新增 `get_source_rule_metrics` 命令和书源页汇总，展示 attempts、success/no-match/failure、成功率/失败率和按规则分解；没有观测值时保留 `observed=false`。诊断报告的 `source_metrics.rule_metrics` 为可选字段，继续遵守本地-only 和脱敏边界。
+- 分母固定为 `attempts = successes + no_matches + failures`；新鲜缓存命中、stale 回退和取消不重复执行或进入规则分母。GitHub Actions run [31320769641](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31320769641) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 **76 个 Rust 测试**。
+- 后续小步：补充字段级规则键和 `skipped` 的显式可观测展示，再用授权合成夹具验证分页/next URL、缓存和取消边界；继续保持默认不执行脚本和 XPath。
 ## GitHub 执行方式
 
 每个子阶段拆为 Issue → 小 PR → CI → 兼容性矩阵更新 → 路线图记录。前端 typecheck/build/UI contract、Rust fmt/check/test 必须通过；涉及安装器的任务额外等待 M6.5 Windows Actions 验收。本地不执行构建或安装。
