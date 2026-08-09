@@ -113,6 +113,8 @@ pub struct ContentBlock {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
     #[serde(default)]
     pub spans: Vec<ContentSpan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -775,6 +777,23 @@ fn extract_epub_internal_links(html: &str) -> Vec<ContentLink> {
     links
 }
 
+fn safe_epub_anchor_id(raw: &str) -> Option<String> {
+    let value = decode_entities(raw).trim().to_string();
+    if value.is_empty()
+        || value.len() > 128
+        || value
+            .chars()
+            .any(|character| character.is_control() || character.is_whitespace())
+        || value
+            .chars()
+            .any(|character| matches!(character, '/' | '\\' | '"' | '\'' | '<' | '>'))
+    {
+        return None;
+    }
+
+    Some(value)
+}
+
 fn parse_html_document(html: &str) -> ContentDocument {
     let chars: Vec<char> = html.chars().collect();
     let mut blocks = Vec::new();
@@ -783,6 +802,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
     let mut pending_space = false;
     let mut quote_depth = 0usize;
     let mut heading_level = None;
+    let mut block_anchor: Option<String> = None;
     let mut emphasis_stack: Vec<String> = Vec::new();
     let mut ignored_tag: Option<String> = None;
     let mut index = 0usize;
@@ -843,6 +863,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     &mut pending_space,
                     quote_depth,
                     heading_level,
+                    block_anchor.take(),
                 );
                 quote_depth = quote_depth.saturating_sub(1);
             } else if is_block_html_tag(&name) {
@@ -853,6 +874,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                     &mut pending_space,
                     quote_depth,
                     heading_level,
+                    block_anchor.take(),
                 );
             }
         } else if name == "script" || name == "style" || name == "noscript" {
@@ -867,8 +889,11 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 &mut pending_space,
                 quote_depth,
                 heading_level,
+                block_anchor.take(),
             );
             quote_depth = quote_depth.saturating_add(1);
+            block_anchor = extract_html_attribute(&raw_tag, "id")
+                .and_then(|value| safe_epub_anchor_id(&value));
         } else if name == "img" {
             push_html_block(
                 &mut blocks,
@@ -877,6 +902,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 &mut pending_space,
                 quote_depth,
                 heading_level,
+                block_anchor.take(),
             );
             let alt = extract_html_attribute(&raw_tag, "alt")
                 .map(|value| decode_entities(&value).trim().to_string())
@@ -887,6 +913,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
             blocks.push(ContentBlock {
                 kind: "image".to_string(),
                 level: None,
+                anchor: None,
                 spans: Vec::new(),
                 alt,
                 src,
@@ -899,6 +926,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 &mut pending_space,
                 quote_depth,
                 heading_level,
+                block_anchor.take(),
             );
         } else if is_emphasis_html_tag(&name) {
             push_html_span(
@@ -916,8 +944,11 @@ fn parse_html_document(html: &str) -> ContentDocument {
                 &mut pending_space,
                 quote_depth,
                 heading_level,
+                block_anchor.take(),
             );
             heading_level = heading_level_from_tag(&name);
+            block_anchor = extract_html_attribute(&raw_tag, "id")
+                .and_then(|value| safe_epub_anchor_id(&value));
         }
 
         index = tag_end + 1;
@@ -930,6 +961,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
         &mut pending_space,
         quote_depth,
         heading_level,
+        block_anchor.take(),
     );
 
     ContentDocument {
@@ -1026,6 +1058,7 @@ fn push_html_block(
     pending_space: &mut bool,
     quote_depth: usize,
     heading_level: Option<u8>,
+    anchor: Option<String>,
 ) {
     push_html_span(spans, current, &[], pending_space);
     if spans.is_empty() {
@@ -1042,6 +1075,7 @@ fn push_html_block(
     blocks.push(ContentBlock {
         kind: kind.to_string(),
         level: heading_level,
+        anchor,
         spans: std::mem::take(spans),
         alt: None,
         src: None,
@@ -1572,6 +1606,7 @@ mod tests {
                 ContentBlock {
                     kind: "image".to_string(),
                     level: None,
+                    anchor: None,
                     spans: Vec::new(),
                     alt: Some("封面".to_string()),
                     src: Some("../Images/cover.jpg".to_string()),
@@ -1579,6 +1614,7 @@ mod tests {
                 ContentBlock {
                     kind: "image".to_string(),
                     level: None,
+                    anchor: None,
                     spans: Vec::new(),
                     alt: None,
                     src: Some("https://example.test/cover.jpg".to_string()),
@@ -1599,6 +1635,17 @@ mod tests {
             Some("data:image/jpeg;base64,AAAA")
         );
         assert!(document.blocks[1].src.is_none());
+    }
+
+    #[test]
+    fn keeps_safe_epub_block_anchors() {
+        let document = parse_html_document(
+            r##"<h1 id="intro">标题</h1><p id="body">正文</p><p id="bad value">忽略</p>"##,
+        );
+
+        assert_eq!(document.blocks[0].anchor.as_deref(), Some("intro"));
+        assert_eq!(document.blocks[1].anchor.as_deref(), Some("body"));
+        assert_eq!(document.blocks[2].anchor, None);
     }
 
     #[test]
