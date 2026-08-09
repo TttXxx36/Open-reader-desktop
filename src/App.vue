@@ -120,6 +120,7 @@ interface UnsupportedImportRule {
   offline_syntax: string;
   offline_steps: number;
   offline_estimated_work: number;
+  offline_elapsed_us: number;
 }
 
 interface SourceImportPreviewEntry {
