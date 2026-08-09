@@ -166,9 +166,14 @@ M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组
 - 书源页显示脱敏失败历史，支持按当前书源筛选、刷新和清空；不上传关键词、正文、Cookie、认证头或遥测。
 - GitHub Actions run [31309951094](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31309951094) 已通过前端检查、Rust fmt/check 和 71 个 Rust 测试。
 
-### M7.5c 后续维护切片
+### M7.5c 书籍/章节失败历史（首个切片已完成）
 
-- 扩展到书籍详情/目录/正文请求的失败历史，补充跨请求关联 ID、重试原因分类和导出版本兼容；仍保持有限脱敏摘要。
+- 书籍详情和章节请求失败会写入同一份本机历史，阶段分别标记为 `book` / `chapter`；取消操作不记为失败，stale 缓存回退仍返回原内容并保留刷新错误。
+- 原因码继续使用有限集合（request、timeout、cancelled、parse、config、body_limit），消息按字符上限截断；GitHub Actions run [31310413566](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31310413566) 已通过前端检查、Rust fmt/check 和 71 个 Rust 测试。
+
+### M7.5d 后续维护切片
+
+- 为搜索、书籍、目录、章节建立跨请求关联 ID，补充更细的重试原因分类和诊断快照版本兼容。
 - 导入 diff、配置版本迁移、冲突提示和可回滚快照继续覆盖旧数据库、重复来源 URL 和失败回滚。
 - 统计启用源、失败率、缓存命中和规则兼容性，先做本地聚合与导出，不建立远程遥测。
 
