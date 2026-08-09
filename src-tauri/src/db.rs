@@ -173,6 +173,7 @@ pub struct SourceFailureHistory {
     pub source_name: String,
     pub stage: String,
     pub reason_code: String,
+    pub operation_id: Option<String>,
     pub message: String,
     pub created_at: String,
 }
@@ -642,19 +643,21 @@ impl Database {
         source_name: &str,
         stage: &str,
         reason_code: &str,
+        operation_id: Option<&str>,
         message: &str,
     ) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         connection.execute(
             "INSERT INTO source_failure_history
-                (id, source_id, source_name, stage, reason_code, message)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (id, source_id, source_name, stage, reason_code, operation_id, message)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 generated_id("source-failure"),
                 bounded_history_text(source_id, 256),
                 bounded_history_text(source_name, 256),
                 bounded_history_text(stage, 128),
                 bounded_history_text(reason_code, 64),
+                operation_id.map(|value| bounded_history_text(value, 128)),
                 bounded_history_text(message, 512),
             ],
         )?;
@@ -680,7 +683,7 @@ impl Database {
         let source_id = source_id.filter(|value| !value.trim().is_empty());
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let mut statement = connection.prepare(
-            "SELECT id, source_id, source_name, stage, reason_code, message, created_at
+            "SELECT id, source_id, source_name, stage, reason_code, operation_id, message, created_at
              FROM source_failure_history
              WHERE (?1 IS NULL OR source_id = ?1)
              ORDER BY created_at DESC, id DESC
@@ -883,6 +886,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             8_i64,
             include_str!("../migrations/0008_source_failure_history.sql"),
         ),
+        (
+            9_i64,
+            include_str!("../migrations/0009_source_failure_operation.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -1021,8 +1028,9 @@ fn source_failure_history_from_row(row: &Row<'_>) -> rusqlite::Result<SourceFail
         source_name: row.get(2)?,
         stage: row.get(3)?,
         reason_code: row.get(4)?,
-        message: row.get(5)?,
-        created_at: row.get(6)?,
+        operation_id: row.get(5)?,
+        message: row.get(6)?,
+        created_at: row.get(7)?,
     })
 }
 
@@ -1320,6 +1328,7 @@ mod tests {
                 "Alpha",
                 "search",
                 "request",
+                None,
                 "request failed",
             )
             .expect("failure should persist");
@@ -1329,6 +1338,7 @@ mod tests {
                 "Beta",
                 "search",
                 "timeout",
+                Some("operation-b"),
                 &"x".repeat(600),
             )
             .expect("second failure should persist");
@@ -1338,6 +1348,7 @@ mod tests {
             .expect("history should list");
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].source_id, "source-b");
+        assert_eq!(all[0].operation_id.as_deref(), Some("operation-b"));
         assert_eq!(all[0].message.chars().count(), 512);
         assert_eq!(
             database
