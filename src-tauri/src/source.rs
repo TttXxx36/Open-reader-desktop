@@ -357,10 +357,7 @@ pub fn rule_evaluation_from_error(
 ) -> Option<SourceRuleEvaluation> {
     let lower = message.to_ascii_lowercase();
     let is_rule_error = lower.contains("parse")
-        || (lower.contains("invalid")
-            && (lower.contains("selector")
-                || lower.contains("json")
-                || lower.contains("regex")))
+        || (lower.contains("invalid") && (lower.contains("selector") || lower.contains("json") || lower.contains("regex")))
         || lower.contains("no value matched the source rule");
     if !is_rule_error {
         return None;
