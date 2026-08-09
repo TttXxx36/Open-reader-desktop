@@ -1378,7 +1378,10 @@ mod tests {
             .list_source_failure_history(None, 10)
             .expect("upgraded history should list");
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].operation_id.as_deref(), Some("operation-upgraded"));
+        assert_eq!(
+            entries[0].operation_id.as_deref(),
+            Some("operation-upgraded")
+        );
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
