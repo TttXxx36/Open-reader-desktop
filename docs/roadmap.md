@@ -76,7 +76,7 @@
 
 ### M8 — 阅读内容与本地格式 v2
 
-详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界与 M8.2 TXT 解析可配置化均已完成；M8.3 已完成安全链接索引、块锚点、跨章节片段跳转和有限 CSS 白名单：阅读器可加载安全目标章节并平滑定位，未解析目标仍保持索引展示；CI runs [31327448497](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31327448497)、[31327671723](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31327671723) 和 [31327687242](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31327687242) 通过，Rust 89 tests。下一步补齐损坏 EPUB 恢复夹具，再转入 M8.4 流式解析与性能阈值。
+详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界与 M8.2 TXT 解析可配置化均已完成；M8.3 已完成安全链接索引、块锚点、跨章节片段跳转、有限 CSS 白名单和损坏 EPUB 恢复边界：阅读器可加载安全目标章节并平滑定位，容器/OPF 缺失返回明确错误，单个坏 spine 章节可跳过；CI run [31328288413](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31328288413) 通过，Rust 92 tests。下一步转入 M8.4 流式解析与性能阈值。
 
 - EPUB：完善目录、章节标题、字体、图片、链接和基础 CSS 白名单，继续禁止脚本、事件属性、危险 URL 和无限资源。
 - TXT：编码探测、章节规则配置、全角空格/缩进、替换词和大文件流式解析。
