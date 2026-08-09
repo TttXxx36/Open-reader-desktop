@@ -98,6 +98,14 @@ pub struct ParsedChapter {
 pub struct ContentDocument {
     pub version: u8,
     pub blocks: Vec<ContentBlock>,
+    #[serde(default)]
+    pub links: Vec<ContentLink>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentLink {
+    pub label: String,
+    pub href: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -697,6 +705,76 @@ fn extract_element_text(xml: &str, name: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+fn safe_epub_internal_href(raw: &str) -> Option<String> {
+    let href = decode_entities(raw).trim().to_string();
+    if href.is_empty() || href.len() > 512 || href.chars().any(char::is_control) {
+        return None;
+    }
+
+    let lower = href.to_ascii_lowercase();
+    if lower.starts_with("javascript:")
+        || lower.starts_with("data:")
+        || lower.starts_with("http:")
+        || lower.starts_with("https:")
+        || lower.starts_with("//")
+        || href.starts_with('/')
+        || href.contains(':')
+    {
+        return None;
+    }
+
+    let path = href.split('#').next().unwrap_or_default();
+    if path.split('/').any(|part| part == "..") {
+        return None;
+    }
+
+    Some(href)
+}
+
+fn extract_epub_internal_links(html: &str) -> Vec<ContentLink> {
+    let lower = html.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut links = Vec::new();
+    let mut cursor = 0usize;
+
+    while let Some(relative_start) = lower[cursor..].find("<a") {
+        let start = cursor + relative_start;
+        let boundary = bytes.get(start + 2).copied();
+        if !matches!(boundary, Some(b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'>')) {
+            cursor = start + 2;
+            continue;
+        }
+
+        let Some(relative_end) = lower[start..].find('>') else {
+            break;
+        };
+        let open_end = start + relative_end + 1;
+        let tag = &html[start..open_end];
+        let Some(href) = extract_html_attribute(tag, "href")
+            .and_then(|value| safe_epub_internal_href(&value))
+        else {
+            cursor = open_end;
+            continue;
+        };
+
+        let Some(relative_close) = lower[open_end..].find("</a>") else {
+            break;
+        };
+        let close_start = open_end + relative_close;
+        let label = strip_html(&html[open_end..close_start]).trim().to_string();
+        if !label.is_empty()
+            && !links
+                .iter()
+                .any(|link: &ContentLink| link.href == href && link.label == label)
+        {
+            links.push(ContentLink { label, href });
+        }
+        cursor = close_start + "</a>".len();
+    }
+
+    links
+}
+
 fn parse_html_document(html: &str) -> ContentDocument {
     let chars: Vec<char> = html.chars().collect();
     let mut blocks = Vec::new();
@@ -854,7 +932,7 @@ fn parse_html_document(html: &str) -> ContentDocument {
         heading_level,
     );
 
-    ContentDocument { version: 1, blocks }
+    ContentDocument { version: 1, blocks, links: extract_epub_internal_links(html) }
 }
 
 fn is_emphasis_html_tag(name: &str) -> bool {
@@ -1469,6 +1547,20 @@ mod tests {
     }
 
     #[test]
+    fn extracts_safe_epub_internal_links() {
+        let links = extract_epub_internal_links(
+            r#"<p><a href="#toc">目录</a> <a href="chapter-2.xhtml#part">第二章</a>
+               <a href="https://example.test/out">外链</a>
+               <a href="javascript:alert(1)">脚本</a></p>"#,
+        );
+
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].label, "目录");
+        assert_eq!(links[0].href, "#toc");
+        assert_eq!(links[1].href, "chapter-2.xhtml#part");
+    }
+
+    #[test]
     fn resolves_local_image_sources_and_rejects_external_urls() {
         let mut document = ContentDocument {
             version: 1,
@@ -1488,6 +1580,7 @@ mod tests {
                     src: Some("https://example.test/cover.jpg".to_string()),
                 },
             ],
+            links: Vec::new(),
         };
         let mut image_sources = HashMap::new();
         image_sources.insert(
