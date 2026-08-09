@@ -357,9 +357,10 @@ pub fn rule_evaluation_from_error(
 ) -> Option<SourceRuleEvaluation> {
     let lower = message.to_ascii_lowercase();
     let is_rule_error = lower.contains("parse")
-        || lower.contains("invalid selector")
-        || lower.contains("invalid json")
-        || lower.contains("invalid regex")
+        || (lower.contains("invalid")
+            && (lower.contains("selector")
+                || lower.contains("json")
+                || lower.contains("regex")))
         || lower.contains("no value matched the source rule");
     if !is_rule_error {
         return None;
@@ -2884,6 +2885,33 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classifies_rule_evaluation_boundaries() {
+        assert_eq!(
+            rule_evaluation_for_output("search", "item", true).status,
+            SourceRuleEvaluationStatus::Success
+        );
+        assert_eq!(
+            rule_evaluation_for_output("search", "item", false).status,
+            SourceRuleEvaluationStatus::NoMatch
+        );
+        assert_eq!(
+            rule_evaluation_from_error("content", "content", "no value matched the source rule")
+                .expect("no-match error should be classified")
+                .status,
+            SourceRuleEvaluationStatus::NoMatch
+        );
+        assert_eq!(
+            rule_evaluation_from_error("book_info", "title", "invalid CSS selector: h2[")
+                .expect("selector error should be classified")
+                .status,
+            SourceRuleEvaluationStatus::Failure
+        );
+        assert!(
+            rule_evaluation_from_error("content", "content", "request failed: timeout").is_none()
+        );
+    }
 
     #[test]
     fn validates_the_public_fixture() {
