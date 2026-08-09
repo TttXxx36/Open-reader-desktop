@@ -304,6 +304,23 @@ pub struct SourceSearchFailure {
     pub source_id: String,
     pub source_name: String,
     pub message: String,
+    #[serde(skip_serializing)]
+    pub rule_evaluations: Vec<SourceRuleEvaluation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceRuleEvaluationStatus {
+    Success,
+    NoMatch,
+    Failure,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceRuleEvaluation {
+    pub stage: String,
+    pub rule_key: String,
+    pub status: SourceRuleEvaluationStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -313,6 +330,50 @@ pub struct SourceSearchDiagnostics {
     pub pages_scanned: usize,
     pub parsed_items: usize,
     pub stop_reason: String,
+    #[serde(skip_serializing)]
+    pub rule_evaluations: Vec<SourceRuleEvaluation>,
+}
+
+pub fn rule_evaluation_for_output(
+    stage: &str,
+    rule_key: &str,
+    has_output: bool,
+) -> SourceRuleEvaluation {
+    SourceRuleEvaluation {
+        stage: stage.to_string(),
+        rule_key: rule_key.to_string(),
+        status: if has_output {
+            SourceRuleEvaluationStatus::Success
+        } else {
+            SourceRuleEvaluationStatus::NoMatch
+        },
+    }
+}
+
+pub fn rule_evaluation_from_error(
+    stage: &str,
+    rule_key: &str,
+    message: &str,
+) -> Option<SourceRuleEvaluation> {
+    let lower = message.to_ascii_lowercase();
+    let is_rule_error = lower.contains("parse")
+        || lower.contains("invalid selector")
+        || lower.contains("invalid json")
+        || lower.contains("invalid regex")
+        || lower.contains("no value matched the source rule");
+    if !is_rule_error {
+        return None;
+    }
+    let status = if lower.contains("no value matched the source rule") {
+        SourceRuleEvaluationStatus::NoMatch
+    } else {
+        SourceRuleEvaluationStatus::Failure
+    };
+    Some(SourceRuleEvaluation {
+        stage: stage.to_string(),
+        rule_key: rule_key.to_string(),
+        status,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -321,6 +382,7 @@ struct PagedSearchResult {
     pages_scanned: usize,
     parsed_items: usize,
     stop_reason: String,
+    rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -361,6 +423,8 @@ pub struct SourceChapterContent {
     pub title: String,
     pub content: String,
     pub next_url: Option<String>,
+    #[serde(skip)]
+    pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -456,6 +520,8 @@ pub struct SourcePipelineResult {
     pub chapters: Vec<SourceChapter>,
     pub first_chapter: SourceChapterContent,
     pub debug_steps: Vec<SourceDebugStep>,
+    #[serde(skip_serializing)]
+    pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -463,6 +529,8 @@ pub struct SourceBookDetail {
     pub book_info: BookInfo,
     pub chapters: Vec<SourceChapter>,
     pub debug_steps: Vec<SourceDebugStep>,
+    #[serde(skip)]
+    pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
 struct FetchedText {
@@ -600,10 +668,16 @@ impl SourceEngine {
         let mut pages_scanned = 0;
         let mut parsed_items = 0;
         let mut stop_reason = "max_pages";
+        let mut rule_evaluations = Vec::new();
 
         for page in 1..=limit {
             pages_scanned += 1;
             let page_results = self.search_page(source, keyword, page).await?;
+            rule_evaluations.push(rule_evaluation_for_output(
+                "search",
+                "item",
+                !page_results.is_empty(),
+            ));
             if page_results.is_empty() {
                 stop_reason = "empty_page";
                 break;
@@ -628,6 +702,7 @@ impl SourceEngine {
             pages_scanned,
             parsed_items,
             stop_reason: stop_reason.to_string(),
+            rule_evaluations,
         })
     }
 
@@ -672,6 +747,7 @@ impl SourceEngine {
                         pages_scanned: paged.pages_scanned,
                         parsed_items: paged.parsed_items,
                         stop_reason: paged.stop_reason,
+                        rule_evaluations: paged.rule_evaluations,
                     });
                     results.extend(paged.results.into_iter().map(|item| UnifiedSearchResult {
                         source_id: definition.id.clone(),
@@ -682,23 +758,30 @@ impl SourceEngine {
                     }));
                 }
                 Ok((definition, Err(error))) => {
+                    let message = error.to_string();
+                    let rule_evaluations = rule_evaluation_from_error("search", "item", &message)
+                        .into_iter()
+                        .collect();
                     diagnostics.push(SourceSearchDiagnostics {
                         source_id: definition.id.clone(),
                         source_name: definition.name.clone(),
                         pages_scanned: 0,
                         parsed_items: 0,
                         stop_reason: "request_failed".to_string(),
+                        rule_evaluations: rule_evaluations.clone(),
                     });
                     failures.push(SourceSearchFailure {
                         source_id: definition.id,
                         source_name: definition.name,
-                        message: error.to_string(),
+                        message,
+                        rule_evaluations,
                     });
                 }
                 Err(error) => failures.push(SourceSearchFailure {
                     source_id: "unknown".to_string(),
                     source_name: "未知书源".to_string(),
                     message: format!("搜索任务异常：{}", error),
+                    rule_evaluations: Vec::new(),
                 }),
             }
         }
@@ -728,15 +811,27 @@ impl SourceEngine {
         book_url: &str,
     ) -> Result<SourceBookDetail, SourceError> {
         let mut debug_steps = Vec::new();
+        let mut rule_evaluations = Vec::new();
         let book_info = self
             .fetch_book_info(source, book_url, &mut debug_steps)
             .await?;
+        rule_evaluations.push(rule_evaluation_for_output(
+            "book_info",
+            "title",
+            book_info.title.trim() != "未命名书籍" && !book_info.title.trim().is_empty(),
+        ));
         let chapters = self.fetch_toc(source, book_url, &mut debug_steps).await?;
+        rule_evaluations.push(rule_evaluation_for_output(
+            "toc",
+            "item",
+            !chapters.is_empty(),
+        ));
 
         Ok(SourceBookDetail {
             book_info,
             chapters,
             debug_steps,
+            rule_evaluations,
         })
     }
 
@@ -804,12 +899,20 @@ impl SourceEngine {
             .fetch_chapter_content(source, first_chapter, &mut debug_steps)
             .await?;
 
+        let mut rule_evaluations = Vec::new();
+        rule_evaluations.extend(
+            first_chapter_content
+                .rule_evaluations
+                .iter()
+                .cloned(),
+        );
         Ok(SourcePipelineResult {
             search_results,
             book_info,
             chapters,
             first_chapter: first_chapter_content,
             debug_steps,
+            rule_evaluations,
         })
     }
 
@@ -1063,11 +1166,17 @@ impl SourceEngine {
             None
         };
         let content = apply_replace_rules(&content, &source.replace_rules)?;
+        let rule_evaluations = vec![rule_evaluation_for_output(
+            "content",
+            "content",
+            !content.trim().is_empty(),
+        )];
 
         Ok(SourceChapterContent {
             title: chapter.title.clone(),
             content,
             next_url,
+            rule_evaluations,
         })
     }
 
@@ -1101,6 +1210,7 @@ impl SourceEngine {
         let mut visited_urls = vec![current_url.clone()];
         let mut combined = String::new();
         let mut pending_next_url = None;
+        let mut rule_evaluations = Vec::new();
 
         loop {
             let context = SourceRequestContext::chapter(&current_url);
@@ -1172,6 +1282,11 @@ impl SourceEngine {
             };
 
             let page_content = apply_replace_rules(&page_content, &source.replace_rules)?;
+            rule_evaluations.push(rule_evaluation_for_output(
+                "content",
+                "content",
+                !page_content.trim().is_empty(),
+            ));
             if !combined.is_empty() {
                 combined.push_str("\n\n");
             }
@@ -1216,6 +1331,7 @@ impl SourceEngine {
             title: chapter.title.clone(),
             content: combined,
             next_url: pending_next_url,
+            rule_evaluations,
         })
     }
 
