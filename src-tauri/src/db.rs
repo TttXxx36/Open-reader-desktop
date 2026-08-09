@@ -517,11 +517,10 @@ impl Database {
 
     pub fn delete_source(&self, source_id: &str) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let changed =
-            connection.execute(
-                "DELETE FROM source_request_metrics WHERE source_id = ?1",
-                params![source_id],
-            )?;
+        let changed = connection.execute(
+            "DELETE FROM source_request_metrics WHERE source_id = ?1",
+            params![source_id],
+        )?;
         connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
         if changed == 0 {
             return Err(DbError::NotFound);
@@ -755,10 +754,7 @@ impl Database {
                     failures: non_negative_usize(failures),
                     cache_hits: non_negative_usize(cache_hits),
                     failure_rate: ratio(failures, attempts),
-                    cache_hit_rate: ratio(
-                        cache_hits,
-                        attempts.saturating_add(cache_hits),
-                    ),
+                    cache_hit_rate: ratio(cache_hits, attempts.saturating_add(cache_hits)),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
