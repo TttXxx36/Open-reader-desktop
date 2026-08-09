@@ -25,6 +25,22 @@ interface BookSummary {
   updated_at: string;
 }
 
+type TxtChapterRule = "auto" | "disabled" | "regex";
+
+interface TxtParseOptions {
+  chapter_rule: TxtChapterRule;
+  custom_pattern: string;
+}
+
+interface BookImportPreview {
+  title: string;
+  format: string;
+  encoding: string | null;
+  chapter_count: number;
+  first_chapter_title: string | null;
+  warnings: string[];
+}
+
 interface ChapterSummary {
   id: string;
   title: string;
@@ -448,6 +464,11 @@ const sourceImportInput = ref<HTMLInputElement | null>(null);
 const status = ref("正在加载书架…");
 const errorMessage = ref("");
 const isImporting = ref(false);
+const bookImportPreview = ref<BookImportPreview | null>(null);
+const bookImportFileName = ref("");
+const bookImportBytes = ref<number[]>([]);
+const txtParseOptions = ref<TxtParseOptions>({ chapter_rule: "auto", custom_pattern: "" });
+const bookImportBusy = ref(false);
 const settings = ref<ReaderSettings>(loadSettings());
 const nextPagePolicy = ref<NextPagePolicy>(loadNextPagePolicy());
 const sourceBusy = ref(false);
@@ -1856,6 +1877,74 @@ function openFilePicker() {
   fileInput.value?.click();
 }
 
+function resetBookImportPreview() {
+  bookImportPreview.value = null;
+  bookImportFileName.value = "";
+  bookImportBytes.value = [];
+  txtParseOptions.value = { chapter_rule: "auto", custom_pattern: "" };
+}
+
+function ensureTxtPattern() {
+  if (txtParseOptions.value.chapter_rule === "regex") {
+    if (!txtParseOptions.value.custom_pattern.trim()) {
+      txtParseOptions.value.custom_pattern = "^第\\s*\\d+章";
+    }
+  } else {
+    txtParseOptions.value.custom_pattern = "";
+  }
+}
+
+async function refreshBookImportPreview() {
+  if (!bookImportFileName.value) return;
+
+  bookImportBusy.value = true;
+  errorMessage.value = "";
+  try {
+    bookImportPreview.value = await invoke<BookImportPreview>("preview_book_import", {
+      fileName: bookImportFileName.value,
+      bytes: bookImportBytes.value,
+      txtOptions: txtParseOptions.value,
+    });
+    status.value = "已生成《" + bookImportFileName.value + "》导入预览";
+  } catch (error) {
+    errorMessage.value = String(error);
+    status.value = "TXT 预览失败";
+  } finally {
+    bookImportBusy.value = false;
+  }
+}
+
+async function confirmBookImport() {
+  const fileName = bookImportFileName.value;
+  const preview = bookImportPreview.value;
+  if (!fileName || !preview) return;
+
+  isImporting.value = true;
+  errorMessage.value = "";
+  status.value = "正在导入《" + fileName + "》…";
+  try {
+    const imported = await invoke<BookSummary>("import_book_with_options", {
+      fileName,
+      bytes: bookImportBytes.value,
+      txtOptions: txtParseOptions.value,
+    });
+    resetBookImportPreview();
+    await loadBooks();
+    await openBook(imported.id);
+  } catch (error) {
+    errorMessage.value = String(error);
+    status.value = "导入失败";
+  } finally {
+    isImporting.value = false;
+  }
+}
+
+function cancelBookImportPreview() {
+  resetBookImportPreview();
+  errorMessage.value = "";
+  status.value = "已取消 TXT 导入";
+}
+
 async function importFile(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -1867,12 +1956,22 @@ async function importFile(event: Event) {
     return;
   }
 
-  isImporting.value = true;
-  status.value = `正在解析《${file.name}》…`;
   errorMessage.value = "";
-
   try {
     const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const isTxt = file.name.toLowerCase().endsWith(".txt");
+    resetBookImportPreview();
+
+    if (isTxt) {
+      bookImportFileName.value = file.name;
+      bookImportBytes.value = bytes;
+      status.value = "正在生成《" + file.name + "》导入预览…";
+      await refreshBookImportPreview();
+      return;
+    }
+
+    isImporting.value = true;
+    status.value = "正在解析《" + file.name + "》…";
     const imported = await invoke<BookSummary>("import_book", {
       fileName: file.name,
       bytes,
@@ -2071,6 +2170,57 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         <span>{{ status }}</span>
         <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
       </div>
+
+      <section v-if="bookImportPreview" class="book-import-preview" aria-live="polite">
+        <div class="book-import-preview-heading">
+          <div>
+            <span class="eyebrow">TXT IMPORT PREVIEW</span>
+            <h2>导入前确认</h2>
+          </div>
+          <span class="book-import-preview-count">{{ bookImportPreview.chapter_count }} 章</span>
+        </div>
+        <div class="book-import-preview-meta">
+          <span>文件：{{ bookImportFileName }}</span>
+          <span>编码：{{ bookImportPreview.encoding || "自动识别" }}</span>
+          <span>格式：{{ bookImportPreview.format.toUpperCase() }}</span>
+          <span v-if="bookImportPreview.first_chapter_title">首章：{{ bookImportPreview.first_chapter_title }}</span>
+        </div>
+        <div class="book-import-preview-controls">
+          <label class="book-import-preview-field">
+            <span>章节识别</span>
+            <select v-model="txtParseOptions.chapter_rule" @change="ensureTxtPattern">
+              <option value="auto">自动识别</option>
+              <option value="disabled">不拆分章节</option>
+              <option value="regex">自定义正则</option>
+            </select>
+          </label>
+          <label class="book-import-preview-field">
+            <span>章节标题正则</span>
+            <input
+              v-model="txtParseOptions.custom_pattern"
+              type="text"
+              :disabled="txtParseOptions.chapter_rule !== 'regex'"
+              placeholder="例如：^第\s*\d+章"
+              @keyup.enter="refreshBookImportPreview"
+            />
+          </label>
+        </div>
+        <ul v-if="bookImportPreview.warnings.length" class="book-import-preview-warnings">
+          <li v-for="warning in bookImportPreview.warnings" :key="warning">{{ warning }}</li>
+        </ul>
+        <div class="book-import-preview-actions">
+          <span>修改识别规则后点击“更新预览”，确认无误再导入。</span>
+          <button class="secondary-button" type="button" :disabled="bookImportBusy" @click="refreshBookImportPreview">
+            {{ bookImportBusy ? "预览中…" : "更新预览" }}
+          </button>
+          <button class="import-button" type="button" :disabled="bookImportBusy || isImporting" @click="confirmBookImport">
+            {{ isImporting ? "导入中…" : "确认导入" }}
+          </button>
+          <button class="text-button" type="button" :disabled="bookImportBusy || isImporting" @click="cancelBookImportPreview">
+            取消
+          </button>
+        </div>
+      </section>
 
       <LibraryOverview
         :books="books"
@@ -3192,6 +3342,115 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   border-radius: 50%;
   background: #79e3ba;
   box-shadow: 0 0 12px #79e3ba;
+}
+
+.book-import-preview {
+  margin-top: 22px;
+  padding: 20px;
+  border: 1px solid rgba(121, 201, 255, 0.26);
+  border-radius: 16px;
+  background: rgba(17, 34, 52, 0.72);
+}
+
+.book-import-preview-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.book-import-preview-heading h2 {
+  margin: 8px 0 0;
+  font-size: 20px;
+}
+
+.book-import-preview-count {
+  color: #b9f6dd;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.book-import-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  color: #aebbd0;
+  font-size: 11px;
+}
+
+.book-import-preview-meta span {
+  padding: 5px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  background: rgba(12, 17, 27, 0.45);
+}
+
+.book-import-preview-controls {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.55fr) minmax(240px, 1.45fr);
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.book-import-preview-field {
+  display: grid;
+  gap: 7px;
+  color: #aebbd0;
+  font-size: 12px;
+}
+
+.book-import-preview-field input,
+.book-import-preview-field select {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 9px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.book-import-preview-field input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.book-import-preview-warnings {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0 0;
+  padding: 0;
+  color: #e3c788;
+  font-size: 11px;
+  line-height: 1.5;
+  list-style: none;
+}
+
+.book-import-preview-warnings li {
+  padding: 8px 10px;
+  border-left: 2px solid #e3c788;
+  background: rgba(139, 90, 34, 0.16);
+}
+
+.book-import-preview-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.book-import-preview-actions span {
+  flex: 1 1 240px;
+  color: #8391a6;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .book-import-preview-controls {
+    grid-template-columns: 1fr;
+  }
 }
 
 .error-text {
