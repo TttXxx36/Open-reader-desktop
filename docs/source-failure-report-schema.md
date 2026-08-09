@@ -19,10 +19,13 @@
 | `generated_at` | string | 本地生成时间，ISO 8601。 |
 | `scope` | string | `current_source` 或 `all_sources`。 |
 | `source_id` | string/null | 当前书源筛选范围；全量报告为 null。 |
+| `source_metrics` | object | 启用源、审计摘要、失败记录数和缓存占用的非敏感汇总。 |
 | `stats` | object/null | 总量、原因和阶段计数。 |
 | `entries` | array | 脱敏失败摘要。 |
 | `truncated_entries` | boolean | 是否因条数上限截断。 |
 | `privacy` | string[] | 报告的隐私边界说明。 |
+
+`source_metrics` 字段只包含 `total_sources`、`enabled_sources`、`audited_sources`、`audit_pass`、`audit_attention`、`failure_events`、`cache_entries` 和 `cache_bytes`，不代表网络请求总量或成功率。
 
 每条 `entries` 记录包含：
 
