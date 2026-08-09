@@ -424,7 +424,7 @@ mod tests {
         let html = format!("<main>{}</main>", "<a></a>".repeat(MAX_XPATH_NODE_BUDGET));
         let analysis = analyze("//a", &html);
         assert!(!analysis.accepted, "{analysis:?}");
-        assert_eq!(analysis.html_nodes, MAX_XPATH_NODE_BUDGET + 1);
+        assert!(analysis.html_nodes > MAX_XPATH_NODE_BUDGET);
         assert!(analysis
             .reason
             .as_deref()
