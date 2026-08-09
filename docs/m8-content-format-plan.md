@@ -9,13 +9,14 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - 现有 EPUB blocks-v1 继续过滤脚本、样式和危险图片资源；本轮只增加配额和路径闸门，不改变已支持的章节数据格式。
 - GitHub Actions run 31322842975：前端检查、Rust fmt/check 和 78 个 Rust 测试通过。
 
-## M8.2 TXT 解析可配置化（首个切片已完成）
+## M8.2 TXT 解析可配置化（已完成）
 
 - 已新增 `TxtParseOptions`：自动识别（保持原行为）、不拆分章节、自定义正则三种模式；自定义表达式限制 256 字节，并拒绝空表达式和无效表达式。
 - 新增 `preview_book_import` 远程命令，在真正写入书架前返回标题、格式、编码、章节数、首章标题和异常提示；TXT 导入界面可更新预览、确认或取消。
 - `import_book_with_options` 只在用户确认后写入 SQLite；EPUB 继续走已有安全边界，超过 64 MiB 的文件仍拒绝。
-- Rust 夹具覆盖自定义正则、不拆分章节和无效正则；GitHub Actions run [31323960667](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31323960667)：前端类型检查/构建/UI 合约、Rust fmt/check 和 81 个 Rust 测试通过。
-- 剩余工作：扩充内置中文章节规则、替换词/全角空格策略、混合编码边界夹具，并在 M8.4 增加 TXT 流式解析和性能阈值。
+- 已补齐中文内置章节规则（章/节/回/卷/篇、序章/番外/后记等）、全角空格归一化和最多 32 条文本替换规则，并对每条替换限制长度。
+- Rust 夹具覆盖自定义正则、不拆分章节、无效正则、全角空格/替换和 UTF-16LE/BE、GB18030 编码；GitHub Actions run [31325019515](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31325019515)：前端类型检查/构建/UI 合约、Rust fmt/check 和 85 个 Rust 测试通过。
+- 后续在 M8.4 增加 TXT 流式解析和性能阈值。
 
 ## M8.3 EPUB 阅读结构完善
 
