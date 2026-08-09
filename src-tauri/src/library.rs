@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use encoding_rs::{GB18030, UTF_16BE, UTF_16LE};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -15,6 +16,8 @@ pub enum ImportError {
     UnsupportedFormat(String),
     #[error("unable to decode text file")]
     TextDecode,
+    #[error("invalid TXT parsing options: {0}")]
+    InvalidTxtOptions(String),
     #[error("file I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("invalid EPUB: {0}")]
@@ -29,6 +32,38 @@ pub struct ParsedBook {
     pub author: Option<String>,
     pub format: String,
     pub chapters: Vec<ParsedChapter>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TxtChapterRule {
+    Auto,
+    Disabled,
+    Regex,
+}
+
+impl Default for TxtChapterRule {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TxtParseOptions {
+    #[serde(default)]
+    pub chapter_rule: TxtChapterRule,
+    #[serde(default)]
+    pub custom_pattern: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookImportPreview {
+    pub title: String,
+    pub format: String,
+    pub encoding: Option<String>,
+    pub chapter_count: usize,
+    pub first_chapter_title: Option<String>,
+    pub warnings: Vec<String>,
 }
 
 pub const CONTENT_FORMAT_TEXT: &str = "text";
@@ -73,6 +108,14 @@ pub struct ContentSpan {
 }
 
 pub fn parse_book_bytes(file_name: &str, bytes: &[u8]) -> Result<ParsedBook, ImportError> {
+    parse_book_bytes_with_options(file_name, bytes, &TxtParseOptions::default())
+}
+
+pub fn parse_book_bytes_with_options(
+    file_name: &str,
+    bytes: &[u8],
+    txt_options: &TxtParseOptions,
+) -> Result<ParsedBook, ImportError> {
     let extension = Path::new(file_name)
         .extension()
         .and_then(|value| value.to_str())
@@ -80,15 +123,48 @@ pub fn parse_book_bytes(file_name: &str, bytes: &[u8]) -> Result<ParsedBook, Imp
         .to_ascii_lowercase();
 
     match extension.as_str() {
-        "txt" => parse_txt(bytes, file_name),
+        "txt" => parse_txt_with_options(bytes, file_name, txt_options),
         "epub" => parse_epub(bytes, file_name),
         _ => Err(ImportError::UnsupportedFormat(extension)),
     }
 }
 
+pub fn preview_book_bytes(
+    file_name: &str,
+    bytes: &[u8],
+    txt_options: &TxtParseOptions,
+) -> Result<BookImportPreview, ImportError> {
+    let parsed = parse_book_bytes_with_options(file_name, bytes, txt_options)?;
+    let encoding = if parsed.format == "txt" {
+        Some(detect_text_encoding(bytes).to_string())
+    } else {
+        None
+    };
+    let mut warnings = Vec::new();
+    if parsed.chapters.len() > 10_000 {
+        warnings.push("章节数量较多，导入后建议分批阅读".to_string());
+    }
+    Ok(BookImportPreview {
+        title: parsed.title,
+        format: parsed.format,
+        encoding,
+        chapter_count: parsed.chapters.len(),
+        first_chapter_title: parsed.chapters.first().map(|chapter| chapter.title.clone()),
+        warnings,
+    })
+}
+
 fn parse_txt(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> {
+    parse_txt_with_options(bytes, file_name, &TxtParseOptions::default())
+}
+
+fn parse_txt_with_options(
+    bytes: &[u8],
+    file_name: &str,
+    options: &TxtParseOptions,
+) -> Result<ParsedBook, ImportError> {
     let text = decode_text(bytes)?;
-    let chapters = split_txt(&text);
+    let chapters = split_txt_with_options(&text, options)?;
     if chapters.is_empty() {
         return Err(ImportError::TextDecode);
     }
@@ -99,6 +175,22 @@ fn parse_txt(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> {
         format: "txt".to_string(),
         chapters,
     })
+}
+
+fn detect_text_encoding(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return "UTF-16LE";
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return "UTF-16BE";
+    }
+    if bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).is_some()
+        || String::from_utf8(bytes.to_vec()).is_ok()
+    {
+        "UTF-8"
+    } else {
+        "GB18030"
+    }
 }
 
 fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
@@ -122,14 +214,48 @@ fn decode_text(bytes: &[u8]) -> Result<String, ImportError> {
 }
 
 fn split_txt(text: &str) -> Vec<ParsedChapter> {
+    split_txt_with_options(text, &TxtParseOptions::default()).unwrap_or_default()
+}
+
+fn split_txt_with_options(
+    text: &str,
+    options: &TxtParseOptions,
+) -> Result<Vec<ParsedChapter>, ImportError> {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let custom_pattern = match options.chapter_rule {
+        TxtChapterRule::Regex => {
+            let pattern = options
+                .custom_pattern
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    ImportError::InvalidTxtOptions("自定义章节规则不能为空".to_string())
+                })?;
+            if pattern.len() > 256 {
+                return Err(ImportError::InvalidTxtOptions(
+                    "自定义章节规则不能超过 256 字节".to_string(),
+                ));
+            }
+            Some(Regex::new(pattern).map_err(|error| {
+                ImportError::InvalidTxtOptions(format!("自定义章节规则无效：{error}"))
+            })?)
+        }
+        _ => None,
+    };
     let mut chapters = Vec::new();
     let mut current_title = String::new();
     let mut lines = Vec::new();
 
     for line in normalized.lines() {
         let trimmed = line.trim();
-        if looks_like_chapter(trimmed) {
+        let is_chapter = match options.chapter_rule {
+            TxtChapterRule::Auto => looks_like_chapter(trimmed),
+            TxtChapterRule::Disabled => false,
+            TxtChapterRule::Regex => custom_pattern
+                .as_ref()
+                .is_some_and(|pattern| pattern.is_match(trimmed)),
+        };
+        if is_chapter {
             if !current_title.is_empty() || !lines.is_empty() {
                 push_text_chapter(&mut chapters, &current_title, &lines);
                 lines.clear();
@@ -144,7 +270,7 @@ fn split_txt(text: &str) -> Vec<ParsedChapter> {
         push_text_chapter(&mut chapters, &current_title, &lines);
     }
 
-    chapters
+    Ok(chapters)
 }
 
 fn push_text_chapter(chapters: &mut Vec<ParsedChapter>, title: &str, lines: &[String]) {
@@ -1083,6 +1209,52 @@ mod tests {
             ZipArchive::new(Cursor::new(cursor.into_inner())).expect("archive should open");
 
         validate_epub_archive(&mut archive).expect("empty archive should be within limits");
+    }
+
+    #[test]
+    fn parses_txt_with_custom_chapter_regex() {
+        let options = TxtParseOptions {
+            chapter_rule: TxtChapterRule::Regex,
+            custom_pattern: Some(r"^卷\\d+".to_string()),
+        };
+        let book = parse_book_bytes_with_options(
+            "custom.txt",
+            "卷1 开始\\n正文\\n卷2 继续\\n更多".as_bytes(),
+            &options,
+        )
+        .expect("custom TXT rule should parse");
+
+        assert_eq!(book.chapters.len(), 2);
+        assert_eq!(book.chapters[0].title, "卷1 开始");
+        assert_eq!(book.chapters[1].title, "卷2 继续");
+    }
+
+    #[test]
+    fn disables_automatic_txt_chapter_detection() {
+        let options = TxtParseOptions {
+            chapter_rule: TxtChapterRule::Disabled,
+            custom_pattern: None,
+        };
+        let book = parse_book_bytes_with_options(
+            "plain.txt",
+            "第一章\\n正文\\n第二章\\n更多".as_bytes(),
+            &options,
+        )
+        .expect("disabled TXT rule should parse");
+
+        assert_eq!(book.chapters.len(), 1);
+        assert_eq!(book.chapters[0].title, "正文 1");
+    }
+
+    #[test]
+    fn rejects_invalid_txt_chapter_options() {
+        let options = TxtParseOptions {
+            chapter_rule: TxtChapterRule::Regex,
+            custom_pattern: Some("[".to_string()),
+        };
+        let error = parse_book_bytes_with_options("bad.txt", b"正文", &options)
+            .expect_err("invalid regex should be rejected");
+        assert!(error.to_string().contains("自定义章节规则无效"));
     }
 
     #[test]
