@@ -3010,6 +3010,10 @@ mod tests {
             SourceRuleEvaluationStatus::NoMatch
         );
         assert_eq!(
+            rule_evaluation_for_rule("search", "author", false, false).status,
+            SourceRuleEvaluationStatus::Skipped
+        );
+        assert_eq!(
             rule_evaluation_from_error("content", "content", "no value matched the source rule")
                 .expect("no-match error should be classified")
                 .status,
