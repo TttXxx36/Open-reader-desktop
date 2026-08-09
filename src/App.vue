@@ -219,6 +219,17 @@ interface SourceDiagnosticSnapshot {
     cache_events: number;
     total_duration_ms: number;
   };
+  next_page_policy: {
+    enabled: boolean;
+    max_depth: number;
+    max_pages: number;
+    max_bytes: number;
+    max_duration_secs: number;
+    same_host_only: boolean;
+    stop_reason: string | null;
+    status_label: string;
+    status_detail: string;
+  };
   multi_source: {
     enabled_sources: number;
     result_count: number;
@@ -1500,6 +1511,12 @@ function exportSourceDiagnostics() {
       cache_events: cacheEvents.length,
       total_duration_ms: steps.reduce((total, step) => total + step.duration_ms, 0),
     },
+    next_page_policy: {
+      ...nextPagePolicy.value,
+      stop_reason: remoteNextPageStatus.value.reason,
+      status_label: remoteNextPageStatus.value.label,
+      status_detail: remoteNextPageStatus.value.detail,
+    },
     multi_source: searchResult.value ? {
       enabled_sources: searchResult.value.enabled_sources,
       result_count: searchResult.value.results.length,
@@ -1522,6 +1539,7 @@ function exportSourceDiagnostics() {
       "URL 查询参数和片段已移除",
       "变量值统一替换为 <redacted>",
       "多源搜索只导出失败原因与停止统计，不导出搜索关键词",
+      "分页追链只导出启用状态、安全配额和停止原因，不导出后续 URL",
     ],
   };
   const payload = JSON.stringify(snapshot, null, 2);
