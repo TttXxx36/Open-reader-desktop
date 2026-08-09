@@ -226,6 +226,7 @@ interface SourceRuleMetric {
   successes: number;
   no_matches: number;
   failures: number;
+  skipped: number;
   success_rate: number;
   failure_rate: number;
   observed: boolean;
@@ -236,6 +237,7 @@ interface SourceRuleMetrics {
   total_successes: number;
   total_no_matches: number;
   total_failures: number;
+  total_skipped: number;
   success_rate: number;
   failure_rate: number;
   observed: boolean;
