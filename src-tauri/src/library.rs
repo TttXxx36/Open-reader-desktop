@@ -1824,6 +1824,38 @@ mod tests {
     }
 
     #[test]
+    fn records_txt_size_matrix_baseline() {
+        for size in [1_usize << 20, 16_usize << 20, 64_usize << 20] {
+            let mut text = String::with_capacity(size);
+            text.push_str("第一章\n");
+            while text.len() < size {
+                text.push_str("这是用于 CI 性能基线的连续正文行。\n");
+            }
+
+            let started = std::time::Instant::now();
+            let book =
+                parse_book_bytes("size-matrix.txt", text.as_bytes()).expect("size fixture should parse");
+            let elapsed = started.elapsed();
+            eprintln!(
+                "txt_perf size_bytes={} elapsed_ms={} chapters={} content_bytes={}",
+                size,
+                elapsed.as_millis(),
+                book.chapters.len(),
+                book.chapters.first().map_or(0, |chapter| chapter.content.len())
+            );
+
+            assert_eq!(book.chapters.len(), 1);
+            assert!(book.chapters[0].content.len() > size / 2);
+            assert!(
+                elapsed < std::time::Duration::from_secs(20),
+                "TXT {} MiB parse exceeded 20 seconds: {:?}",
+                size / (1024 * 1024),
+                elapsed
+            );
+        }
+    }
+
+    #[test]
     fn parses_utf8_txt() {
         let book = parse_book_bytes("demo.txt", "第一章\n你好\n\n第二章\n世界".as_bytes())
             .expect("txt should parse");
