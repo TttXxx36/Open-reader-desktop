@@ -1252,7 +1252,7 @@ mod tests {
             chapter_rule: TxtChapterRule::Regex,
             custom_pattern: Some("[".to_string()),
         };
-        let error = parse_book_bytes_with_options("bad.txt", b"正文", &options)
+        let error = parse_book_bytes_with_options("bad.txt", "正文".as_bytes(), &options)
             .expect_err("invalid regex should be rejected");
         assert!(error.to_string().contains("自定义章节规则无效"));
     }
