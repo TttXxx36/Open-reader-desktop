@@ -519,9 +519,9 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let changed =
             connection.execute(
-            "DELETE FROM source_request_metrics WHERE source_id = ?1",
-            params![source_id],
-        )?;
+                "DELETE FROM source_request_metrics WHERE source_id = ?1",
+                params![source_id],
+            )?;
         connection.execute("DELETE FROM book_sources WHERE id = ?1", params![source_id])?;
         if changed == 0 {
             return Err(DbError::NotFound);
@@ -717,17 +717,21 @@ impl Database {
 
     pub fn source_request_metrics(&self) -> Result<SourceRequestMetrics, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let (total_attempts, total_successes, total_failures, total_cache_hits): (i64, i64, i64, i64) =
-            connection.query_row(
-                "SELECT
-                    COALESCE(SUM(attempts), 0),
-                    COALESCE(SUM(successes), 0),
-                    COALESCE(SUM(failures), 0),
-                    COALESCE(SUM(cache_hits), 0)
-                 FROM source_request_metrics",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )?;
+        let (total_attempts, total_successes, total_failures, total_cache_hits): (
+            i64,
+            i64,
+            i64,
+            i64,
+        ) = connection.query_row(
+            "SELECT
+                COALESCE(SUM(attempts), 0),
+                COALESCE(SUM(successes), 0),
+                COALESCE(SUM(failures), 0),
+                COALESCE(SUM(cache_hits), 0)
+             FROM source_request_metrics",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
         let mut statement = connection.prepare(
             "SELECT stage,
                     COALESCE(SUM(attempts), 0),
@@ -751,7 +755,10 @@ impl Database {
                     failures: non_negative_usize(failures),
                     cache_hits: non_negative_usize(cache_hits),
                     failure_rate: ratio(failures, attempts),
-                    cache_hit_rate: ratio(cache_hits, attempts.saturating_add(cache_hits)),
+                    cache_hit_rate: ratio(
+                        cache_hits,
+                        attempts.saturating_add(cache_hits),
+                    ),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -762,7 +769,10 @@ impl Database {
             total_failures: non_negative_usize(total_failures),
             total_cache_hits: non_negative_usize(total_cache_hits),
             failure_rate: ratio(total_failures, total_attempts),
-            cache_hit_rate: ratio(total_cache_hits, total_attempts.saturating_add(total_cache_hits)),
+            cache_hit_rate: ratio(
+                total_cache_hits,
+                total_attempts.saturating_add(total_cache_hits),
+            ),
             by_stage,
         })
     }
