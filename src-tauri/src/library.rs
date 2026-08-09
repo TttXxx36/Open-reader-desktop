@@ -211,9 +211,7 @@ fn detect_text_encoding(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(&[0xFE, 0xFF]) {
         return "UTF-16BE";
     }
-    if bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).is_some()
-        || std::str::from_utf8(bytes).is_ok()
-    {
+    if bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).is_some() || std::str::from_utf8(bytes).is_ok() {
         "UTF-8"
     } else {
         "GB18030"
