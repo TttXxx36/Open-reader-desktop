@@ -731,7 +731,7 @@ impl Database {
                 (source_id, stage, attempts, successes, failures, cache_hits)
              VALUES (?1, ?2, 1, ?3, ?4, 0)
              ON CONFLICT(source_id, stage) DO UPDATE SET
-                attempts = attempts + 1,
+                attempts = attempts + excluded.attempts,
                 successes = successes + excluded.successes,
                 failures = failures + excluded.failures,
                 updated_at = CURRENT_TIMESTAMP",
