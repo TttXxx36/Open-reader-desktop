@@ -308,7 +308,7 @@ fn split_txt_with_options(
     };
     let mut chapters = Vec::new();
     let mut current_title = String::new();
-    let mut lines = Vec::new();
+    let mut current_content = String::new();
 
     for line in normalized.lines() {
         let trimmed = line.trim();
@@ -320,32 +320,46 @@ fn split_txt_with_options(
                 .is_some_and(|pattern| pattern.is_match(trimmed)),
         };
         if is_chapter {
-            if !current_title.is_empty() || !lines.is_empty() {
-                push_text_chapter(&mut chapters, &current_title, &lines);
-                lines.clear();
+            if !current_title.is_empty() || !current_content.is_empty() {
+                push_text_chapter(&mut chapters, &current_title, &current_content);
+                current_content.clear();
             }
             current_title = trimmed.to_string();
         } else {
-            lines.push(line.trim_end().to_string());
+            if !current_content.is_empty() {
+                current_content.push('\n');
+            }
+            current_content.push_str(line.trim_end());
         }
     }
 
-    if !current_title.is_empty() || !lines.is_empty() {
-        push_text_chapter(&mut chapters, &current_title, &lines);
+    if !current_title.is_empty() || !current_content.is_empty() {
+        push_text_chapter(&mut chapters, &current_title, &current_content);
     }
 
     Ok(chapters)
 }
 
-fn push_text_chapter(chapters: &mut Vec<ParsedChapter>, title: &str, lines: &[String]) {
-    let Some(first) = lines.iter().position(|line| !line.trim().is_empty()) else {
-        return;
-    };
-    let Some(last) = lines.iter().rposition(|line| !line.trim().is_empty()) else {
-        return;
-    };
-    let content = lines[first..=last].join("\n");
+fn push_text_chapter(chapters: &mut Vec<ParsedChapter>, title: &str, content: &str) {
+    let mut offset = 0usize;
+    let mut first_offset = None;
+    let mut last_offset = 0usize;
 
+    for segment in content.split_inclusive('\n') {
+        let line = segment.strip_suffix('\n').unwrap_or(segment);
+        if !line.trim().is_empty() {
+            if first_offset.is_none() {
+                first_offset = Some(offset);
+            }
+            last_offset = offset + line.len();
+        }
+        offset += segment.len();
+    }
+
+    let Some(first_offset) = first_offset else {
+        return;
+    };
+    let content = content[first_offset..last_offset].to_string();
     let title = if title.is_empty() {
         format!("正文 {}", chapters.len() + 1)
     } else {
@@ -1701,6 +1715,20 @@ mod tests {
         assert!(looks_like_chapter("第一章 初见"));
         assert!(looks_like_chapter("番外：春日"));
         assert!(!looks_like_chapter("这是一个很长很长的普通段落"));
+    }
+
+    #[test]
+    fn parses_large_txt_fixture_with_line_accumulator() {
+        let mut text = String::with_capacity(1024 * 1024);
+        for index in 0..512 {
+            text.push_str(&format!("第 {index} 章\\n"));
+            text.push_str("正文内容。\\n\\n第二段内容。\\n");
+        }
+
+        let book = parse_book_bytes("large.txt", text.as_bytes()).expect("large TXT should parse");
+        assert_eq!(book.chapters.len(), 512);
+        assert_eq!(book.chapters[0].title, "第 0 章");
+        assert!(book.chapters[511].content.contains("第二段内容"));
     }
 
     #[test]
