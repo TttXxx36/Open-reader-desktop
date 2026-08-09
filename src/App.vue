@@ -271,6 +271,7 @@ interface SourceDiagnosticSnapshot {
     }>;
   } | null;
   cache: SourceCacheStatus | null;
+  source_metrics: SourceMetrics;
   steps: ExportedDiagnosticStep[];
   truncated_steps: boolean;
   privacy: string[];
@@ -1738,6 +1739,7 @@ function exportSourceFailureReport() {
     generated_at: new Date().toISOString(),
     scope: sourceId.value ? "current_source" : "all_sources",
     source_id: sourceId.value ? truncateDiagnostic(sourceId.value, 128) : null,
+    source_metrics: { ...sourceMetrics.value },
     stats,
     entries: history,
     truncated_entries: (sourceFailureHistory.value?.length ?? 0) > history.length,
