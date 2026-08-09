@@ -1833,15 +1833,17 @@ mod tests {
             }
 
             let started = std::time::Instant::now();
-            let book =
-                parse_book_bytes("size-matrix.txt", text.as_bytes()).expect("size fixture should parse");
+            let book = parse_book_bytes("size-matrix.txt", text.as_bytes())
+                .expect("size fixture should parse");
             let elapsed = started.elapsed();
             eprintln!(
                 "txt_perf size_bytes={} elapsed_ms={} chapters={} content_bytes={}",
                 size,
                 elapsed.as_millis(),
                 book.chapters.len(),
-                book.chapters.first().map_or(0, |chapter| chapter.content.len())
+                book.chapters
+                    .first()
+                    .map_or(0, |chapter| chapter.content.len())
             );
 
             assert_eq!(book.chapters.len(), 1);
