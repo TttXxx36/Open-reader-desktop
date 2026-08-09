@@ -1716,7 +1716,12 @@ mod tests {
 
         let chapters = split_txt_with_options(&normalized, &TxtParseOptions::default())
             .expect("normalized text should split");
-        assert_eq!(chapters.len(), 2);
+        assert_eq!(
+            chapters.len(),
+            2,
+            "normalized={normalized:?}, lines={:?}, chapters={chapters:?}",
+            normalized.lines().collect::<Vec<_>>()
+        );
         assert_eq!(chapters[0].content, "首行\n第二行");
     }
 
