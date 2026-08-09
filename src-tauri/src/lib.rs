@@ -1141,7 +1141,9 @@ async fn fetch_source_chapter(
     let (summary, source) = load_enabled_source(&database, &source_id)?;
     let cache_key = source_cache_key("chapter", &summary, &chapter.url);
     let previous = cached_remote_chapter(&database, &cache_key)?;
-    let next_page_enabled = next_page_policy.as_ref().is_some_and(|policy| policy.enabled);
+    let next_page_enabled = next_page_policy
+        .as_ref()
+        .is_some_and(|policy| policy.enabled);
     if !force_refresh && !next_page_enabled {
         if let Some(payload) = database
             .get_source_cache(&cache_key)
