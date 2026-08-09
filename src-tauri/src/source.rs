@@ -384,9 +384,11 @@ fn search_rule_evaluations(
             "search",
             "author",
             rules.and_then(|value| value.author.as_ref()).is_some(),
-            results
-                .iter()
-                .any(|item| item.author.as_deref().is_some_and(|value| !value.trim().is_empty())),
+            results.iter().any(|item| {
+                item.author
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+            }),
         ),
         rule_evaluation_for_rule(
             "search",
@@ -447,13 +449,17 @@ fn toc_rule_evaluations(
             "toc",
             "title",
             rules.and_then(|value| value.title.as_ref()).is_some(),
-            chapters.iter().any(|chapter| !chapter.title.trim().is_empty()),
+            chapters
+                .iter()
+                .any(|chapter| !chapter.title.trim().is_empty()),
         ),
         rule_evaluation_for_rule(
             "toc",
             "url",
             rules.and_then(|value| value.url.as_ref()).is_some(),
-            chapters.iter().any(|chapter| !chapter.url.trim().is_empty()),
+            chapters
+                .iter()
+                .any(|chapter| !chapter.url.trim().is_empty()),
         ),
     ]
 }
@@ -1279,8 +1285,7 @@ impl SourceEngine {
             None
         };
         let content = apply_replace_rules(&content, &source.replace_rules)?;
-        let rule_evaluations =
-            content_rule_evaluations(source, &content, next_url.as_deref());
+        let rule_evaluations = content_rule_evaluations(source, &content, next_url.as_deref());
 
         Ok(SourceChapterContent {
             title: chapter.title.clone(),
