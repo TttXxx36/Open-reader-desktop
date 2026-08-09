@@ -113,7 +113,7 @@ pub fn analyze(expression: &str, html: &str) -> XPathAnalysis {
             }
         }
     };
-    analysis.elapsed_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    analysis.elapsed_us = started.elapsed().as_micros().max(1).min(u128::from(u64::MAX)) as u64;
     analysis
 }
 
@@ -349,6 +349,40 @@ mod tests {
         assert!(dense.accepted);
         assert!(dense.html_nodes >= 129);
         assert!(dense.estimated_work > 0);
+    }
+
+    #[test]
+    fn records_authorized_fixture_timing_distribution() {
+        let html = r#"
+            <html><body><main>
+                <article class="book"><a href="/book/1">一本书</a></article>
+                <article class="book"><a href="/book/2">第二本</a></article>
+            </main></body></html>
+        "#;
+        let expressions = [
+            "//article",
+            "//article[@class='book']",
+            "//article[1]",
+            "//*[@class='book']//a/@href",
+            "/html/body/main/article",
+            "//article[contains(@class,'book')]",
+            "//article | //a",
+            "//article/../a",
+        ];
+
+        let mut elapsed = expressions
+            .iter()
+            .map(|expression| analyze(expression, html).elapsed_us)
+            .collect::<Vec<_>>();
+        assert!(elapsed.iter().all(|duration| *duration >= 1));
+        elapsed.sort_unstable();
+        let p50 = elapsed[elapsed.len() / 2];
+        let p95 = elapsed[(elapsed.len() * 95).div_ceil(100).saturating_sub(1)];
+        assert!(p95 >= p50);
+        assert!(
+            p95 < 2_000_000,
+            "synthetic XPath fixture parse p95 exceeded 2 seconds: {elapsed:?}"
+        );
     }
 
     #[test]
