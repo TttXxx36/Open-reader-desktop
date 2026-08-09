@@ -35,6 +35,9 @@ pub const CONTENT_FORMAT_TEXT: &str = "text";
 pub const CONTENT_FORMAT_BLOCKS_V1: &str = "blocks-v1";
 const MAX_EMBEDDED_IMAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_EMBEDDED_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+const MAX_EPUB_ARCHIVE_ENTRIES: usize = 2_048;
+const MAX_EPUB_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_EPUB_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ParsedChapter {
@@ -201,6 +204,7 @@ struct ManifestItem {
 
 fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    validate_epub_archive(&mut archive)?;
     let container = read_zip_text(&mut archive, "META-INF/container.xml")?;
     let opf_path = extract_attribute_from_xml(&container, "rootfile", "full-path")
         .ok_or_else(|| ImportError::InvalidEpub("缺少 OPF 根文件".to_string()))?;
@@ -300,11 +304,57 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
     })
 }
 
+fn validate_epub_archive<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Result<(), ImportError> {
+    if archive.len() > MAX_EPUB_ARCHIVE_ENTRIES {
+        return Err(ImportError::InvalidEpub(format!(
+            "EPUB 条目数量超过 {} 个上限",
+            MAX_EPUB_ARCHIVE_ENTRIES
+        )));
+    }
+
+    let mut total_uncompressed = 0_u64;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
+        let size = entry.size();
+        if size > MAX_EPUB_ENTRY_BYTES {
+            return Err(ImportError::InvalidEpub(format!(
+                "EPUB 单个条目超过 {} MiB 上限",
+                MAX_EPUB_ENTRY_BYTES / (1024 * 1024)
+            )));
+        }
+        total_uncompressed = total_uncompressed.saturating_add(size);
+        if total_uncompressed > MAX_EPUB_UNCOMPRESSED_BYTES {
+            return Err(ImportError::InvalidEpub(format!(
+                "EPUB 解压后总大小超过 {} MiB 上限",
+                MAX_EPUB_UNCOMPRESSED_BYTES / (1024 * 1024)
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_safe_zip_entry_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.bytes().any(|byte| byte == 0)
+        && !path.split('/').any(|part| part == "..")
+}
+
 fn read_zip_bytes<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     path: &str,
 ) -> Result<Vec<u8>, ImportError> {
+    if !is_safe_zip_entry_path(path) {
+        return Err(ImportError::InvalidEpub("EPUB 条目路径不安全".to_string()));
+    }
     let mut file = archive.by_name(path)?;
+    if file.size() > MAX_EPUB_ENTRY_BYTES {
+        return Err(ImportError::InvalidEpub(
+            "EPUB 单个条目超过大小上限".to_string(),
+        ));
+    }
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
@@ -1018,6 +1068,24 @@ fn decode_entity(entity: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_unsafe_epub_entry_paths() {
+        assert!(!is_safe_zip_entry_path("../META-INF/container.xml"));
+        assert!(!is_safe_zip_entry_path("/OPS/content.xhtml"));
+        assert!(!is_safe_zip_entry_path("OPS/\0content.xhtml"));
+        assert!(is_safe_zip_entry_path("OPS/Text/chapter.xhtml"));
+    }
+
+    #[test]
+    fn accepts_empty_epub_archive_within_limits() {
+        let writer = zip::ZipWriter::new(Cursor::new(Vec::<u8>::new()));
+        let cursor = writer.finish().expect("empty archive should finish");
+        let mut archive =
+            ZipArchive::new(Cursor::new(cursor.into_inner())).expect("archive should open");
+
+        validate_epub_archive(&mut archive).expect("empty archive should be within limits");
+    }
 
     #[test]
     fn detects_common_chapter_headings() {
