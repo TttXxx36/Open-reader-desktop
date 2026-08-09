@@ -1722,7 +1722,10 @@ mod tests {
         let status = std::fs::read_to_string("/proc/self/status").ok()?;
         status.lines().find_map(|line| {
             let value = line.strip_prefix("VmHWM:")?.split_whitespace().next()?;
-            value.parse::<u64>().ok().map(|kilobytes| kilobytes.saturating_mul(1024))
+            value
+                .parse::<u64>()
+                .ok()
+                .map(|kilobytes| kilobytes.saturating_mul(1024))
         })
     }
 
@@ -1772,12 +1775,9 @@ mod tests {
             PagefileUsage: 0,
             PeakPagefileUsage: 0,
         };
+        let counter_size = counters.cb;
         let result = unsafe {
-            GetProcessMemoryInfo(
-                GetCurrentProcess(),
-                &mut counters,
-                counters.cb,
-            )
+            GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counter_size)
         };
         (result != 0).then_some(counters.PeakWorkingSetSize as u64)
     }
