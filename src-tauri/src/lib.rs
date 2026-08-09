@@ -6,7 +6,7 @@ mod xpath_poc;
 
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceFailureHistory,
-    SourceMetadata, SourceSnapshotSummary, SourceSummary, SourceWrite,
+    SourceFailureStats, SourceMetadata, SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
@@ -1293,6 +1293,15 @@ fn list_source_failure_history(
 }
 
 #[tauri::command]
+fn get_source_failure_stats(
+    database: tauri::State<'_, Database>,
+) -> Result<SourceFailureStats, String> {
+    database
+        .source_failure_stats()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn clear_source_failure_history(
     database: tauri::State<'_, Database>,
     source_id: Option<String>,
@@ -1487,6 +1496,7 @@ pub fn run() {
             retry_source_search,
             list_source_failure_history,
             clear_source_failure_history,
+            get_source_failure_stats,
             fetch_source_book,
             fetch_source_chapter,
             run_source_pipeline,
