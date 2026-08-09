@@ -188,6 +188,7 @@ interface SourceFailureHistory {
   source_name: string;
   stage: string;
   reason_code: string;
+  operation_id: string | null;
   message: string;
   created_at: string;
 }
