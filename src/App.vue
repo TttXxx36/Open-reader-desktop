@@ -411,6 +411,7 @@ const searchPageLimit = ref(1);
 const searchBusy = ref(false);
 const searchOperationId = ref<string | null>(null);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
+const retryingSourceId = ref<string | null>(null);
 const sourceTransferBusy = ref(false);
 const sourceTransferMessage = ref("");
 const sourceImportUrl = ref("");
@@ -958,7 +959,7 @@ async function deleteSource(source: SourceSummary) {
 
 async function searchSources() {
   const keyword = searchKeyword.value.trim();
-  if (!keyword || searchBusy.value) return;
+  if (!keyword || searchBusy.value || retryingSourceId.value) return;
 
   const maxPages = Math.min(20, Math.max(1, Math.trunc(searchPageLimit.value || 1)));
   searchPageLimit.value = maxPages;
@@ -985,6 +986,70 @@ async function searchSources() {
     if (searchOperationId.value === operationId) {
       searchOperationId.value = null;
     }
+    searchBusy.value = false;
+  }
+}
+
+async function retrySourceSearch(sourceId: string) {
+  const keyword = searchKeyword.value.trim();
+  if (!keyword || searchBusy.value || retryingSourceId.value) return;
+
+  const maxPages = Math.min(20, Math.max(1, Math.trunc(searchPageLimit.value || 1)));
+  searchPageLimit.value = maxPages;
+  const operationId = "retry-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  retryingSourceId.value = sourceId;
+  searchOperationId.value = operationId;
+  searchBusy.value = true;
+  sourceTransferMessage.value = "";
+  errorMessage.value = "";
+
+  try {
+    const retryResult = await invoke<MultiSourceSearchResult>("retry_source_search", {
+      sourceId,
+      keyword,
+      maxPages,
+      operationId,
+    });
+    const current = searchResult.value;
+    if (!current) {
+      searchResult.value = retryResult;
+    } else {
+      const retainedResults = current.results.filter((item) => item.source_id !== sourceId);
+      const seen = new Set<string>();
+      const mergedResults = [...retainedResults, ...retryResult.results].filter((item) => {
+        const key = item.source_id + "\u0000" + item.title + "\u0000" + (item.author || "");
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      searchResult.value = {
+        ...current,
+        results: mergedResults,
+        failures: [
+          ...current.failures.filter((failure) => failure.source_id !== sourceId),
+          ...retryResult.failures,
+        ],
+        diagnostics: [
+          ...current.diagnostics.filter((diagnostic) => diagnostic.source_id !== sourceId),
+          ...retryResult.diagnostics,
+        ],
+      };
+    }
+    sourceTransferMessage.value = retryResult.failures.length
+      ? "书源重试仍失败，已保留最新失败原因"
+      : "书源重试成功，已更新该书源结果";
+  } catch (error) {
+    const message = String(error);
+    if (message.includes("已取消")) {
+      sourceTransferMessage.value = "书源重试已取消";
+    } else {
+      errorMessage.value = message;
+    }
+  } finally {
+    if (searchOperationId.value === operationId) {
+      searchOperationId.value = null;
+    }
+    retryingSourceId.value = null;
     searchBusy.value = false;
   }
 }
@@ -1717,7 +1782,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, formatBytes, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
@@ -1843,9 +1908,17 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         </div>
         <div v-if="searchResult.failures.length" class="search-failures">
           <strong>{{ searchResult.failures.length }} 个书源失败，已隔离</strong>
-          <p v-for="failure in searchResult.failures" :key="failure.source_id + '-' + failure.message">
-            {{ failure.source_name }}：{{ failure.message }}
-          </p>
+          <div v-for="failure in searchResult.failures" :key="failure.source_id + '-' + failure.message" class="search-failure-row">
+            <p>{{ failure.source_name }}：{{ failure.message }}</p>
+            <button
+              class="source-link-button"
+              type="button"
+              :disabled="searchBusy || Boolean(retryingSourceId)"
+              @click="retrySourceSearch(failure.source_id)"
+            >
+              {{ retryingSourceId === failure.source_id ? "重试中…" : "重试此源" }}
+            </button>
+          </div>
         </div>
         <p class="search-results-note">有书籍链接的结果可直接打开详情和章节阅读；无链接结果仅展示元数据。</p>
       </section>
