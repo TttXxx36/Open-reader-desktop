@@ -166,6 +166,17 @@ pub struct SourceCacheStats {
     pub oldest_fetched_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceFailureHistory {
+    pub id: String,
+    pub source_id: String,
+    pub source_name: String,
+    pub stage: String,
+    pub reason_code: String,
+    pub message: String,
+    pub created_at: String,
+}
+
 impl Database {
     pub fn open(app_data_dir: &Path) -> Result<Self, DbError> {
         fs::create_dir_all(app_data_dir)?;
@@ -612,6 +623,66 @@ impl Database {
         })
     }
 
+    pub fn record_source_failure_history(
+        &self,
+        source_id: &str,
+        source_name: &str,
+        stage: &str,
+        reason_code: &str,
+        message: &str,
+    ) -> Result<(), DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection.execute(
+            "INSERT INTO source_failure_history
+                (id, source_id, source_name, stage, reason_code, message)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                generated_id("source-failure"),
+                bounded_history_text(source_id, 256),
+                bounded_history_text(source_name, 256),
+                bounded_history_text(stage, 128),
+                bounded_history_text(reason_code, 64),
+                bounded_history_text(message, 512),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_source_failure_history(
+        &self,
+        source_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SourceFailureHistory>, DbError> {
+        let limit = limit.clamp(1, 256) as i64;
+        let source_id = source_id.filter(|value| !value.trim().is_empty());
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let mut statement = connection.prepare(
+            "SELECT id, source_id, source_name, stage, reason_code, message, created_at
+             FROM source_failure_history
+             WHERE (?1 IS NULL OR source_id = ?1)
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = statement.query_map(params![source_id, limit], source_failure_history_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn clear_source_failure_history(
+        &self,
+        source_id: Option<&str>,
+    ) -> Result<usize, DbError> {
+        let source_id = source_id.filter(|value| !value.trim().is_empty());
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let changed = match source_id {
+            Some(source_id) => connection.execute(
+                "DELETE FROM source_failure_history WHERE source_id = ?1",
+                params![source_id],
+            )?,
+            None => connection.execute("DELETE FROM source_failure_history", [])?,
+        };
+        Ok(changed)
+    }
+
     pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let book = connection
@@ -743,6 +814,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             7_i64,
             include_str!("../migrations/0007_source_snapshots.sql"),
         ),
+        (
+            8_i64,
+            include_str!("../migrations/0008_source_failure_history.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -868,6 +943,22 @@ fn generated_id(prefix: &str) -> String {
             .unwrap_or_default()
             .as_nanos()
     )
+}
+
+fn bounded_history_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn source_failure_history_from_row(row: &Row<'_>) -> rusqlite::Result<SourceFailureHistory> {
+    Ok(SourceFailureHistory {
+        id: row.get(0)?,
+        source_id: row.get(1)?,
+        source_name: row.get(2)?,
+        stage: row.get(3)?,
+        reason_code: row.get(4)?,
+        message: row.get(5)?,
+        created_at: row.get(6)?,
+    })
 }
 
 #[cfg(test)]
@@ -1148,4 +1239,67 @@ mod tests {
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
+    #[test]
+    fn persists_and_clears_source_failure_history() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-source-failure-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        database
+            .record_source_failure_history(
+                "source-a",
+                "Alpha",
+                "search",
+                "request",
+                "request failed",
+            )
+            .expect("failure should persist");
+        database
+            .record_source_failure_history(
+                "source-b",
+                "Beta",
+                "search",
+                "timeout",
+                &"x".repeat(600),
+            )
+            .expect("second failure should persist");
+
+        let all = database
+            .list_source_failure_history(None, 10)
+            .expect("history should list");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].source_id, "source-b");
+        assert_eq!(all[0].message.chars().count(), 512);
+        assert_eq!(
+            database
+                .list_source_failure_history(Some("source-a"), 10)
+                .expect("filtered history should list")
+                .len(),
+            1
+        );
+        assert_eq!(
+            database
+                .clear_source_failure_history(Some("source-a"))
+                .expect("source history should clear"),
+            1
+        );
+        assert_eq!(
+            database
+                .clear_source_failure_history(None)
+                .expect("all history should clear"),
+            1
+        );
+        assert!(database
+            .list_source_failure_history(None, 10)
+            .expect("history should be empty")
+            .is_empty());
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
 }
