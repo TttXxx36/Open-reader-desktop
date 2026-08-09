@@ -126,6 +126,21 @@ pub struct BookFormatProbe {
     pub metadata: Option<FormatProbeMetadata>,
 }
 
+/// Rejects formats that are only probed or whose extension conflicts with a known signature.
+///
+/// This is the single import boundary used by desktop commands. In particular, MOBI/AZW
+/// remain probe-only and are never routed to a parser or a DRM-bypass implementation.
+pub fn require_importable_format(file_name: &str, bytes: &[u8]) -> Result<(), ImportError> {
+    let probe = probe_book_format(file_name, bytes);
+    if probe.support == FormatSupport::Importable {
+        return Ok(());
+    }
+    Err(ImportError::UnsupportedFormat(format!(
+        "{file_name}: {}",
+        probe.message
+    )))
+}
+
 pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
     let extension = Path::new(file_name)
         .extension()
@@ -148,14 +163,17 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
     } else {
         extension_kind
     };
-    let signature_match = match format {
-        BookFormatKind::Txt => !bytes.is_empty(),
-        BookFormatKind::Epub => bytes.starts_with(b"PK\x03\x04"),
-        BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => has_mobi_header(bytes),
-        BookFormatKind::Pdf => bytes.starts_with(b"%PDF-"),
-        BookFormatKind::Image => has_image_signature(bytes),
-        BookFormatKind::Unknown => false,
-    };
+    let signature_match = formats_compatible(extension_kind, magic_kind)
+        && match format {
+            BookFormatKind::Txt => !bytes.is_empty(),
+            BookFormatKind::Epub => bytes.starts_with(b"PK\x03\x04"),
+            BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => {
+                has_mobi_header(bytes)
+            }
+            BookFormatKind::Pdf => bytes.starts_with(b"%PDF-"),
+            BookFormatKind::Image => has_image_signature(bytes),
+            BookFormatKind::Unknown => false,
+        };
     let support = match (format, signature_match) {
         (BookFormatKind::Txt | BookFormatKind::Epub, true) => FormatSupport::Importable,
         (
@@ -175,7 +193,9 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
         (
             BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3,
             FormatSupport::ProbeOnly,
-        ) => "已识别 MOBI/AZW 容器；当前仅做只读探测，尚未导入".to_string(),
+        ) => {
+            "已识别 MOBI/AZW 容器；当前仅做只读探测，尚未导入且不会绕过 DRM".to_string()
+        },
         (BookFormatKind::Pdf, FormatSupport::ProbeOnly) => {
             "已识别 PDF；需要独立的渲染、搜索和目录模型".to_string()
         }
@@ -198,6 +218,22 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
         message,
         metadata,
     }
+}
+
+fn formats_compatible(extension_kind: BookFormatKind, magic_kind: BookFormatKind) -> bool {
+    if extension_kind == BookFormatKind::Unknown || magic_kind == BookFormatKind::Unknown {
+        return true;
+    }
+    if extension_kind == magic_kind {
+        return true;
+    }
+    matches!(
+        (extension_kind, magic_kind),
+        (
+            BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3,
+            BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3
+        )
+    )
 }
 
 fn detect_magic_format(bytes: &[u8]) -> BookFormatKind {
@@ -2339,6 +2375,7 @@ mod tests {
         assert_eq!(mobi_probe.format, BookFormatKind::Mobi);
         assert_eq!(mobi_probe.support, FormatSupport::ProbeOnly);
         assert!(mobi_probe.signature_match);
+        assert!(mobi_probe.message.contains("DRM"));
         assert_eq!(
             mobi_probe.metadata,
             Some(FormatProbeMetadata::Mobi {
@@ -2388,6 +2425,10 @@ mod tests {
         let renamed_pdf = probe_book_format("book.bin", b"%PDF-1.7");
         assert_eq!(renamed_pdf.format, BookFormatKind::Pdf);
         assert_eq!(renamed_pdf.support, FormatSupport::ProbeOnly);
+
+        let mismatched_txt = probe_book_format("book.txt", b"%PDF-1.7");
+        assert_eq!(mismatched_txt.format, BookFormatKind::Txt);
+        assert_eq!(mismatched_txt.support, FormatSupport::SignatureMismatch);
     }
 
     #[test]
