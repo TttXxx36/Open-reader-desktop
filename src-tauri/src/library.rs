@@ -191,8 +191,12 @@ fn parse_txt_with_options(
     file_name: &str,
     options: &TxtParseOptions,
 ) -> Result<ParsedBook, ImportError> {
-    let text = decode_text(bytes)?;
-    let chapters = split_txt_with_options(text.as_ref(), options)?;
+    let chapters = if options.replacements.is_empty() {
+        split_txt_bytes_streaming(bytes, options)?
+    } else {
+        let text = decode_text(bytes)?;
+        split_txt_with_options(text.as_ref(), options)?
+    };
     if chapters.is_empty() {
         return Err(ImportError::TextDecode);
     }
@@ -295,11 +299,8 @@ fn split_txt(text: &str) -> Vec<ParsedChapter> {
     split_txt_with_options(text, &TxtParseOptions::default()).unwrap_or_default()
 }
 
-fn split_txt_with_options(
-    text: &str,
-    options: &TxtParseOptions,
-) -> Result<Vec<ParsedChapter>, ImportError> {
-    let custom_pattern = match options.chapter_rule {
+fn compile_txt_chapter_pattern(options: &TxtParseOptions) -> Result<Option<Regex>, ImportError> {
+    match options.chapter_rule {
         TxtChapterRule::Regex => {
             let pattern = options
                 .custom_pattern
@@ -313,12 +314,19 @@ fn split_txt_with_options(
                     "自定义章节规则不能超过 256 字节".to_string(),
                 ));
             }
-            Some(Regex::new(pattern).map_err(|error| {
+            Ok(Some(Regex::new(pattern).map_err(|error| {
                 ImportError::InvalidTxtOptions(format!("自定义章节规则无效：{error}"))
-            })?)
+            })?))
         }
-        _ => None,
-    };
+        _ => Ok(None),
+    }
+}
+
+fn split_txt_with_options(
+    text: &str,
+    options: &TxtParseOptions,
+) -> Result<Vec<ParsedChapter>, ImportError> {
+    let custom_pattern = compile_txt_chapter_pattern(options)?;
     let mut chapters = Vec::new();
     let mut current_title = String::new();
     let mut current_content = String::new();
@@ -355,21 +363,129 @@ fn split_txt_with_options(
     Ok(chapters)
 }
 
+fn split_txt_bytes_streaming(
+    bytes: &[u8],
+    options: &TxtParseOptions,
+) -> Result<Vec<ParsedChapter>, ImportError> {
+    let custom_pattern = compile_txt_chapter_pattern(options)?;
+    let mut chapters = Vec::new();
+    let mut current_title = String::new();
+    let mut current_content = String::new();
+
+    for_each_decoded_txt_line(bytes, options, |line| {
+        append_txt_line(
+            line,
+            options,
+            custom_pattern.as_ref(),
+            &mut chapters,
+            &mut current_title,
+            &mut current_content,
+        );
+    })?;
+
+    if !current_title.is_empty() || !current_content.is_empty() {
+        push_text_chapter(&mut chapters, &current_title, &current_content);
+    }
+
+    Ok(chapters)
+}
+
 fn for_each_normalized_txt_line<F>(text: &str, options: &TxtParseOptions, mut callback: F)
 where
     F: FnMut(&str),
 {
     let mut line = String::new();
-    let mut characters = text.chars().peekable();
-    while let Some(character) = characters.next() {
-        if character == '\r' {
-            if characters.peek().is_some_and(|next| *next == '\n') {
-                characters.next();
+    let mut pending_cr = false;
+    consume_normalized_txt_chunk(
+        text,
+        options,
+        &mut line,
+        &mut pending_cr,
+        &mut callback,
+    );
+    finish_normalized_txt_lines(&mut line, &mut pending_cr, &mut callback);
+}
+
+fn for_each_decoded_txt_line<F>(
+    bytes: &[u8],
+    options: &TxtParseOptions,
+    mut callback: F,
+) -> Result<(), ImportError>
+where
+    F: FnMut(&str),
+{
+    let mut line = String::new();
+    let mut pending_cr = false;
+    let mut bytes = bytes;
+
+    if let Some(stripped) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        bytes = stripped;
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        consume_normalized_txt_chunk(
+            text.trim_start_matches('\u{feff}'),
+            options,
+            &mut line,
+            &mut pending_cr,
+            &mut callback,
+        );
+        finish_normalized_txt_lines(&mut line, &mut pending_cr, &mut callback);
+        return Ok(());
+    }
+
+    let (encoding, encoded) = if bytes.starts_with(&[0xFF, 0xFE]) {
+        (&UTF_16LE, &bytes[2..])
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        (&UTF_16BE, &bytes[2..])
+    } else {
+        (&GB18030, bytes)
+    };
+    let mut decoder = encoding.new_decoder();
+
+    for (index, chunk) in encoded.chunks(64 * 1024).enumerate() {
+        let last = index + 1 == encoded.chunks(64 * 1024).len();
+        let mut decoded = String::new();
+        let (_, _, had_errors) = decoder.decode_to_string(chunk, &mut decoded, last);
+        if had_errors {
+            return Err(ImportError::TextDecode);
+        }
+        consume_normalized_txt_chunk(
+            &decoded,
+            options,
+            &mut line,
+            &mut pending_cr,
+            &mut callback,
+        );
+    }
+
+    finish_normalized_txt_lines(&mut line, &mut pending_cr, &mut callback);
+    Ok(())
+}
+
+fn consume_normalized_txt_chunk<F>(
+    chunk: &str,
+    options: &TxtParseOptions,
+    line: &mut String,
+    pending_cr: &mut bool,
+    callback: &mut F,
+) where
+    F: FnMut(&str),
+{
+    for character in chunk.chars() {
+        if *pending_cr {
+            if character == '\n' {
+                *pending_cr = false;
+                continue;
             }
-            callback(&line);
+            callback(line);
             line.clear();
+            *pending_cr = false;
+        }
+
+        if character == '\r' {
+            *pending_cr = true;
         } else if character == '\n' {
-            callback(&line);
+            callback(line);
             line.clear();
         } else if options.normalize_full_width_space && character == '\u{3000}' {
             line.push(' ');
@@ -377,9 +493,23 @@ where
             line.push(character);
         }
     }
+}
 
+fn finish_normalized_txt_lines<F>(
+    line: &mut String,
+    pending_cr: &mut bool,
+    callback: &mut F,
+) where
+    F: FnMut(&str),
+{
+    if *pending_cr {
+        callback(line);
+        line.clear();
+        *pending_cr = false;
+    }
     if !line.is_empty() {
-        callback(&line);
+        callback(line);
+        line.clear();
     }
 }
 
@@ -1888,6 +2018,21 @@ mod tests {
         assert!(!had_errors);
         let gb_book = parse_book_bytes("gb.txt", gb18030.as_ref()).expect("GB18030 should parse");
         assert_eq!(gb_book.chapters[0].content, "内容");
+    }
+
+    #[test]
+    fn decodes_txt_across_multibyte_chunk_boundaries() {
+        let mut input = String::from("第一章\r\n");
+        while input.len() < 128 * 1024 {
+            input.push_str("跨边界的中文正文行。\r\n");
+        }
+        let (encoded, _, had_errors) = GB18030.encode(&input);
+        assert!(!had_errors);
+
+        let book = parse_book_bytes("chunked.txt", encoded.as_ref())
+            .expect("chunked GB18030 text should parse");
+        assert_eq!(book.chapters.len(), 1);
+        assert!(book.chapters[0].content.contains("跨边界的中文正文行"));
     }
 
     #[test]
