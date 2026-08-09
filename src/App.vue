@@ -3068,6 +3068,15 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   background: rgba(54, 92, 145, 0.22);
 }
 
+.reader-next-note {
+  color: #c9c5ff;
+  background: rgba(90, 74, 152, 0.2);
+}
+
+.reader-next-note strong {
+  color: #eeeaff;
+}
+
 .reader-layout {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
