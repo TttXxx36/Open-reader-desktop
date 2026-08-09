@@ -99,12 +99,31 @@ pub enum FormatSupport {
     SignatureMismatch,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FormatProbeMetadata {
+    Pdf {
+        version: String,
+    },
+    Image {
+        mime: String,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
+    Mobi {
+        record_offset: u32,
+        header_length: Option<u32>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BookFormatProbe {
     pub format: BookFormatKind,
     pub support: FormatSupport,
     pub signature_match: bool,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<FormatProbeMetadata>,
 }
 
 pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
@@ -168,11 +187,16 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
         _ => "格式已识别".to_string(),
     };
 
+    let metadata = signature_match
+        .then(|| format_probe_metadata(format, bytes))
+        .flatten();
+
     BookFormatProbe {
         format,
         support,
         signature_match,
         message,
+        metadata,
     }
 }
 
@@ -211,6 +235,153 @@ fn has_image_signature(bytes: &[u8]) -> bool {
         || bytes.starts_with(b"GIF87a")
         || bytes.starts_with(b"GIF89a")
         || (bytes.starts_with(b"RIFF") && bytes.len() >= 12 && &bytes[8..12] == b"WEBP")
+}
+
+fn format_probe_metadata(
+    format: BookFormatKind,
+    bytes: &[u8],
+) -> Option<FormatProbeMetadata> {
+    match format {
+        BookFormatKind::Pdf => parse_pdf_version(bytes).map(|version| {
+            FormatProbeMetadata::Pdf {
+                version: version.to_string(),
+            }
+        }),
+        BookFormatKind::Image => {
+            let (mime, dimensions) = if bytes.starts_with(b"\x89PNG\r\n\x1A\n") {
+                ("image/png", png_dimensions(bytes))
+            } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+                ("image/gif", gif_dimensions(bytes))
+            } else if bytes.starts_with(b"RIFF")
+                && bytes.len() >= 16
+                && &bytes[8..12] == b"WEBP"
+            {
+                ("image/webp", webp_dimensions(bytes))
+            } else {
+                ("image/jpeg", jpeg_dimensions(bytes))
+            };
+            Some(FormatProbeMetadata::Image {
+                mime: mime.to_string(),
+                width: dimensions.map(|(width, _)| width),
+                height: dimensions.map(|(_, height)| height),
+            })
+        }
+        BookFormatKind::Mobi | BookFormatKind::Azw | BookFormatKind::Azw3 => {
+            mobi_metadata(bytes).map(|(record_offset, header_length)| {
+                FormatProbeMetadata::Mobi {
+                    record_offset,
+                    header_length,
+                }
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_pdf_version(bytes: &[u8]) -> Option<&str> {
+    let version = bytes.get(5..8)?;
+    (version[0].is_ascii_digit() && version[1] == b'.' && version[2].is_ascii_digit())
+        .then(|| std::str::from_utf8(version).ok())
+        .flatten()
+}
+
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 24 || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    valid_image_dimensions(width, height)
+}
+
+fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 10 {
+        return None;
+    }
+    let width = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
+    let height = u16::from_le_bytes([bytes[8], bytes[9]]) as u32;
+    valid_image_dimensions(width, height)
+}
+
+fn webp_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 30 || &bytes[12..16] != b"VP8X" {
+        return None;
+    }
+    let width = 1
+        + u32::from(bytes[24])
+        + (u32::from(bytes[25]) << 8)
+        + (u32::from(bytes[26]) << 16);
+    let height = 1
+        + u32::from(bytes[27])
+        + (u32::from(bytes[28]) << 8)
+        + (u32::from(bytes[29]) << 16);
+    valid_image_dimensions(width, height)
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if !bytes.starts_with(b"\xFF\xD8\xFF") {
+        return None;
+    }
+    const MAX_SCAN_BYTES: usize = 1024 * 1024;
+    let limit = bytes.len().min(MAX_SCAN_BYTES);
+    let mut cursor = 2;
+    while cursor + 1 < limit {
+        while cursor < limit && bytes[cursor] != 0xFF {
+            cursor += 1;
+        }
+        while cursor < limit && bytes[cursor] == 0xFF {
+            cursor += 1;
+        }
+        if cursor >= limit {
+            break;
+        }
+        let marker = bytes[cursor];
+        cursor += 1;
+        if marker == 0xD9 || marker == 0xDA {
+            break;
+        }
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            continue;
+        }
+        if cursor + 2 > limit {
+            break;
+        }
+        let segment_length = u16::from_be_bytes([bytes[cursor], bytes[cursor + 1]]) as usize;
+        if segment_length < 2 || cursor + segment_length > limit {
+            break;
+        }
+        let is_sof = matches!(
+            marker,
+            0xC0..=0xC3
+                | 0xC5..=0xC7
+                | 0xC9..=0xCB
+                | 0xCD..=0xCF
+        );
+        if is_sof && segment_length >= 7 {
+            let height = u16::from_be_bytes([bytes[cursor + 3], bytes[cursor + 4]]) as u32;
+            let width = u16::from_be_bytes([bytes[cursor + 5], bytes[cursor + 6]]) as u32;
+            return valid_image_dimensions(width, height);
+        }
+        cursor += segment_length;
+    }
+    None
+}
+
+fn valid_image_dimensions(width: u32, height: u32) -> Option<(u32, u32)> {
+    (width > 0 && height > 0 && width <= 100_000 && height <= 100_000)
+        .then_some((width, height))
+}
+
+fn mobi_metadata(bytes: &[u8]) -> Option<(u32, Option<u32>)> {
+    if !has_mobi_header(bytes) {
+        return None;
+    }
+    let record_offset = u32::from_be_bytes([bytes[78], bytes[79], bytes[80], bytes[81]]);
+    let header_offset = record_offset as usize + 20;
+    let header_length = bytes
+        .get(header_offset..header_offset + 4)
+        .map(|value| u32::from_be_bytes([value[0], value[1], value[2], value[3]]));
+    Some((record_offset, header_length))
 }
 
 pub const CONTENT_FORMAT_TEXT: &str = "text";
@@ -2178,11 +2349,19 @@ mod tests {
         let mut mobi = vec![0_u8; 128];
         mobi[78..82].copy_from_slice(&80_u32.to_be_bytes());
         mobi[96..100].copy_from_slice(b"MOBI");
+        mobi[100..104].copy_from_slice(&232_u32.to_be_bytes());
 
         let mobi_probe = probe_book_format("book.mobi", &mobi);
         assert_eq!(mobi_probe.format, BookFormatKind::Mobi);
         assert_eq!(mobi_probe.support, FormatSupport::ProbeOnly);
         assert!(mobi_probe.signature_match);
+        assert_eq!(
+            mobi_probe.metadata,
+            Some(FormatProbeMetadata::Mobi {
+                record_offset: 80,
+                header_length: Some(232),
+            })
+        );
 
         let azw_probe = probe_book_format("book.azw3", &mobi);
         assert_eq!(azw_probe.format, BookFormatKind::Azw3);
@@ -2191,10 +2370,30 @@ mod tests {
         let pdf_probe = probe_book_format("book.pdf", b"%PDF-1.7");
         assert_eq!(pdf_probe.format, BookFormatKind::Pdf);
         assert_eq!(pdf_probe.support, FormatSupport::ProbeOnly);
+        assert_eq!(
+            pdf_probe.metadata,
+            Some(FormatProbeMetadata::Pdf {
+                version: "1.7".to_string(),
+            })
+        );
 
-        let image_probe = probe_book_format("cover.png", b"\x89PNG\r\n\x1A\nrest");
+        let mut png = b"\x89PNG\r\n\x1A\n".to_vec();
+        png.extend_from_slice(&13_u32.to_be_bytes());
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&1_u32.to_be_bytes());
+        png.extend_from_slice(&2_u32.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let image_probe = probe_book_format("cover.png", &png);
         assert_eq!(image_probe.format, BookFormatKind::Image);
         assert_eq!(image_probe.support, FormatSupport::ProbeOnly);
+        assert_eq!(
+            image_probe.metadata,
+            Some(FormatProbeMetadata::Image {
+                mime: "image/png".to_string(),
+                width: Some(1),
+                height: Some(2),
+            })
+        );
 
         let txt_probe = probe_book_format("book.txt", "第一章\\n正文".as_bytes());
         assert_eq!(txt_probe.support, FormatSupport::Importable);
