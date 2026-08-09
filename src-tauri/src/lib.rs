@@ -5,8 +5,8 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceMetadata,
-    SourceSnapshotSummary, SourceSummary, SourceWrite,
+    BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceFailureHistory,
+    SourceMetadata, SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
@@ -1225,6 +1225,62 @@ async fn fetch_source_chapter(
     Ok(result)
 }
 
+fn classify_source_failure(message: &str) -> &'static str {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("timeout") || message.contains("超时") {
+        "timeout"
+    } else if normalized.contains("cancel") || message.contains("取消") {
+        "cancelled"
+    } else if normalized.contains("parse")
+        || normalized.contains("json")
+        || message.contains("解析")
+        || message.contains("规则")
+    {
+        "parse"
+    } else if normalized.contains("config") || message.contains("配置") {
+        "config"
+    } else if normalized.contains("body") || message.contains("响应体") {
+        "body_limit"
+    } else {
+        "request"
+    }
+}
+
+fn record_source_failures(database: &Database, failures: &[SourceSearchFailure]) {
+    for failure in failures {
+        if let Err(error) = database.record_source_failure_history(
+            &failure.source_id,
+            &failure.source_name,
+            "search",
+            classify_source_failure(&failure.message),
+            &failure.message,
+        ) {
+            eprintln!("unable to record source failure history: {error}");
+        }
+    }
+}
+
+#[tauri::command]
+fn list_source_failure_history(
+    database: tauri::State<'_, Database>,
+    source_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<SourceFailureHistory>, String> {
+    database
+        .list_source_failure_history(source_id.as_deref(), limit.unwrap_or(64))
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn clear_source_failure_history(
+    database: tauri::State<'_, Database>,
+    source_id: Option<String>,
+) -> Result<usize, String> {
+    database
+        .clear_source_failure_history(source_id.as_deref())
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 async fn search_sources(
     database: tauri::State<'_, Database>,
@@ -1276,6 +1332,7 @@ async fn search_sources(
     let mut result = search_result?;
     result.enabled_sources = enabled_sources;
     result.failures.splice(0..0, failures);
+    record_source_failures(&database, &result.failures);
     Ok(result)
 }
 
@@ -1326,10 +1383,10 @@ async fn retry_source_search(
         }
     };
     cancellation.remove(&operation_id);
-    search_result.map(|mut result| {
-        result.enabled_sources = 1;
-        result
-    })
+    let mut result = search_result?;
+    result.enabled_sources = 1;
+    record_source_failures(&database, &result.failures);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1407,6 +1464,8 @@ pub fn run() {
             fetch_source_preview,
             search_sources,
             retry_source_search,
+            list_source_failure_history,
+            clear_source_failure_history,
             fetch_source_book,
             fetch_source_chapter,
             run_source_pipeline,
