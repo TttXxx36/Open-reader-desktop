@@ -133,12 +133,7 @@ fn import_book(
     file_name: String,
     bytes: Vec<u8>,
 ) -> Result<BookSummary, String> {
-    import_book_impl(
-        &database,
-        file_name,
-        bytes,
-        TxtParseOptions::default(),
-    )
+    import_book_impl(&database, file_name, bytes, TxtParseOptions::default())
 }
 
 #[tauri::command]
@@ -148,12 +143,7 @@ fn import_book_with_options(
     bytes: Vec<u8>,
     txt_options: Option<TxtParseOptions>,
 ) -> Result<BookSummary, String> {
-    import_book_impl(
-        &database,
-        file_name,
-        bytes,
-        txt_options.unwrap_or_default(),
-    )
+    import_book_impl(&database, file_name, bytes, txt_options.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -167,12 +157,8 @@ fn preview_book_import(
         return Err("文件超过 64 MB 限制".to_string());
     }
 
-    preview_book_bytes(
-        &file_name,
-        &bytes,
-        &txt_options.unwrap_or_default(),
-    )
-    .map_err(|error| error.to_string())
+    preview_book_bytes(&file_name, &bytes, &txt_options.unwrap_or_default())
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
