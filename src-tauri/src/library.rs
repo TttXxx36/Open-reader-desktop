@@ -1776,9 +1776,8 @@ mod tests {
             PeakPagefileUsage: 0,
         };
         let counter_size = counters.cb;
-        let result = unsafe {
-            GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counter_size)
-        };
+        let result =
+            unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, counter_size) };
         (result != 0).then_some(counters.PeakWorkingSetSize as u64)
     }
 
