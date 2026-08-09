@@ -6,8 +6,8 @@ mod xpath_poc;
 
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceFailureHistory,
-    SourceFailureStats, SourceMetadata, SourceRequestMetrics, SourceRuleMetrics,
-    SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
+    SourceFailureStats, SourceMetadata, SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome,
+    SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::parse_book_bytes;
 use serde::{Deserialize, Serialize};
