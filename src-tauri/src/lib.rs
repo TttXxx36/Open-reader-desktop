@@ -1,4 +1,5 @@
 mod db;
+mod image_relink;
 mod image_sequence;
 mod library;
 mod source;
@@ -310,6 +311,29 @@ fn refresh_image_sequence_state(
 ) -> Result<ImageSequenceDetail, String> {
     database
         .refresh_image_sequence_state(&book_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn preview_image_sequence_relink(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+    new_root_path: String,
+) -> Result<ImageRelinkPreview, String> {
+    database
+        .preview_image_sequence_relink(&book_id, &new_root_path)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_image_sequence_relink(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+    new_root_path: String,
+    assignments: Vec<ImageRelinkAssignment>,
+) -> Result<ImageSequenceDetail, String> {
+    database
+        .apply_image_sequence_relink(&book_id, &new_root_path, assignments)
         .map_err(|error| error.to_string())
 }
 
@@ -1878,6 +1902,7 @@ async fn run_source_pipeline(
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -1909,6 +1934,8 @@ pub fn run() {
             get_image_sequence,
             save_image_sequence,
             refresh_image_sequence_state,
+            preview_image_sequence_relink,
+            apply_image_sequence_relink,
             save_image_sequence_progress,
             cache_image_sequence,
             read_image_sequence_thumbnails,
