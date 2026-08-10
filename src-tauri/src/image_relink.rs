@@ -1,4 +1,6 @@
-use crate::image_sequence::{modified_at_ns, normalize_relative_image_path, validate_image_root_path};
+use crate::image_sequence::{
+    modified_at_ns, normalize_relative_image_path, validate_image_root_path,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -55,10 +57,10 @@ pub fn preview_relink(
     new_root_path: &str,
     pages: &[RelinkPage],
 ) -> Result<ImageRelinkPreview, String> {
-    let old_root_path = validate_image_root_path(old_root_path)
-        .map_err(|error| format!("旧目录无效：{error}"))?;
-    let new_root_path = validate_image_root_path(new_root_path)
-        .map_err(|error| format!("新目录无效：{error}"))?;
+    let old_root_path =
+        validate_image_root_path(old_root_path).map_err(|error| format!("旧目录无效：{error}"))?;
+    let new_root_path =
+        validate_image_root_path(new_root_path).map_err(|error| format!("新目录无效：{error}"))?;
     let candidates = scan_image_root(&new_root_path)?;
 
     let mut exact_paths = HashMap::new();
@@ -191,8 +193,8 @@ fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
     let mut candidates = Vec::new();
     let mut total_bytes = 0_u64;
     while let Some(directory) = directories.pop() {
-        let entries = fs::read_dir(&directory)
-            .map_err(|error| format!("读取图片目录失败：{error}"))?;
+        let entries =
+            fs::read_dir(&directory).map_err(|error| format!("读取图片目录失败：{error}"))?;
         for entry in entries {
             let entry = entry.map_err(|error| format!("读取图片目录项失败：{error}"))?;
             let file_type = entry
@@ -310,12 +312,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_or_oversized_roots() {
-        let missing = preview_relink(
-            "book",
-            "/old",
-            "/definitely/missing",
-            &[],
-        );
+        let missing = preview_relink("book", "/old", "/definitely/missing", &[]);
         assert!(missing.is_err());
     }
 }
