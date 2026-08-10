@@ -424,7 +424,7 @@ impl Database {
         let title = write.title.trim();
         let cache_key = write.cache_key.trim();
         let root_display_name = root_path
-            .rsplit(['/', '\\\\'])
+            .rsplit(['/', '\\'])
             .find(|value| !value.is_empty())
             .unwrap_or(root_path.as_str());
         let progress = if write.page_count <= 1 {
