@@ -9,6 +9,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{Cursor, Read, Seek, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -521,8 +522,16 @@ pub struct ImageThumbnailCacheSummary {
     pub cache_hits: usize,
     pub cache_writes: usize,
     pub evicted_files: usize,
+    pub cleaned_temp_files: usize,
     pub cache_bytes: u64,
     pub entries: Vec<ImageThumbnailCacheEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageThumbnailPageBytes {
+    pub page_index: usize,
+    pub mime: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -536,7 +545,10 @@ struct CachedImageFile {
 struct ImageCachePruneResult {
     remaining_bytes: u64,
     evicted_files: usize,
+    cleaned_temp_files: usize,
 }
+
+const MAX_IMAGE_THUMBNAIL_READ_PAGES: usize = 3;
 
 fn is_safe_image_cache_key(cache_key: &str) -> bool {
     let Some(suffix) = cache_key.strip_prefix(IMAGE_CACHE_KEY_PREFIX) else {
@@ -599,7 +611,19 @@ fn encode_image_thumbnail(file_name: &str, bytes: &[u8]) -> Result<Vec<u8>, Impo
     Ok(encoded)
 }
 
-fn write_thumbnail_atomically(path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
+fn check_image_cache_cancellation(cancelled: Option<&AtomicBool>) -> Result<(), ImportError> {
+    if cancelled.is_some_and(|token| token.load(Ordering::Relaxed)) {
+        return Err(ImportError::InvalidImage("图片缓存操作已取消".to_string()));
+    }
+    Ok(())
+}
+
+fn write_thumbnail_atomically(
+    path: &Path,
+    bytes: &[u8],
+    cancelled: Option<&AtomicBool>,
+) -> Result<(), ImportError> {
+    check_image_cache_cancellation(cancelled)?;
     let parent = path
         .parent()
         .ok_or_else(|| ImportError::InvalidImage("缩略图缓存路径无父目录".to_string()))?;
@@ -626,6 +650,8 @@ fn write_thumbnail_atomically(path: &Path, bytes: &[u8]) -> Result<(), ImportErr
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
+        check_image_cache_cancellation(cancelled)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
 
         // Cache keys are content-derived. A normal write installs into an absent target
         // atomically; invalidation removes a corrupt target before this function is called.
@@ -639,6 +665,43 @@ fn write_thumbnail_atomically(path: &Path, bytes: &[u8]) -> Result<(), ImportErr
     result.map_err(ImportError::Io)
 }
 
+fn is_stale_thumbnail_temp(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let Some((_, suffix)) = name.rsplit_once(".tmp-") else {
+        return false;
+    };
+    let Some((pid, _nonce)) = suffix.split_once('-') else {
+        return true;
+    };
+    pid.parse::<u32>()
+        .map_or(true, |value| value != std::process::id())
+}
+
+fn remove_stale_thumbnail_temps(root: &Path) -> Result<usize, ImportError> {
+    if !root.exists() {
+        return Ok(0);
+    }
+
+    let mut removed = 0;
+    for cache_dir in fs::read_dir(root)? {
+        let cache_dir = cache_dir?;
+        if !cache_dir.file_type()?.is_dir() {
+            continue;
+        }
+        for file in fs::read_dir(cache_dir.path())? {
+            let file = file?;
+            if file.file_type()?.is_file() && is_stale_thumbnail_temp(&file.path()) {
+                if fs::remove_file(file.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
 fn prune_image_thumbnail_cache(
     root: &Path,
     max_bytes: u64,
@@ -647,6 +710,7 @@ fn prune_image_thumbnail_cache(
         return Ok(ImageCachePruneResult::default());
     }
 
+    let cleaned_temp_files = remove_stale_thumbnail_temps(root)?;
     let mut files = Vec::new();
     for cache_dir in fs::read_dir(root)? {
         let cache_dir = cache_dir?;
@@ -695,12 +759,14 @@ fn prune_image_thumbnail_cache(
         return Ok(ImageCachePruneResult {
             remaining_bytes: total_bytes,
             evicted_files,
+            cleaned_temp_files,
         });
     }
 
     Ok(ImageCachePruneResult {
         remaining_bytes: total_bytes,
         evicted_files: 0,
+        cleaned_temp_files,
     })
 }
 
@@ -712,6 +778,27 @@ pub fn cache_image_sequence_files(
     spread: ImageSpreadMode,
     force_refresh: bool,
 ) -> Result<ImageThumbnailCacheSummary, ImportError> {
+    cache_image_sequence_files_with_cancel(
+        root,
+        cache_key,
+        inputs,
+        direction,
+        spread,
+        force_refresh,
+        None,
+    )
+}
+
+pub fn cache_image_sequence_files_with_cancel(
+    root: &Path,
+    cache_key: &str,
+    inputs: &[ImageSequenceInput],
+    direction: ImageReadingDirection,
+    spread: ImageSpreadMode,
+    force_refresh: bool,
+    cancelled: Option<&AtomicBool>,
+) -> Result<ImageThumbnailCacheSummary, ImportError> {
+    check_image_cache_cancellation(cancelled)?;
     if !is_safe_image_cache_key(cache_key) {
         return Err(ImportError::InvalidImage("图片缓存键格式无效".to_string()));
     }
@@ -728,6 +815,7 @@ pub fn cache_image_sequence_files(
     let mut input_bytes = 0_usize;
     let mut previews = Vec::with_capacity(inputs.len());
     for input in inputs {
+        check_image_cache_cancellation(cancelled)?;
         input_bytes = input_bytes
             .checked_add(input.bytes.len())
             .ok_or_else(|| ImportError::InvalidImage("图片序列输入大小溢出".to_string()))?;
@@ -740,6 +828,7 @@ pub fn cache_image_sequence_files(
         previews.push(preview_image_bytes(&input.file_name, &input.bytes)?);
     }
     build_image_sequence_preview(previews, direction, spread)?;
+    check_image_cache_cancellation(cancelled)?;
 
     let cache_dir = root.join(cache_key);
     fs::create_dir_all(&cache_dir)?;
@@ -748,6 +837,7 @@ pub fn cache_image_sequence_files(
     let mut cache_writes = 0;
 
     for (page_index, input) in inputs.iter().enumerate() {
+        check_image_cache_cancellation(cancelled)?;
         let path = cache_dir.join(format!("page-{page_index:04}.png"));
         if !force_refresh {
             if let Some(byte_len) = cached_thumbnail_size(&path)? {
@@ -765,8 +855,9 @@ pub fn cache_image_sequence_files(
             let _ = fs::remove_file(&path);
         }
         let encoded = encode_image_thumbnail(&input.file_name, &input.bytes)?;
+        check_image_cache_cancellation(cancelled)?;
         let byte_len = encoded.len() as u64;
-        write_thumbnail_atomically(&path, &encoded)?;
+        write_thumbnail_atomically(&path, &encoded, cancelled)?;
         cache_writes += 1;
         entries.push(ImageThumbnailCacheEntry {
             cache_key: cache_key.to_string(),
@@ -783,9 +874,51 @@ pub fn cache_image_sequence_files(
         cache_hits,
         cache_writes,
         evicted_files: prune.evicted_files,
+        cleaned_temp_files: prune.cleaned_temp_files,
         cache_bytes: prune.remaining_bytes,
         entries,
     })
+}
+
+pub fn read_image_thumbnail_files(
+    root: &Path,
+    cache_key: &str,
+    page_indices: &[usize],
+) -> Result<Vec<ImageThumbnailPageBytes>, ImportError> {
+    if !is_safe_image_cache_key(cache_key) {
+        return Err(ImportError::InvalidImage("图片缓存键格式无效".to_string()));
+    }
+    if page_indices.len() > MAX_IMAGE_THUMBNAIL_READ_PAGES {
+        return Err(ImportError::InvalidImage(format!(
+            "单次最多读取 {} 张缓存缩略图",
+            MAX_IMAGE_THUMBNAIL_READ_PAGES
+        )));
+    }
+
+    let cache_dir = root.join(cache_key);
+    let mut result = Vec::with_capacity(page_indices.len());
+    for &page_index in page_indices {
+        if page_index >= MAX_IMAGE_SEQUENCE_PAGES {
+            return Err(ImportError::InvalidImage("图片页码超出上限".to_string()));
+        }
+        if result.iter().any(|page: &ImageThumbnailPageBytes| page.page_index == page_index) {
+            continue;
+        }
+        let path = cache_dir.join(format!("page-{page_index:04}.png"));
+        let Some(byte_len) = cached_thumbnail_size(&path)? else {
+            continue;
+        };
+        let bytes = fs::read(&path)?;
+        if bytes.len() as u64 != byte_len {
+            continue;
+        }
+        result.push(ImageThumbnailPageBytes {
+            page_index,
+            mime: "image/png".to_string(),
+            bytes,
+        });
+    }
+    Ok(result)
 }
 
 fn formats_compatible(extension_kind: BookFormatKind, magic_kind: BookFormatKind) -> bool {
