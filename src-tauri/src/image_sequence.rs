@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    path::PathBuf,
-    time::UNIX_EPOCH,
-};
+use std::{fs, path::PathBuf, time::UNIX_EPOCH};
 use thiserror::Error;
 
 pub const MAX_IMAGE_RELATIVE_PATH_BYTES: usize = 4 * 1024;
