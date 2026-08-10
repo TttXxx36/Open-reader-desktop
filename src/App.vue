@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openNativeDialog } from "@tauri-apps/plugin-dialog";
 import brandMark from "./assets/open-reader-mark.svg";
 import LibraryOverview from "./components/LibraryOverview.vue";
 import ReaderSettingsPanel from "./components/ReaderSettingsPanel.vue";
@@ -136,6 +137,31 @@ interface ImageSequenceRecordDetail {
   sequence: ImageSequenceRecordSummary;
   pages: ImageSequenceRecordPage[];
 }
+
+interface ImageRelinkAssignment {
+  page_index: number;
+  old_relative_path: string;
+  new_relative_path: string | null;
+  status: string;
+  match_kind: string;
+  file_size: number;
+  modified_at_ns: number | null;
+}
+
+interface ImageRelinkPreview {
+  book_id: string;
+  old_root_path: string;
+  new_root_path: string;
+  matched_pages: number;
+  missing_pages: number;
+  added_files: number;
+  changed_pages: number;
+  reordered: boolean;
+  assignments: ImageRelinkAssignment[];
+  missing_page_indices: number[];
+  added_paths: string[];
+}
+
 
 interface ImageThumbnailCacheEntry {
   cache_key: string;
@@ -620,6 +646,9 @@ const imageSequenceRecordState = ref("");
 const imageSequenceReadyPages = ref(0);
 const imageSequenceMissingPages = ref(0);
 const imageSequenceStalePages = ref(0);
+const imageRelinkPreview = ref<ImageRelinkPreview | null>(null);
+const imageRelinkBusy = ref(false);
+const imageRelinkApplying = ref(false);
 const imageThumbnailCache = ref<ImageThumbnailCacheSummary | null>(null);
 const imageCacheBusy = ref(false);
 const imageCacheOperationId = ref<string | null>(null);
@@ -2179,6 +2208,9 @@ function resetBookImportPreview() {
   imageSequenceReadyPages.value = 0;
   imageSequenceMissingPages.value = 0;
   imageSequenceStalePages.value = 0;
+  imageRelinkPreview.value = null;
+  imageRelinkBusy.value = false;
+  imageRelinkApplying.value = false;
   imageThumbnailCache.value = null;
   bookImportFileName.value = "";
   bookImportBytes.value = [];
@@ -2530,6 +2562,96 @@ function imageSequenceStateLabel(state: string) {
   if (state === "stale") return "检测到文件变化";
   if (state === "ready") return "文件状态正常";
   return "尚未检测";
+}
+
+function imageRelinkAssignmentLabel(assignment: ImageRelinkAssignment) {
+  if (assignment.status === "missing") return "缺失";
+  if (assignment.match_kind === "basename_size") return "按文件名和大小候选，待复核";
+  if (assignment.status === "changed") return "路径匹配但文件特征变化";
+  return "路径匹配";
+}
+
+function normalizeNativeDirectorySelection(selection: string | string[] | null) {
+  if (typeof selection === "string") return selection.trim();
+  if (Array.isArray(selection)) return (selection[0] ?? "").trim();
+  return "";
+}
+
+async function chooseImageSequenceRoot() {
+  try {
+    const selection = await openNativeDialog({
+      directory: true,
+      multiple: false,
+      title: "选择图片序列根目录",
+    });
+    const rootPath = normalizeNativeDirectorySelection(selection);
+    if (!rootPath) return;
+    imageSequenceRootPath.value = rootPath;
+    status.value = "已选择图片序列根目录，请继续检查并保存";
+  } catch (error) {
+    errorMessage.value = "打开目录选择器失败：" + String(error);
+  }
+}
+
+async function previewImageSequenceRelink(newRootPath: string) {
+  const bookId = imageSequenceBookId.value;
+  const rootPath = newRootPath.trim();
+  if (!bookId || !rootPath) return;
+  imageRelinkBusy.value = true;
+  imageRelinkPreview.value = null;
+  errorMessage.value = "";
+  status.value = "正在扫描新目录并生成重新关联差异…";
+  try {
+    imageRelinkPreview.value = await invoke<ImageRelinkPreview>(
+      "preview_image_sequence_relink",
+      { bookId, newRootPath: rootPath },
+    );
+    status.value = "重新关联差异已生成，请确认后再更新书架记录";
+  } catch (error) {
+    errorMessage.value = "重新关联扫描失败：" + String(error);
+    status.value = "重新关联扫描失败，旧目录仍保持不变";
+  } finally {
+    imageRelinkBusy.value = false;
+  }
+}
+
+async function chooseImageSequenceRelinkRoot() {
+  if (!imageSequenceBookId.value || imageRelinkBusy.value || imageRelinkApplying.value) return;
+  try {
+    const selection = await openNativeDialog({
+      directory: true,
+      multiple: false,
+      title: "选择新的图片序列根目录",
+    });
+    const rootPath = normalizeNativeDirectorySelection(selection);
+    if (rootPath) await previewImageSequenceRelink(rootPath);
+  } catch (error) {
+    errorMessage.value = "打开目录选择器失败：" + String(error);
+  }
+}
+
+async function applyImageSequenceRelink() {
+  const preview = imageRelinkPreview.value;
+  if (!preview || imageRelinkApplying.value) return;
+  imageRelinkApplying.value = true;
+  errorMessage.value = "";
+  status.value = "正在事务化更新图片目录关联…";
+  try {
+    await invoke<ImageSequenceRecordDetail>("apply_image_sequence_relink", {
+      bookId: preview.book_id,
+      newRootPath: preview.new_root_path,
+      assignments: preview.assignments,
+    });
+    imageRelinkPreview.value = null;
+    await loadBooks();
+    await openPersistedImageSequenceBook(preview.book_id);
+    status.value = "图片目录已重新关联；变化页仍需内容校验后才会标为正常";
+  } catch (error) {
+    errorMessage.value = "重新关联失败：" + String(error);
+    status.value = "重新关联未应用，旧目录和缓存仍保持不变";
+  } finally {
+    imageRelinkApplying.value = false;
+  }
 }
 
 function imageSequencePageStateCounts(pages: ImageSequenceRecordPage[]) {
@@ -3222,6 +3344,15 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
               type="text"
               placeholder="例如：C:/Books/MyComic"
             />
+            <button
+              v-if="!imageSequenceBookId"
+              class="text-button"
+              type="button"
+              :disabled="imageCacheBusy || isImporting"
+              @click="chooseImageSequenceRoot"
+            >
+              选择目录
+            </button>
           </label>
           <label class="book-import-preview-field">
             <span>阅读方向</span>
@@ -3239,6 +3370,30 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
               <option value="long_strip">长图</option>
             </select>
           </label>
+        </div>
+        <div v-if="imageRelinkPreview" class="image-relink-panel">
+          <div class="image-relink-heading">
+            <div>
+              <span class="eyebrow">重新关联预览</span>
+              <strong>{{ imageRelinkPreview.new_root_path }}</strong>
+            </div>
+            <span>{{ imageRelinkPreview.matched_pages }} 页路径匹配 · {{ imageRelinkPreview.changed_pages }} 页待复核 · {{ imageRelinkPreview.missing_pages }} 页缺失 · {{ imageRelinkPreview.added_files }} 个新增文件</span>
+          </div>
+          <p v-if="imageRelinkPreview.reordered" class="image-relink-warning">检测到新目录的文件名顺序与原页面顺序不同；应用后仍保留原页码顺序。</p>
+          <p class="image-relink-note">只有确认后才会更新数据库。待复核页会保留为“文件变化”，不会把仅凭文件名和大小找到的候选误报为完全一致。</p>
+          <ul class="image-relink-list">
+            <li v-for="assignment in imageRelinkPreview.assignments.slice(0, 8)" :key="assignment.page_index">
+              <span>#{{ assignment.page_index + 1 }} · {{ assignment.old_relative_path }}</span>
+              <strong>{{ imageRelinkAssignmentLabel(assignment) }}</strong>
+              <span v-if="assignment.new_relative_path">→ {{ assignment.new_relative_path }}</span>
+            </li>
+          </ul>
+          <div class="book-import-preview-actions">
+            <button class="text-button" type="button" :disabled="imageRelinkApplying" @click="applyImageSequenceRelink">
+              {{ imageRelinkApplying ? "正在应用…" : "确认重新关联" }}
+            </button>
+            <button class="text-button" type="button" :disabled="imageRelinkApplying" @click="imageRelinkPreview = null">取消</button>
+          </div>
         </div>
         <div v-if="imageSequenceLocation" class="image-sequence-reader">
           <div class="image-sequence-reader-toolbar">
@@ -3288,9 +3443,18 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         </div>
         <div class="book-import-preview-actions">
           <span v-if="imageSequenceBookId">
-            已恢复书架记录：{{ imageSequenceStateLabel(imageSequenceRecordState) }}；当前目录仍按保存的绝对路径展示，重新关联将在下一阶段加入。
+            已恢复书架记录：{{ imageSequenceStateLabel(imageSequenceRecordState) }}；可用“选择新目录并扫描”生成差异预览。
           </span>
           <span v-else>填写图片根目录绝对路径后保存到书架；位置和缩略图会按内容摘要键保存在本机。</span>
+          <button
+            v-if="imageSequenceBookId"
+            class="text-button"
+            type="button"
+            :disabled="imageRelinkBusy || imageRelinkApplying || imageCacheBusy"
+            @click="chooseImageSequenceRelinkRoot"
+          >
+            {{ imageRelinkBusy ? "正在扫描…" : "选择新目录并扫描" }}
+          </button>
           <button
             v-if="!imageSequenceBookId"
             class="text-button"
@@ -5306,6 +5470,91 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 .reader-page:focus-visible {
   outline: 2px solid #79c9ff;
   outline-offset: 3px;
+}
+
+
+.image-relink-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid rgba(139, 183, 255, 0.32);
+  border-radius: 12px;
+  background: rgba(39, 57, 94, 0.24);
+}
+
+.image-relink-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.image-relink-heading strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: #eaf2ff;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-relink-heading > span,
+.image-relink-note,
+.image-relink-warning {
+  margin: 0;
+  color: #a7b8d0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.image-relink-warning {
+  color: #ffd39b;
+}
+
+.image-relink-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.image-relink-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 8px;
+  color: #aab9cf;
+  background: rgba(12, 17, 27, 0.42);
+  font-size: 11px;
+}
+
+.image-relink-list li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-relink-list li strong {
+  color: #c8e7ff;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .image-relink-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .image-relink-list li {
+    grid-template-columns: 1fr;
+  }
 }
 
 </style>
