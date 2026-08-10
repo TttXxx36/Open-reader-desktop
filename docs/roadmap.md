@@ -90,9 +90,9 @@
 - 所有格式都需旧数据库迁移、损坏文件错误恢复和 64 MB 默认导入上限测试。
 ### M9 — 书架、元数据与阅读历史
 
-详细执行清单见 [M9 图片序列数据库化与书架恢复计划](m9-image-sequence-plan.md)。M9.0 SQLite 模型、迁移、路径安全约束和外键恢复已完成；M9.1 已完成图片序列保存到书架、重启恢复、缩略图恢复和页码/缩放/方向/排版进度回写，CI run [31363237878](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31363237878) 通过。当前下一步是 M9.2 文件变更检测与重新关联，在完成真实目录扫描和状态机前，不宣称图片原文件可用性。
+详细执行清单见 [M9 图片序列数据库化与书架恢复计划](m9-image-sequence-plan.md)。M9.0 SQLite 模型、迁移、路径安全约束和外键恢复已完成；M9.1 已完成图片序列保存到书架、重启恢复、缩略图恢复和页码/缩放/方向/排版进度回写，CI run [31363237878](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31363237878) 通过；M9.2.1/9.2.2 已完成安全路径解析、快速文件指纹、状态判定、数据库回写和书架恢复时的状态提示，CI run [31368081755](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31368081755) 通过。当前下一步是 M9.2.3 原生目录选择与重新关联差异预览，SHA-256 按需重算和 stale 恢复必须与重新关联事务一起验收。
 
-- M9.2：原生目录选择、文件大小/修改时间快速指纹、按需摘要重算、missing/stale/needs_relink 状态判定、差异预览、事务化重新关联和取消/超时配额。
+- M9.2.3：原生目录选择、相对路径/摘要/尺寸候选匹配、missing/stale/needs_relink 差异预览、事务化重新关联、取消/超时配额和 Windows 手工验收。
 - M9.3：书架分组、标签、排序、批量操作、封面缓存和重复书合并。
 - 阅读历史时间线、章节统计、书签、笔记、划线和“已读/未读”状态。
 - 书籍元数据编辑、封面来源策略、最近阅读和继续阅读统一为可查询数据模型。
@@ -137,7 +137,7 @@
 6. M7.3 XPath 静态识别、离线解析 PoC、首轮语法夹具与指标预览（已完成，70 个 Rust 测试，CI run 31307700513 通过）；继续禁止真实网络执行。
 7. M6.5 Windows Release 与 installer smoke 自动化验收已完成（run 31308312340、31308654635）；待真实 Windows 环境补验升级/WebView2/离线错误/回滚及 UI 可用性。
 8. M7.5 单源重试、搜索/书籍/章节失败历史、本地保留与统计、跨请求关联 ID、本地失败报告、有限原因分类、旧库升级、报告 schema_version 兼容、source_metrics 请求/缓存统计、规则执行首个实现和字段级/skipped 收尾均已完成（SQLite 0010/0011/0012，CI run [31322235077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31322235077)，76 个 Rust 测试）；转入 M8 内容格式 v2，授权合成边界夹具继续作为横向质量线。
-9. M8.5.5a/b/c/d1/e1-e4 已完成（CI run 31359196211 通过）；M9.0/M9.1 图片序列 SQLite 模型、书架保存、重启恢复和进度回写已完成（CI run [31363237878](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31363237878) 通过），详细边界记录在 [M9 图片序列数据库化与书架恢复计划](m9-image-sequence-plan.md)；下一步进入 M9.2 文件变更检测与重新关联，完成后再推进 M9.3 书架治理和 M10、M11、M12，并在每阶段完成一次路线图复盘。
+9. M8.5.5a/b/c/d1/e1-e4 已完成（CI run 31359196211 通过）；M9.0/M9.1 图片序列 SQLite 模型、书架保存、重启恢复和进度回写已完成（CI run [31363237878](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31363237878) 通过）；M9.2.1/9.2.2 已完成文件状态检测第一切片（CI run [31368081755](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31368081755) 通过），详细边界记录在 [M9 图片序列数据库化与书架恢复计划](m9-image-sequence-plan.md)；下一步进入 M9.2.3 原生目录选择与重新关联差异预览，完成后再推进 M9.3 书架治理和 M10、M11、M12，并在每阶段完成一次路线图复盘。
 
 ## 里程碑完成定义
 
