@@ -653,6 +653,7 @@ const imageSequenceStalePages = ref(0);
 const imageRelinkPreview = ref<ImageRelinkPreview | null>(null);
 const imageRelinkBusy = ref(false);
 const imageRelinkApplying = ref(false);
+const imageRelinkOperationId = ref<string | null>(null);
 const imageDigestBusy = ref(false);
 const imageThumbnailCache = ref<ImageThumbnailCacheSummary | null>(null);
 const imageCacheBusy = ref(false);
@@ -2217,6 +2218,7 @@ function resetBookImportPreview() {
   imageRelinkPreview.value = null;
   imageRelinkBusy.value = false;
   imageRelinkApplying.value = false;
+  imageRelinkOperationId.value = null;
   imageThumbnailCache.value = null;
   bookImportFileName.value = "";
   bookImportBytes.value = [];
@@ -2633,27 +2635,48 @@ async function previewImageSequenceRelink(newRootPath: string) {
   const bookId = imageSequenceBookId.value;
   const rootPath = newRootPath.trim();
   if (!bookId || !rootPath) return;
+  const operationId = "image-relink-" + Date.now();
   imageRelinkBusy.value = true;
+  imageRelinkOperationId.value = operationId;
   imageRelinkPreview.value = null;
   errorMessage.value = "";
   status.value = "正在扫描新目录并生成重新关联差异…";
   try {
     imageRelinkPreview.value = await invoke<ImageRelinkPreview>(
       "preview_image_sequence_relink",
-      { bookId, newRootPath: rootPath },
+      { bookId, newRootPath: rootPath, operationId },
     );
     status.value = "重新关联差异已生成，请确认后再更新书架记录";
   } catch (error) {
     const message = String(error);
+    const canceled = message.includes("取消");
     const timedOut = message.includes("超时") || message.includes("时间上限");
-    errorMessage.value = timedOut
-      ? "重新关联扫描超时：" + message
-      : "重新关联扫描失败：" + message;
-    status.value = timedOut
-      ? "重新关联扫描超时，旧目录仍保持不变"
-      : "重新关联扫描失败，旧目录仍保持不变";
+    errorMessage.value = canceled
+      ? "重新关联扫描已取消：" + message
+      : timedOut
+        ? "重新关联扫描超时：" + message
+        : "重新关联扫描失败：" + message;
+    status.value = canceled
+      ? "重新关联扫描已取消，旧目录仍保持不变"
+      : timedOut
+        ? "重新关联扫描超时，旧目录仍保持不变"
+        : "重新关联扫描失败，旧目录仍保持不变";
   } finally {
+    if (imageRelinkOperationId.value === operationId) {
+      imageRelinkOperationId.value = null;
+    }
     imageRelinkBusy.value = false;
+  }
+}
+
+async function cancelImageRelinkScan() {
+  const operationId = imageRelinkOperationId.value;
+  if (!operationId || !imageRelinkBusy.value) return;
+  try {
+    const accepted = await invoke<boolean>("cancel_image_sequence_relink", { operationId });
+    status.value = accepted ? "正在取消重新关联扫描…" : "重新关联扫描任务已结束";
+  } catch (error) {
+    errorMessage.value = "取消重新关联扫描失败：" + String(error);
   }
 }
 
@@ -3564,6 +3587,14 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             @click="chooseImageSequenceRelinkRoot"
           >
             {{ imageRelinkBusy ? "正在扫描…" : "选择新目录并扫描" }}
+          </button>
+          <button
+            v-if="imageRelinkBusy"
+            class="text-button"
+            type="button"
+            @click="cancelImageRelinkScan"
+          >
+            取消扫描
           </button>
           <button
             v-if="imageSequenceBookId && imageSequenceStalePages > 0"
