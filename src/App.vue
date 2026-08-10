@@ -34,6 +34,10 @@ interface BookSummary {
   image_sequence_missing_pages: number;
   image_sequence_stale_pages: number;
 }
+interface DuplicateBookGroup {
+  key: string;
+  books: BookSummary[];
+}
 
 type TxtChapterRule = "auto" | "disabled" | "regex";
 
@@ -641,6 +645,9 @@ const selectedBookIds = ref<string[]>([]);
 const batchMetadataGroupDraft = ref("");
 const batchMetadataTagsDraft = ref("");
 const batchMetadataBusy = ref(false);
+const duplicatePanelOpen = ref(false);
+const duplicateBusy = ref(false);
+const duplicateGroups = ref<DuplicateBookGroup[]>([]);
 const bookGroups = computed(() =>
   [...new Set(books.value.map((book) => book.shelf_group.trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right, "zh-CN")),
@@ -1150,6 +1157,26 @@ async function loadBooks() {
     if (loadId !== libraryLoadId.value) return;
     status.value = "请在 Tauri 桌面模式中打开";
     errorMessage.value = String(error);
+  }
+}
+
+async function loadDuplicateGroups() {
+  duplicateBusy.value = true;
+  errorMessage.value = "";
+  try {
+    duplicateGroups.value = await invoke<DuplicateBookGroup[]>("find_duplicate_books");
+  } catch (error) {
+    errorMessage.value = "检查重复书失败：" + String(error);
+    duplicateGroups.value = [];
+  } finally {
+    duplicateBusy.value = false;
+  }
+}
+
+async function toggleDuplicatePanel() {
+  duplicatePanelOpen.value = !duplicatePanelOpen.value;
+  if (duplicatePanelOpen.value) {
+    await loadDuplicateGroups();
   }
 }
 
@@ -3496,6 +3523,9 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         <span v-if="selectedBookIds.length" class="library-selection-count">
           已选 {{ selectedBookIds.length }} 本
         </span>
+        <button class="secondary-button" type="button" @click="toggleDuplicatePanel">
+          {{ duplicatePanelOpen ? "隐藏重复书" : "检查重复书" }}
+        </button>
       </div>
 
       <section
@@ -3547,6 +3577,51 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             取消选择
           </button>
         </div>
+      </section>
+
+      <section
+        v-if="duplicatePanelOpen"
+        class="duplicate-books-panel"
+        aria-label="重复书候选"
+      >
+        <div class="duplicate-books-heading">
+          <div>
+            <span class="eyebrow">DUPLICATE REVIEW</span>
+            <h2>重复书候选</h2>
+          </div>
+          <button
+            class="text-button"
+            type="button"
+            :disabled="duplicateBusy"
+            @click="loadDuplicateGroups"
+          >
+            {{ duplicateBusy ? "检查中…" : "重新检查" }}
+          </button>
+        </div>
+        <p v-if="!duplicateBusy && !duplicateGroups.length" class="duplicate-books-empty">
+          暂未发现同名、同作者、同格式的重复记录。
+        </p>
+        <div v-else class="duplicate-books-list">
+          <article v-for="group in duplicateGroups" :key="group.key" class="duplicate-book-group">
+            <div class="duplicate-book-group-heading">
+              <strong>{{ group.books[0].title }}</strong>
+              <span>
+                {{ group.books[0].author || "未知作者" }} ·
+                {{ group.books[0].format.toUpperCase() }} ·
+                {{ group.books.length }} 条记录
+              </span>
+            </div>
+            <ul>
+              <li v-for="book in group.books" :key="book.id">
+                <span>{{ book.id }} · {{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }}</span>
+                <span>{{ book.shelf_group || "未分组" }}</span>
+              </li>
+            </ul>
+          </article>
+        </div>
+        <p class="duplicate-books-note">
+          当前只提供候选预览，不会自动删除或覆盖书籍；确认保留项后再进入合并操作。
+        </p>
       </section>
 
       <section v-if="bookImportPreview" class="book-import-preview" aria-live="polite">
@@ -4075,6 +4150,86 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   color: #b9f6dd;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.duplicate-books-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid rgba(255, 207, 155, 0.28);
+  border-radius: 14px;
+  background: rgba(74, 52, 31, 0.24);
+}
+
+.duplicate-books-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.duplicate-books-heading h2 {
+  margin: 8px 0 0;
+  color: #fff0dd;
+  font-size: 17px;
+}
+
+.duplicate-books-list {
+  display: grid;
+  gap: 9px;
+}
+
+.duplicate-book-group {
+  padding: 11px 12px;
+  border: 1px solid rgba(255, 207, 155, 0.16);
+  border-radius: 10px;
+  background: rgba(12, 17, 27, 0.42);
+}
+
+.duplicate-book-group-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.duplicate-book-group-heading strong {
+  overflow: hidden;
+  color: #f7e4ca;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duplicate-book-group-heading span,
+.duplicate-book-group li {
+  color: #bfae98;
+  font-size: 11px;
+}
+
+.duplicate-book-group ul {
+  display: grid;
+  gap: 5px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.duplicate-book-group li {
+  display: flex;
+  justify-content: space-between;
+  gap: 9px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(255, 207, 155, 0.1);
+}
+
+.duplicate-books-empty,
+.duplicate-books-note {
+  margin: 0;
+  color: #bfae98;
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .batch-metadata-panel {
@@ -5042,6 +5197,14 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   }
 
   .batch-metadata-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 720px) {
+  .duplicate-book-group-heading,
+  .duplicate-book-group li {
     align-items: start;
     flex-direction: column;
   }
