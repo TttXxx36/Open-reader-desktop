@@ -111,8 +111,15 @@ interface ImageThumbnailCacheSummary {
   cache_hits: number;
   cache_writes: number;
   evicted_files: number;
+  cleaned_temp_files: number;
   cache_bytes: number;
   entries: ImageThumbnailCacheEntry[];
+}
+
+interface ImageThumbnailPageBytes {
+  page_index: number;
+  mime: string;
+  bytes: number[];
 }
 
 interface BookFormatProbe {
@@ -567,6 +574,11 @@ const imageSequenceDirection = ref<ImageReadingDirection>("ltr");
 const imageSequenceSpread = ref<ImageSpreadMode>("single");
 const imageSequenceLocation = ref<ImageReadingLocation | null>(null);
 const imageThumbnailCache = ref<ImageThumbnailCacheSummary | null>(null);
+const imageCacheBusy = ref(false);
+const imageCacheOperationId = ref<string | null>(null);
+const imageSequenceCachedUrls = ref<Record<number, string>>({});
+let imageSequenceInputs: ImageSequenceInput[] = [];
+let imageSequenceThumbnailLoadId = 0;
 const bookImportFileName = ref("");
 const bookImportBytes = ref<number[]>([]);
 const txtParseOptions = ref<TxtParseOptions>({
@@ -2105,6 +2117,10 @@ function resetBookImportPreview() {
   }
   imageSequenceUrls.value.forEach((url) => URL.revokeObjectURL(url));
   imageSequenceUrls.value = [];
+  Object.values(imageSequenceCachedUrls.value).forEach((url) => URL.revokeObjectURL(url));
+  imageSequenceCachedUrls.value = {};
+  imageSequenceThumbnailLoadId += 1;
+  imageSequenceInputs = [];
   imageSequenceDirection.value = "ltr";
   imageSequenceSpread.value = "single";
   imageSequenceLocation.value = null;
@@ -2207,7 +2223,8 @@ async function confirmBookImport() {
   }
 }
 
-function cancelBookImportPreview() {
+async function cancelBookImportPreview() {
+  if (imageCacheBusy.value) await cancelImageCache();
   resetBookImportPreview();
   errorMessage.value = "";
   status.value = "已取消文件预览";
@@ -2252,12 +2269,105 @@ async function buildImageSequenceCacheKey(
   return `imgseq-v1-${digest}`;
 }
 
+function createImageCacheOperationId() {
+  return `image-cache-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function cacheImageSequenceInputs(
+  cacheKey: string,
+  pages: ImageSequenceInput[],
+  direction: ImageReadingDirection,
+  spread: ImageSpreadMode,
+  forceRefresh = false,
+) {
+  const operationId = createImageCacheOperationId();
+  imageCacheBusy.value = true;
+  imageCacheOperationId.value = operationId;
+  try {
+    const summary = await invoke<ImageThumbnailCacheSummary>("cache_image_sequence", {
+      cacheKey,
+      pages,
+      direction,
+      spread,
+      forceRefresh,
+      operationId,
+    });
+    imageThumbnailCache.value = summary;
+    return summary;
+  } finally {
+    if (imageCacheOperationId.value === operationId) {
+      imageCacheOperationId.value = null;
+      imageCacheBusy.value = false;
+    }
+  }
+}
+
+async function cancelImageCache() {
+  const operationId = imageCacheOperationId.value;
+  if (!operationId) return;
+  try {
+    const accepted = await invoke<boolean>("cancel_image_cache", { operationId });
+    status.value = accepted ? "正在取消图片缓存…" : "图片缓存任务已结束";
+  } catch (error) {
+    errorMessage.value = "取消图片缓存失败：" + String(error);
+  }
+}
+
+function imageSequenceAdjacentPageIndices(index: number, pageCount: number) {
+  return [...new Set([index - 1, index, index + 1])]
+    .filter((value) => value >= 0 && value < pageCount);
+}
+
+async function loadImageSequenceThumbnails(indices: number[]) {
+  const location = imageSequenceLocation.value;
+  const preview = imageSequencePreview.value;
+  if (!location || !preview) return;
+  const safeIndices = [...new Set(indices)]
+    .filter((value) => value >= 0 && value < preview.page_count)
+    .slice(0, 3);
+  if (!safeIndices.length) return;
+
+  const requestId = ++imageSequenceThumbnailLoadId;
+  try {
+    const pages = await invoke<ImageThumbnailPageBytes[]>("read_image_sequence_thumbnails", {
+      cacheKey: location.cache_key,
+      pageIndices: safeIndices,
+    });
+    if (requestId !== imageSequenceThumbnailLoadId) return;
+
+    const loadedIndices = new Set(pages.map((page) => page.page_index));
+    for (const [key, url] of Object.entries(imageSequenceCachedUrls.value)) {
+      if (!loadedIndices.has(Number(key))) URL.revokeObjectURL(url);
+    }
+    const next: Record<number, string> = {};
+    for (const page of pages) {
+      next[page.page_index] = URL.createObjectURL(new Blob(
+        [new Uint8Array(page.bytes)],
+        { type: page.mime || "image/png" },
+      ));
+    }
+    imageSequenceCachedUrls.value = next;
+  } catch {
+    // 磁盘缓存不可读时继续使用本次导入的临时对象 URL。
+  }
+}
+
+function imageSequencePageUrl(index: number) {
+  return imageSequenceCachedUrls.value[index] || imageSequenceUrls.value[index] || "";
+}
+
 function loadImageSequenceLocation(cacheKey: string, preview: ImageSequencePreview) {
   try {
     const raw = localStorage.getItem(IMAGE_LOCATION_KEY_PREFIX + cacheKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<ImageReadingLocation>;
     if (parsed.cache_key !== cacheKey) return null;
+    const direction = parsed.direction === "rtl" || parsed.direction === "vertical"
+      ? parsed.direction
+      : preview.direction;
+    const spread = parsed.spread === "double" || parsed.spread === "long_strip"
+      ? parsed.spread
+      : preview.spread;
     return {
       cache_key: cacheKey,
       page_index: Math.min(
@@ -2265,8 +2375,8 @@ function loadImageSequenceLocation(cacheKey: string, preview: ImageSequencePrevi
         Math.max(preview.page_count - 1, 0),
       ),
       zoom: Math.min(Math.max(Number(parsed.zoom) || 1, 0.5), 3),
-      direction: parsed.direction ?? preview.direction,
-      spread: parsed.spread ?? preview.spread,
+      direction,
+      spread,
     } satisfies ImageReadingLocation;
   } catch {
     return null;
@@ -2296,6 +2406,12 @@ function selectImageSequencePage(index: number) {
     ),
   };
   persistImageSequenceLocation();
+  void loadImageSequenceThumbnails(
+    imageSequenceAdjacentPageIndices(
+      imageSequenceLocation.value.page_index,
+      imageSequencePreview.value.page_count,
+    ),
+  );
 }
 
 function moveImageSequencePage(delta: number) {
@@ -2382,17 +2498,19 @@ async function importImageSequence(files: File[]) {
       spread: imageSequenceSpread.value,
     });
     const cacheKey = await buildImageSequenceCacheKey(pageDigests, preview);
+    imageSequenceInputs = pages;
     try {
-      imageThumbnailCache.value = await invoke<ImageThumbnailCacheSummary>("cache_image_sequence", {
+      await cacheImageSequenceInputs(
         cacheKey,
         pages,
-        direction: preview.direction,
-        spread: preview.spread,
-        forceRefresh: false,
-      });
+        preview.direction,
+        preview.spread,
+        false,
+      );
     } catch (error) {
       imageThumbnailCache.value = null;
       errorMessage.value = "缩略图缓存未写入：" + String(error);
+      status.value = "图片序列已验证，可稍后重试缓存";
     }
     imageSequencePreview.value = preview;
     imageSequenceLocation.value = loadImageSequenceLocation(cacheKey, preview) ?? {
@@ -2409,12 +2527,44 @@ async function importImageSequence(files: File[]) {
       .slice(0, MAX_IMAGE_THUMBNAILS)
       .map((file) => URL.createObjectURL(file));
     bookImportFileName.value = `${files.length} 个图片文件`;
+    void loadImageSequenceThumbnails(
+      imageSequenceAdjacentPageIndices(
+        imageSequenceLocation.value.page_index,
+        preview.page_count,
+      ),
+    );
     status.value = `图片序列已通过受限解码，可预览 ${files.length} 页，已恢复第 ${imageSequenceLocation.value.page_index + 1} 页`;
   } catch (error) {
     errorMessage.value = String(error);
     status.value = "图片序列预览失败";
   } finally {
     isImporting.value = false;
+  }
+}
+
+async function retryImageSequenceCache() {
+  const preview = imageSequencePreview.value;
+  const location = imageSequenceLocation.value;
+  if (!preview || !location || !imageSequenceInputs.length || imageCacheBusy.value) return;
+
+  errorMessage.value = "";
+  status.value = "正在重试图片缩略图缓存…";
+  try {
+    await cacheImageSequenceInputs(
+      location.cache_key,
+      imageSequenceInputs,
+      preview.direction,
+      preview.spread,
+      false,
+    );
+    await loadImageSequenceThumbnails(
+      imageSequenceAdjacentPageIndices(location.page_index, preview.page_count),
+    );
+    status.value = "图片缩略图缓存已重试";
+  } catch (error) {
+    imageThumbnailCache.value = null;
+    errorMessage.value = "缩略图缓存重试失败：" + String(error);
+    status.value = "图片序列缓存仍未完成";
   }
 }
 
@@ -2795,6 +2945,9 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <span v-if="imageThumbnailCache">
             磁盘缓存：命中 {{ imageThumbnailCache.cache_hits }} 页、写入 {{ imageThumbnailCache.cache_writes }} 页 · {{ formatBytes(imageThumbnailCache.cache_bytes) }}
           </span>
+          <span v-if="imageThumbnailCache?.cleaned_temp_files">
+            已清理崩溃临时文件：{{ imageThumbnailCache.cleaned_temp_files }} 个
+          </span>
         </div>
         <div class="book-import-preview-controls image-sequence-controls">
           <label class="book-import-preview-field">
@@ -2834,8 +2987,8 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           </div>
           <div class="image-sequence-reader-media">
             <img
-              v-if="imageSequenceUrls[imageSequenceLocation.page_index]"
-              :src="imageSequenceUrls[imageSequenceLocation.page_index]"
+              v-if="imageSequencePageUrl(imageSequenceLocation.page_index)"
+              :src="imageSequencePageUrl(imageSequenceLocation.page_index)"
               :alt="imageSequencePreview.pages[imageSequenceLocation.page_index]?.file_name || '图片页面'"
               :style="{ transform: `scale(${imageSequenceLocation.zoom})` }"
             />
@@ -2853,15 +3006,17 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             @keydown.enter="selectImageSequencePage(page.index)"
           >
             <img
-              v-if="imageSequenceUrls[page.index]"
-              :src="imageSequenceUrls[page.index]"
+              v-if="imageSequencePageUrl(page.index)"
+              :src="imageSequencePageUrl(page.index)"
               :alt="page.file_name"
             />
             <figcaption>#{{ page.index + 1 }} · {{ page.file_name }}</figcaption>
           </figure>
         </div>
         <div class="book-import-preview-actions">
-          <span>位置和缩略图会按内容摘要键保存在本机；当前仍是只读预览，不写入书架，取消/重试将在后续小阶段完善。</span>
+          <span>位置和缩略图会按内容摘要键保存在本机；当前仍是只读预览，当前页及相邻页会优先从磁盘缓存恢复。</span>
+          <button v-if="imageCacheBusy" class="text-button" type="button" @click="cancelImageCache">取消缓存</button>
+          <button v-else-if="imageSequencePreview" class="text-button" type="button" @click="retryImageSequenceCache">重试缓存</button>
           <button class="text-button" type="button" @click="cancelBookImportPreview">关闭预览</button>
         </div>
       </section>
