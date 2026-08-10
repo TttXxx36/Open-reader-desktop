@@ -388,9 +388,7 @@ pub fn build_image_sequence_preview(
     spread: ImageSpreadMode,
 ) -> Result<ImageSequencePreview, ImportError> {
     if pages.is_empty() {
-        return Err(ImportError::InvalidImage(
-            "图片序列不能为空".to_string(),
-        ));
+        return Err(ImportError::InvalidImage("图片序列不能为空".to_string()));
     }
     if pages.len() > MAX_IMAGE_SEQUENCE_PAGES {
         return Err(ImportError::InvalidImage(format!(
@@ -2608,7 +2606,6 @@ mod tests {
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
             .expect("fixture PNG should decode")
     }
-
 
     fn image_page_fixture(file_name: &str, width: u32, height: u32) -> ImageDocumentPreview {
         ImageDocumentPreview {
