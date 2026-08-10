@@ -14,6 +14,7 @@ type ReaderTheme = "night" | "paper" | "sepia" | "custom";
 type ReaderTextAlign = "left" | "justify" | "center";
 type ReaderMode = "scroll" | "paged";
 type ReaderFont = "system" | "yahei" | "serif" | "kai";
+type BookSort = "updated_at" | "title" | "author" | "progress" | "custom_order";
 
 interface BookSummary {
   id: string;
@@ -21,6 +22,10 @@ interface BookSummary {
   author: string | null;
   format: string;
   content_kind: string;
+  cover_path: string | null;
+  shelf_group: string;
+  tags: string[];
+  custom_order: number;
   chapter_count: number;
   current_chapter: number;
   progress: number;
@@ -622,6 +627,20 @@ const readerFontStacks: Record<ReaderFont, string> = {
 };
 const view = ref<View>("library");
 const books = ref<BookSummary[]>([]);
+const libraryQuery = ref("");
+const libraryGroupFilter = ref("");
+const librarySort = ref<BookSort>("updated_at");
+const librarySortDescending = ref(true);
+const libraryLoadId = ref(0);
+const editingBookId = ref<string | null>(null);
+const metadataGroupDraft = ref("");
+const metadataTagsDraft = ref("");
+const metadataOrderDraft = ref("0");
+const metadataBusy = ref(false);
+const bookGroups = computed(() =>
+  [...new Set(books.value.map((book) => book.shelf_group.trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, "zh-CN")),
+);
 const recentBooks = computed(() => books.value.slice(0, 4));
 const continueBook = computed(() =>
   books.value.find((book) => book.progress > 0 && book.progress < 1) ?? books.value[0] ?? null,
@@ -816,6 +835,9 @@ const themeLabels: Record<ReaderTheme, string> = {
   custom: "自定义",
 };
 onMounted(loadBooks);
+watch([libraryQuery, libraryGroupFilter, librarySort, librarySortDescending], () => {
+  void loadBooks();
+});
 watch(settings, (value) => {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
@@ -1098,13 +1120,70 @@ function loadSettings(): ReaderSettings {
   }
 }
 async function loadBooks() {
+  const loadId = libraryLoadId.value + 1;
+  libraryLoadId.value = loadId;
   try {
-    books.value = await invoke<BookSummary[]>("list_books");
+    const loaded = await invoke<BookSummary[]>("list_books_with_options", {
+      options: {
+        group: libraryGroupFilter.value || null,
+        query: libraryQuery.value.trim() || null,
+        sort: librarySort.value,
+        descending: librarySortDescending.value,
+      },
+    });
+    if (loadId !== libraryLoadId.value) return;
+    books.value = loaded;
     status.value = books.value.length ? `共 ${books.value.length} 本书` : "书架已准备好";
     errorMessage.value = "";
   } catch (error) {
+    if (loadId !== libraryLoadId.value) return;
     status.value = "请在 Tauri 桌面模式中打开";
     errorMessage.value = String(error);
+  }
+}
+
+function beginBookMetadataEdit(book: BookSummary) {
+  editingBookId.value = book.id;
+  metadataGroupDraft.value = book.shelf_group;
+  metadataTagsDraft.value = book.tags.join(", ");
+  metadataOrderDraft.value = String(book.custom_order);
+  errorMessage.value = "";
+}
+
+function cancelBookMetadataEdit() {
+  editingBookId.value = null;
+  metadataGroupDraft.value = "";
+  metadataTagsDraft.value = "";
+  metadataOrderDraft.value = "0";
+}
+
+async function saveBookMetadata(book: BookSummary) {
+  if (metadataBusy.value || editingBookId.value !== book.id) return;
+  const tags = metadataTagsDraft.value
+    .split(/[,，、\n]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  const customOrder = Number.parseInt(metadataOrderDraft.value, 10);
+  metadataBusy.value = true;
+  errorMessage.value = "";
+  try {
+    await invoke<BookSummary>("update_book_metadata", {
+      write: {
+        book_id: book.id,
+        shelf_group: metadataGroupDraft.value.trim(),
+        tags,
+        cover_path: book.cover_path,
+        custom_order: Number.isFinite(customOrder) ? customOrder : 0,
+      },
+    });
+    cancelBookMetadataEdit();
+    await loadBooks();
+    status.value = "书籍分组和标签已保存";
+  } catch (error) {
+    errorMessage.value = "保存书籍元数据失败：" + String(error);
+    status.value = "书籍元数据保存失败";
+  } finally {
+    metadataBusy.value = false;
   }
 }
 
@@ -3321,6 +3400,41 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
       </div>
 
+      <div class="library-filter-bar" aria-label="书架筛选与排序">
+        <label class="library-filter-field">
+          <span>书架搜索</span>
+          <input v-model="libraryQuery" type="search" placeholder="搜索书名、作者或标签" />
+        </label>
+        <label class="library-filter-field">
+          <span>分组</span>
+          <select v-model="libraryGroupFilter">
+            <option value="">全部分组</option>
+            <option v-for="group in bookGroups" :key="group" :value="group">{{ group }}</option>
+          </select>
+        </label>
+        <label class="library-filter-field">
+          <span>排序</span>
+          <select v-model="librarySort">
+            <option value="updated_at">最近更新</option>
+            <option value="title">书名</option>
+            <option value="author">作者</option>
+            <option value="progress">阅读进度</option>
+            <option value="custom_order">自定义顺序</option>
+          </select>
+        </label>
+        <button class="secondary-button" type="button" @click="librarySortDescending = !librarySortDescending">
+          {{ librarySortDescending ? "降序" : "升序" }}
+        </button>
+        <button
+          v-if="libraryQuery || libraryGroupFilter || librarySort !== 'updated_at' || !librarySortDescending"
+          class="text-button"
+          type="button"
+          @click="libraryQuery = ''; libraryGroupFilter = ''; librarySort = 'updated_at'; librarySortDescending = true"
+        >
+          清除筛选
+        </button>
+      </div>
+
       <section v-if="bookImportPreview" class="book-import-preview" aria-live="polite">
         <div class="book-import-preview-heading">
           <div>
@@ -3707,12 +3821,37 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             <span class="book-format">{{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }}</span>
             <h2>{{ book.title }}</h2>
             <p>{{ book.author || "本地导入" }}</p>
+            <div v-if="book.shelf_group || book.tags.length" class="book-metadata-chips" aria-label="书籍分组和标签">
+              <span v-if="book.shelf_group" class="book-metadata-chip">{{ book.shelf_group }}</span>
+              <span v-for="tag in book.tags.slice(0, 4)" :key="tag" class="book-metadata-chip tag">{{ tag }}</span>
+            </div>
             <span
               v-if="imageSequenceHealthLabel(book)"
               class="book-health-badge"
               :class="imageSequenceHealthClass(book)"
             >{{ imageSequenceHealthLabel(book) }}</span>
             <div class="progress-track"><span :style="{ width: `${book.progress * 100}%` }"></span></div>
+            <button class="text-button book-edit-button" type="button" @click.stop="beginBookMetadataEdit(book)">编辑分组和标签</button>
+            <div v-if="editingBookId === book.id" class="book-metadata-editor" @click.stop>
+              <label>
+                <span>分组</span>
+                <input v-model="metadataGroupDraft" type="text" maxlength="128" placeholder="例如：待读 / 收藏" />
+              </label>
+              <label>
+                <span>标签</span>
+                <input v-model="metadataTagsDraft" type="text" placeholder="用逗号分隔多个标签" />
+              </label>
+              <label>
+                <span>顺序</span>
+                <input v-model="metadataOrderDraft" type="number" step="1" />
+              </label>
+              <div class="book-metadata-editor-actions">
+                <button class="secondary-button" type="button" :disabled="metadataBusy" @click="saveBookMetadata(book)">
+                  {{ metadataBusy ? "保存中…" : "保存" }}
+                </button>
+                <button class="text-button" type="button" :disabled="metadataBusy" @click="cancelBookMetadataEdit">取消</button>
+              </div>
+            </div>
           </div>
         </article>
       </section>
@@ -3793,6 +3932,42 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   justify-content: flex-end;
   gap: 9px;
   flex-wrap: wrap;
+}
+
+.library-filter-bar {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 12px;
+  background: rgba(15, 24, 38, 0.62);
+}
+
+.library-filter-field {
+  display: grid;
+  min-width: 150px;
+  gap: 6px;
+  color: #9fb1c8;
+  font-size: 12px;
+}
+
+.library-filter-field input,
+.library-filter-field select {
+  min-width: 150px;
+  padding: 9px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.library-filter-field input:focus,
+.library-filter-field select:focus {
+  border-color: rgba(139, 183, 255, 0.75);
+  outline: none;
 }
 
 .library-search-input {
@@ -5106,6 +5281,64 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 
 .book-cover.format-epub {
   background: linear-gradient(145deg, #6f4a8e, #2c244f);
+}
+
+.book-metadata-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.book-metadata-chip {
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #c8f6e4;
+  background: rgba(47, 128, 104, 0.2);
+  font-size: 10px;
+}
+
+.book-metadata-chip.tag {
+  color: #c6d7ff;
+  background: rgba(76, 104, 168, 0.24);
+}
+
+.book-edit-button {
+  margin-top: 12px;
+  padding: 0;
+}
+
+.book-metadata-editor {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid rgba(139, 183, 255, 0.25);
+  border-radius: 10px;
+  background: rgba(7, 13, 23, 0.58);
+}
+
+.book-metadata-editor label {
+  display: grid;
+  gap: 4px;
+  color: #9fb1c8;
+  font-size: 11px;
+}
+
+.book-metadata-editor input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 7px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.book-metadata-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .book-card-body {
