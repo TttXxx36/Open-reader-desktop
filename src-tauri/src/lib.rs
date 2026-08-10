@@ -10,11 +10,10 @@ mod xpath_poc;
 
 use db::{
     BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMetadataBatchWrite,
-    BookMetadataWrite, BookSummary,
-    ChapterContent, Database, DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary,
-    ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
-    SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
-    SourceSummary, SourceWrite,
+    BookMetadataWrite, BookSummary, ChapterContent, Database, DuplicateBookGroup,
+    ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite, SourceCacheStats,
+    SourceFailureHistory, SourceFailureStats, SourceMetadata, SourceRequestMetrics,
+    SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use image_relink::{ImageRelinkAssignment, ImageRelinkPreview};
 use library::{
