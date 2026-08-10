@@ -3620,36 +3620,21 @@ mod tests {
                 .execute(
                     "INSERT INTO books (id, title, author, path, format)
                      VALUES (?1, ?2, ?3, ?4, 'txt')",
-                    params![
-                        "duplicate-a",
-                        "同一本书",
-                        "作者",
-                        "a.txt"
-                    ],
+                    params!["duplicate-a", "同一本书", "作者", "a.txt"],
                 )
                 .expect("first duplicate should insert");
             connection
                 .execute(
                     "INSERT INTO books (id, title, author, path, format)
                      VALUES (?1, ?2, ?3, ?4, 'txt')",
-                    params![
-                        "duplicate-b",
-                        " 同一本书 ",
-                        "作者",
-                        "b.txt"
-                    ],
+                    params!["duplicate-b", " 同一本书 ", "作者", "b.txt"],
                 )
                 .expect("second duplicate should insert");
             connection
                 .execute(
                     "INSERT INTO books (id, title, author, path, format)
                      VALUES (?1, ?2, ?3, ?4, 'epub')",
-                    params![
-                        "different-format",
-                        "同一本书",
-                        "作者",
-                        "book.epub"
-                    ],
+                    params!["different-format", "同一本书", "作者", "book.epub"],
                 )
                 .expect("different format should insert");
         }
@@ -3659,14 +3644,8 @@ mod tests {
             .expect("duplicate groups should load");
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].books.len(), 2);
-        assert!(groups[0]
-            .books
-            .iter()
-            .any(|book| book.id == "duplicate-a"));
-        assert!(groups[0]
-            .books
-            .iter()
-            .any(|book| book.id == "duplicate-b"));
+        assert!(groups[0].books.iter().any(|book| book.id == "duplicate-a"));
+        assert!(groups[0].books.iter().any(|book| book.id == "duplicate-b"));
         assert_eq!(
             database
                 .get_book_summary("duplicate-a")
