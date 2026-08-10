@@ -3061,7 +3061,7 @@ mod tests {
             fs::read(&cache_path)
                 .expect("repaired cache should be readable")
                 .get(..PNG_SIGNATURE.len()),
-            Some(&PNG_SIGNATURE)
+            Some(PNG_SIGNATURE.as_slice())
         );
 
         let _ = fs::remove_dir_all(root);
