@@ -7,7 +7,7 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookDetail, BookListOptions, BookMetadataWrite, BookSummary, ChapterContent, Database,
+    BookDetail, BookListOptions, BookMetadataBatchWrite, BookMetadataWrite, BookSummary, ChapterContent, Database,
     ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite, SourceCacheStats,
     SourceFailureHistory, SourceFailureStats, SourceMetadata, SourceRequestMetrics,
     SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
@@ -269,6 +269,16 @@ fn update_book_metadata(
 ) -> Result<BookSummary, String> {
     database
         .update_book_metadata(write)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_books_metadata(
+    database: tauri::State<'_, Database>,
+    write: BookMetadataBatchWrite,
+) -> Result<Vec<BookSummary>, String> {
+    database
+        .update_books_metadata(write)
         .map_err(|error| error.to_string())
 }
 
@@ -2031,6 +2041,7 @@ pub fn run() {
             list_books,
             list_books_with_options,
             update_book_metadata,
+            update_books_metadata,
             import_book,
             import_book_with_options,
             preview_book_import,
