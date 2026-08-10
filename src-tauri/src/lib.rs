@@ -8,9 +8,8 @@ mod xpath_poc;
 
 use db::{
     BookDetail, BookListOptions, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
-    DuplicateBookGroup,
-    ChapterContent, Database, ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite,
-    SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
+    ChapterContent, Database, DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary,
+    ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
     SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
     SourceSummary, SourceWrite,
 };
