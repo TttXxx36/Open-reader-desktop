@@ -618,14 +618,10 @@ impl Database {
         spread: &str,
     ) -> Result<ImageSequenceSummary, DbError> {
         if !matches!(direction, "ltr" | "rtl" | "vertical") {
-            return Err(DbError::InvalidImageSequence(
-                "阅读方向无效".to_string(),
-            ));
+            return Err(DbError::InvalidImageSequence("阅读方向无效".to_string()));
         }
         if !matches!(spread, "single" | "double" | "long_strip") {
-            return Err(DbError::InvalidImageSequence(
-                "排版模式无效".to_string(),
-            ));
+            return Err(DbError::InvalidImageSequence("排版模式无效".to_string()));
         }
         if !zoom.is_finite() || !(0.0 < zoom && zoom <= 8.0) {
             return Err(DbError::InvalidImageSequence(
@@ -1670,14 +1666,10 @@ fn validate_image_sequence_write(
         ));
     }
     if !matches!(write.direction.as_str(), "ltr" | "rtl" | "vertical") {
-        return Err(DbError::InvalidImageSequence(
-            "阅读方向无效".to_string(),
-        ));
+        return Err(DbError::InvalidImageSequence("阅读方向无效".to_string()));
     }
     if !matches!(write.spread.as_str(), "single" | "double" | "long_strip") {
-        return Err(DbError::InvalidImageSequence(
-            "排版模式无效".to_string(),
-        ));
+        return Err(DbError::InvalidImageSequence("排版模式无效".to_string()));
     }
     if write.page_count <= 0
         || write.page_count > 2_048
@@ -1712,11 +1704,7 @@ fn validate_image_sequence_write(
         }
         page.relative_path = normalize_relative_image_path(&page.relative_path)
             .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
-        if page.file_size < 0
-            || page.width <= 0
-            || page.height <= 0
-            || page.digest_version <= 0
-        {
+        if page.file_size < 0 || page.width <= 0 || page.height <= 0 || page.digest_version <= 0 {
             return Err(DbError::InvalidImageSequence(
                 "图片页元数据无效".to_string(),
             ));
@@ -1729,7 +1717,11 @@ fn validate_image_sequence_write(
                 "图片 MIME 类型不受支持".to_string(),
             ));
         }
-        if page.content_digest.as_ref().is_some_and(|value| value.len() > 128) {
+        if page
+            .content_digest
+            .as_ref()
+            .is_some_and(|value| value.len() > 128)
+        {
             return Err(DbError::InvalidImageSequence(
                 "图片摘要不能超过 128 字节".to_string(),
             ));
@@ -2046,13 +2038,7 @@ mod tests {
         assert_eq!(listed[0].book_id, saved.book_id);
 
         let progressed = database
-            .save_image_sequence_progress(
-                &saved.book_id,
-                1,
-                1.25,
-                "rtl",
-                "double",
-            )
+            .save_image_sequence_progress(&saved.book_id, 1, 1.25, "rtl", "double")
             .expect("image progress should save");
         assert_eq!(progressed.current_page, 1);
         assert_eq!(progressed.progress, 1.0);
