@@ -13,7 +13,7 @@ use crate::{
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{atomic::AtomicBool, Mutex},
@@ -33,6 +33,8 @@ pub enum DbError {
     NotFound,
     #[error("invalid image sequence: {0}")]
     InvalidImageSequence(String),
+    #[error("invalid book metadata: {0}")]
+    InvalidBookMetadata(String),
 }
 
 pub struct Database {
@@ -46,6 +48,10 @@ pub struct BookSummary {
     pub author: Option<String>,
     pub format: String,
     pub content_kind: String,
+    pub cover_path: Option<String>,
+    pub shelf_group: String,
+    pub tags: Vec<String>,
+    pub custom_order: i64,
     pub chapter_count: i64,
     pub current_chapter: i64,
     pub progress: f64,
@@ -53,6 +59,27 @@ pub struct BookSummary {
     pub image_sequence_state: Option<String>,
     pub image_sequence_missing_pages: i64,
     pub image_sequence_stale_pages: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct BookListOptions {
+    #[serde(default)]
+    pub group: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub descending: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BookMetadataWrite {
+    pub book_id: String,
+    pub shelf_group: String,
+    pub tags: Vec<String>,
+    pub cover_path: Option<String>,
+    pub custom_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -353,9 +380,32 @@ impl Database {
     }
 
     pub fn list_books(&self) -> Result<Vec<BookSummary>, DbError> {
+        self.list_books_with_options(&BookListOptions::default())
+    }
+
+    pub fn list_books_with_options(
+        &self,
+        options: &BookListOptions,
+    ) -> Result<Vec<BookSummary>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let mut statement = connection.prepare(
-            "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                     b.current_chapter, b.progress, b.updated_at,
+        let group = options.group.as_deref().unwrap_or_default().trim();
+        let query = options.query.as_deref().unwrap_or_default().trim();
+        let order_by = match options.sort.as_deref().unwrap_or("updated_at") {
+            "title" => "b.title COLLATE NOCASE",
+            "author" => "COALESCE(b.author, '') COLLATE NOCASE",
+            "progress" => "b.progress",
+            "custom_order" => "b.custom_order",
+            _ => "b.updated_at",
+        };
+        let direction = if options.descending.unwrap_or(true) {
+            "DESC"
+        } else {
+            "ASC"
+        };
+        let sql = format!(
+            "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                    b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
+                    b.current_chapter, b.progress, b.updated_at,
                     (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
                     COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
                               WHERE p.sequence_id = b.id AND p.state = 'missing'), 0),
@@ -363,10 +413,16 @@ impl Database {
                               WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
              FROM books b
              LEFT JOIN chapters c ON c.book_id = b.id
+             WHERE (?1 = '' OR b.shelf_group = ?1)
+               AND (?2 = ''
+                    OR LOWER(b.title) LIKE '%' || LOWER(?2) || '%'
+                    OR LOWER(COALESCE(b.author, '')) LIKE '%' || LOWER(?2) || '%'
+                    OR LOWER(b.tags_json) LIKE '%' || LOWER(?2) || '%')
              GROUP BY b.id
-             ORDER BY b.updated_at DESC",
-        )?;
-        let rows = statement.query_map([], book_from_row)?;
+             ORDER BY {order_by} {direction}, b.id"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(params![group, query], book_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
 
@@ -422,6 +478,48 @@ impl Database {
         transaction.commit()?;
         drop(connection);
         self.get_book_summary(&book_id)
+    }
+
+    pub fn update_book_metadata(
+        &self,
+        write: BookMetadataWrite,
+    ) -> Result<BookSummary, DbError> {
+        let shelf_group = write.shelf_group.trim();
+        if shelf_group.len() > 128 {
+            return Err(DbError::InvalidBookMetadata(
+                "书架分组不能超过 128 字节".to_string(),
+            ));
+        }
+        let tags = normalize_book_tags(&write.tags)?;
+        let tags_json = serde_json::to_string(&tags)
+            .map_err(|error| DbError::InvalidBookMetadata(format!("标签序列化失败：{error}")))?;
+        let cover_path = write
+            .cover_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let changed = connection.execute(
+            "UPDATE books
+             SET shelf_group = ?1,
+                 tags_json = ?2,
+                 cover_path = ?3,
+                 custom_order = ?4,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?5",
+            params![
+                shelf_group,
+                tags_json,
+                cover_path,
+                write.custom_order,
+                write.book_id
+            ],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        drop(connection);
+        self.get_book_summary(&write.book_id)
     }
 
     pub fn save_image_sequence(
@@ -1833,7 +1931,9 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let book = connection
             .query_row(
-                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at,
+                "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                    b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
+                    b.current_chapter, b.progress, b.updated_at,
                     (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
                     COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
                               WHERE p.sequence_id = b.id AND p.state = 'missing'), 0),
@@ -1930,7 +2030,9 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         connection
             .query_row(
-                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at,
+                "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                    b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
+                    b.current_chapter, b.progress, b.updated_at,
                     (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
                     COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
                               WHERE p.sequence_id = b.id AND p.state = 'missing'), 0),
@@ -1994,6 +2096,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             13_i64,
             include_str!("../migrations/0013_image_sequences.sql"),
         ),
+        (
+            14_i64,
+            include_str!("../migrations/0014_book_shelf_metadata.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -2018,20 +2124,50 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
 }
 
 fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
+    let tags_json: String = row.get(7)?;
     Ok(BookSummary {
         id: row.get(0)?,
         title: row.get(1)?,
         author: row.get(2)?,
         format: row.get(3)?,
         content_kind: row.get(4)?,
-        chapter_count: row.get(5)?,
-        current_chapter: row.get(6)?,
-        progress: row.get(7)?,
-        updated_at: row.get(8)?,
-        image_sequence_state: row.get(9)?,
-        image_sequence_missing_pages: row.get(10)?,
-        image_sequence_stale_pages: row.get(11)?,
+        cover_path: row.get(5)?,
+        shelf_group: row.get(6)?,
+        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+        custom_order: row.get(8)?,
+        chapter_count: row.get(9)?,
+        current_chapter: row.get(10)?,
+        progress: row.get(11)?,
+        updated_at: row.get(12)?,
+        image_sequence_state: row.get(13)?,
+        image_sequence_missing_pages: row.get(14)?,
+        image_sequence_stale_pages: row.get(15)?,
     })
+}
+
+fn normalize_book_tags(tags: &[String]) -> Result<Vec<String>, DbError> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for tag in tags {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            continue;
+        }
+        if tag.len() > 64 {
+            return Err(DbError::InvalidBookMetadata(
+                "单个标签不能超过 64 字节".to_string(),
+            ));
+        }
+        if seen.insert(tag.to_lowercase()) {
+            normalized.push(tag.to_string());
+        }
+        if normalized.len() > 32 {
+            return Err(DbError::InvalidBookMetadata(
+                "标签数量不能超过 32 个".to_string(),
+            ));
+        }
+    }
+    Ok(normalized)
 }
 
 fn source_from_row(row: &Row<'_>) -> rusqlite::Result<SourceSummary> {
@@ -3161,4 +3297,107 @@ mod tests {
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
+    #[test]
+    fn persists_book_shelf_metadata_and_filters() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-shelf-metadata-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, author, path, format)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        "book-alpha",
+                        "阿尔法",
+                        "作者甲",
+                        "alpha.txt",
+                        "txt"
+                    ],
+                )
+                .expect("alpha book should insert");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, author, path, format)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        "book-beta",
+                        "贝塔",
+                        "作者乙",
+                        "beta.txt",
+                        "txt"
+                    ],
+                )
+                .expect("beta book should insert");
+        }
+
+        let alpha = database
+            .update_book_metadata(BookMetadataWrite {
+                book_id: "book-alpha".to_string(),
+                shelf_group: "收藏".to_string(),
+                tags: vec!["奇幻".to_string(), "奇幻".to_string(), "已读".to_string()],
+                cover_path: Some("C:/covers/alpha.png".to_string()),
+                custom_order: 5,
+            })
+            .expect("alpha metadata should save");
+        assert_eq!(alpha.shelf_group, "收藏");
+        assert_eq!(alpha.tags, vec!["奇幻".to_string(), "已读".to_string()]);
+        assert_eq!(
+            alpha.cover_path.as_deref(),
+            Some("C:/covers/alpha.png")
+        );
+
+        database
+            .update_book_metadata(BookMetadataWrite {
+                book_id: "book-beta".to_string(),
+                shelf_group: "待读".to_string(),
+                tags: vec!["科幻".to_string()],
+                cover_path: None,
+                custom_order: 1,
+            })
+            .expect("beta metadata should save");
+
+        let filtered = database
+            .list_books_with_options(&BookListOptions {
+                group: Some("收藏".to_string()),
+                query: Some("奇幻".to_string()),
+                sort: Some("title".to_string()),
+                descending: Some(false),
+            })
+            .expect("filtered books should list");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "book-alpha");
+
+        let sorted = database
+            .list_books_with_options(&BookListOptions {
+                group: None,
+                query: None,
+                sort: Some("custom_order".to_string()),
+                descending: Some(false),
+            })
+            .expect("sorted books should list");
+        assert_eq!(
+            sorted.iter().map(|book| book.id.as_str()).collect::<Vec<_>>(),
+            vec!["book-beta", "book-alpha"]
+        );
+
+        let invalid = database.update_book_metadata(BookMetadataWrite {
+            book_id: "book-alpha".to_string(),
+            shelf_group: "x".repeat(129),
+            tags: Vec::new(),
+            cover_path: None,
+            custom_order: 0,
+        });
+        assert!(invalid.is_err());
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
 }
