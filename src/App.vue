@@ -3732,7 +3732,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             <button class="text-button" type="button" @click="clearDuplicatePreview">关闭</button>
           </div>
           <p class="duplicate-preview-note">
-            保留：{{ duplicatePreview.books.find((book) => book.id === duplicatePreview.canonical_book_id)?.title || duplicatePreview.canonical_book_id }}
+            保留书籍 ID：{{ duplicatePreview.canonical_book_id }}
             · 预览有效期约 5 分钟 · 尚未写入任何数据
           </p>
           <div class="duplicate-preview-books">
