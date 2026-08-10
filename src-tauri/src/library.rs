@@ -2488,11 +2488,28 @@ mod tests {
         assert!(preview.decoded_bytes > 0);
     }
 
+    fn png_crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffff_u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
     #[test]
     fn rejects_image_that_exceeds_pixel_quota_before_decode() {
         let mut oversized = tiny_png_fixture();
         oversized[16..20].copy_from_slice(&10_000_u32.to_be_bytes());
         oversized[20..24].copy_from_slice(&10_000_u32.to_be_bytes());
+        let ihdr_crc = png_crc32(&oversized[12..29]);
+        oversized[29..33].copy_from_slice(&ihdr_crc.to_be_bytes());
 
         let error = preview_image_bytes("oversized.png", &oversized)
             .expect_err("oversized image should be rejected");
