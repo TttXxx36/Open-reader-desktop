@@ -145,6 +145,15 @@ pub struct BookMergePreviewRequest {
     pub canonical_book_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct BookMergePreviewRevalidateRequest {
+    pub preview: BookMergePreviewRequest,
+    pub preview_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub input_fingerprint: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BookMergeBookPreview {
     pub id: String,
@@ -889,6 +898,64 @@ impl Database {
             conflicts,
             blocked_reasons,
         })
+    }
+
+    pub fn revalidate_book_merge_preview(
+        &self,
+        request: BookMergePreviewRevalidateRequest,
+    ) -> Result<BookMergePreview, DbError> {
+        let preview_id = request.preview_id.trim();
+        if preview_id.is_empty()
+            || preview_id.len() > 128
+            || !preview_id.starts_with("merge-preview-")
+        {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览 ID 无效，请重新生成预览".to_string(),
+            ));
+        }
+
+        let expected_fingerprint = request.input_fingerprint.trim();
+        if expected_fingerprint.is_empty()
+            || expected_fingerprint.len() > 128
+            || !expected_fingerprint.starts_with("merge-v1-")
+        {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览指纹无效，请重新生成预览".to_string(),
+            ));
+        }
+
+        if request.created_at <= 0
+            || request.expires_at <= request.created_at
+            || request.expires_at - request.created_at > 5 * 60
+        {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览有效期参数无效，请重新生成预览".to_string(),
+            ));
+        }
+
+        let now = unix_timestamp();
+        if request.created_at > now.saturating_add(60) {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览时间来自未来，请重新生成预览".to_string(),
+            ));
+        }
+        if now > request.expires_at {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览已过期，请重新生成预览".to_string(),
+            ));
+        }
+
+        let mut current = self.preview_book_merge(request.preview)?;
+        if current.input_fingerprint != expected_fingerprint {
+            return Err(DbError::InvalidBookMetadata(
+                "书籍数据已变化，请重新生成预览".to_string(),
+            ));
+        }
+
+        current.preview_id = preview_id.to_string();
+        current.created_at = request.created_at;
+        current.expires_at = request.expires_at;
+        Ok(current)
     }
 
     pub fn get_book_cover(&self, book_id: &str) -> Result<Option<BookCoverSummary>, DbError> {
@@ -4344,6 +4411,58 @@ mod tests {
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
+
+        let validated = database
+            .revalidate_book_merge_preview(BookMergePreviewRevalidateRequest {
+                preview: BookMergePreviewRequest {
+                    book_ids: vec!["merge-source".to_string(), "merge-canonical".to_string()],
+                    canonical_book_id: "merge-canonical".to_string(),
+                },
+                preview_id: preview.preview_id.clone(),
+                created_at: preview.created_at,
+                expires_at: preview.expires_at,
+                input_fingerprint: preview.input_fingerprint.clone(),
+            })
+            .expect("unchanged preview should revalidate");
+        assert_eq!(validated.preview_id, preview.preview_id);
+        assert_eq!(validated.created_at, preview.created_at);
+        assert_eq!(validated.expires_at, preview.expires_at);
+        assert_eq!(validated.input_fingerprint, preview.input_fingerprint);
+
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "UPDATE books SET progress = 0.9 WHERE id = ?1",
+                    params!["merge-source"],
+                )
+                .expect("source mutation should succeed");
+        }
+        assert!(database
+            .revalidate_book_merge_preview(BookMergePreviewRevalidateRequest {
+                preview: BookMergePreviewRequest {
+                    book_ids: vec!["merge-source".to_string(), "merge-canonical".to_string()],
+                    canonical_book_id: "merge-canonical".to_string(),
+                },
+                preview_id: preview.preview_id.clone(),
+                created_at: preview.created_at,
+                expires_at: preview.expires_at,
+                input_fingerprint: preview.input_fingerprint.clone(),
+            })
+            .is_err());
+
+        assert!(database
+            .revalidate_book_merge_preview(BookMergePreviewRevalidateRequest {
+                preview: BookMergePreviewRequest {
+                    book_ids: vec!["merge-source".to_string(), "merge-canonical".to_string()],
+                    canonical_book_id: "merge-canonical".to_string(),
+                },
+                preview_id: preview.preview_id,
+                created_at: 1,
+                expires_at: 2,
+                input_fingerprint: "merge-v1-expired".to_string(),
+            })
+            .is_err());
 
     #[test]
     fn finds_duplicate_books_without_mutating_library() {
