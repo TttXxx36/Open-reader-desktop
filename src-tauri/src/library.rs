@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use encoding_rs::{GB18030, UTF_16BE, UTF_16LE};
+use image::{ImageDecoder, ImageReader, Limits};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -25,6 +26,8 @@ pub enum ImportError {
     InvalidEpub(String),
     #[error("EPUB archive error: {0}")]
     Archive(#[from] zip::result::ZipError),
+    #[error("invalid image: {0}")]
+    InvalidImage(String),
 }
 
 #[derive(Debug, Clone)]
@@ -216,6 +219,113 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
         message,
         metadata,
     }
+}
+
+
+pub const MAX_IMAGE_INPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 20_000;
+const MAX_IMAGE_PIXELS: u64 = 32_000_000;
+const MAX_IMAGE_DECODED_BYTES: u64 = 128 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageDocumentPreview {
+    pub file_name: String,
+    pub mime: String,
+    pub width: u32,
+    pub height: u32,
+    pub color_type: String,
+    pub decoded_bytes: u64,
+}
+
+/// Decodes exactly one image while enforcing input, dimension, pixel, and decoded-buffer quotas.
+/// The decoded pixels are deliberately dropped after validation; the UI keeps the original
+/// local file as a short-lived object URL for the first single-page preview.
+pub fn preview_image_bytes(
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<ImageDocumentPreview, ImportError> {
+    if bytes.len() > MAX_IMAGE_INPUT_BYTES {
+        return Err(ImportError::InvalidImage(format!(
+            "{file_name}: 文件超过 {} MB 图片输入上限",
+            MAX_IMAGE_INPUT_BYTES / (1024 * 1024)
+        )));
+    }
+
+    let probe = probe_book_format(file_name, bytes);
+    if probe.format != BookFormatKind::Image || !probe.signature_match {
+        return Err(ImportError::InvalidImage(format!(
+            "{file_name}: 图片签名无效或与扩展名不匹配"
+        )));
+    }
+
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| ImportError::InvalidImage(format!("无法识别图片格式：{error}")))?;
+    let image_format = reader
+        .format()
+        .ok_or_else(|| ImportError::InvalidImage("无法识别图片格式".to_string()))?;
+    let mime = match image_format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        image::ImageFormat::Gif => "image/gif",
+        image::ImageFormat::WebP => "image/webp",
+        _ => {
+            return Err(ImportError::InvalidImage(format!(
+                "{file_name}: 仅允许 PNG、JPEG、GIF、WebP"
+            )))
+        }
+    };
+
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|error| ImportError::InvalidImage(format!("图片解码器初始化失败：{error}")))?;
+    let (width, height) = decoder.dimensions();
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| ImportError::InvalidImage("图片像素数量溢出".to_string()))?;
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
+        || height > MAX_IMAGE_DIMENSION
+        || pixels > MAX_IMAGE_PIXELS
+    {
+        return Err(ImportError::InvalidImage(format!(
+            "{file_name}: 图片尺寸或像素数超过受限预览配额（最大 {}×{}、{} 像素）",
+            MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS
+        )));
+    }
+
+    let decoded_bytes = decoder.total_bytes();
+    if decoded_bytes > MAX_IMAGE_DECODED_BYTES {
+        return Err(ImportError::InvalidImage(format!(
+            "{file_name}: 解码缓冲区超过 {} MiB 上限",
+            MAX_IMAGE_DECODED_BYTES / (1024 * 1024)
+        )));
+    }
+    let color_type = format!("{:?}", decoder.color_type());
+
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_IMAGE_DECODED_BYTES);
+    decoder
+        .set_limits(limits)
+        .map_err(|error| ImportError::InvalidImage(format!("图片解码配额不受支持：{error}")))?;
+
+    let buffer_length = usize::try_from(decoded_bytes)
+        .map_err(|_| ImportError::InvalidImage("解码缓冲区超过当前平台可用大小".to_string()))?;
+    let mut decoded = vec![0_u8; buffer_length];
+    decoder
+        .read_image(&mut decoded)
+        .map_err(|error| ImportError::InvalidImage(format!("图片解码失败：{error}")))?;
+    drop(decoded);
+
+    Ok(ImageDocumentPreview {
+        file_name: file_name.to_string(),
+        mime: mime.to_string(),
+        width,
+        height,
+        color_type,
+        decoded_bytes,
+    })
 }
 
 fn formats_compatible(extension_kind: BookFormatKind, magic_kind: BookFormatKind) -> bool {
@@ -2360,6 +2470,42 @@ mod tests {
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     fn peak_rss_bytes() -> Option<u64> {
         None
+    }
+
+
+    fn tiny_png_fixture() -> Vec<u8> {
+        STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+            .expect("fixture PNG should decode")
+    }
+
+    #[test]
+    fn decodes_tiny_png_with_restricted_preview() {
+        let preview =
+            preview_image_bytes("cover.png", &tiny_png_fixture()).expect("tiny PNG should decode");
+        assert_eq!(preview.file_name, "cover.png");
+        assert_eq!(preview.mime, "image/png");
+        assert_eq!(preview.width, 1);
+        assert_eq!(preview.height, 1);
+        assert!(preview.decoded_bytes > 0);
+    }
+
+    #[test]
+    fn rejects_image_that_exceeds_pixel_quota_before_decode() {
+        let mut oversized = tiny_png_fixture();
+        oversized[16..20].copy_from_slice(&10_000_u32.to_be_bytes());
+        oversized[20..24].copy_from_slice(&10_000_u32.to_be_bytes());
+
+        let error = preview_image_bytes("oversized.png", &oversized)
+            .expect_err("oversized image should be rejected");
+        assert!(error.to_string().contains("像素数超过"));
+    }
+
+    #[test]
+    fn rejects_truncated_image() {
+        let error = preview_image_bytes("broken.png", b"\x89PNG\r\n\x1A\n")
+            .expect_err("truncated image should fail");
+        assert!(error.to_string().contains("图片"));
     }
 
     #[test]
