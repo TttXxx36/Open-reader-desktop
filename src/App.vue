@@ -23,6 +23,7 @@ interface BookSummary {
   format: string;
   content_kind: string;
   cover_path: string | null;
+  cover_state: string | null;
   shelf_group: string;
   tags: string[];
   custom_order: number;
@@ -2765,6 +2766,19 @@ function imageSequenceHealthClass(book: BookSummary) {
       : "missing";
 }
 
+function coverStateLabel(book: BookSummary) {
+  if (!book.cover_state || book.cover_state === "ready") return "";
+  if (book.cover_state === "stale") return "封面待刷新";
+  if (book.cover_state === "blocked") return "封面已阻止";
+  return "使用占位图";
+}
+
+function coverStateClass(book: BookSummary) {
+  return book.cover_state === "stale" ? "stale"
+    : book.cover_state === "blocked" ? "blocked"
+      : "missing";
+}
+
 function imageRelinkAssignmentLabel(assignment: ImageRelinkAssignment) {
   if (assignment.status === "missing") return "缺失";
   if (assignment.match_kind === "basename_size") return "按文件名和大小候选，待复核";
@@ -4015,6 +4029,11 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           </label>
           <div class="book-cover" :class="`format-${book.format}`">
             <span>{{ book.format.toUpperCase() }}</span>
+            <small
+              v-if="coverStateLabel(book)"
+              class="book-cover-status"
+              :class="coverStateClass(book)"
+            >{{ coverStateLabel(book) }}</small>
           </div>
           <div class="book-card-body">
             <span class="book-format">{{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }}</span>
@@ -5662,13 +5681,40 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 .book-cover {
   display: flex;
   height: 132px;
-  align-items: end;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
   padding: 16px;
   color: rgba(255, 255, 255, 0.76);
   background: linear-gradient(145deg, #263c73, #17233e);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.14em;
+}
+
+.book-cover-status {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 999px;
+  color: #ffe0ab;
+  background: rgba(77, 49, 20, 0.72);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-cover-status.blocked {
+  color: #ffbac4;
+  background: rgba(94, 30, 46, 0.76);
+}
+
+.book-cover-status.missing {
+  color: #c9d8ed;
+  background: rgba(28, 42, 65, 0.78);
 }
 
 .book-cover.format-epub {
