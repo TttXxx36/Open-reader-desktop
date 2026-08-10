@@ -2644,8 +2644,14 @@ async function previewImageSequenceRelink(newRootPath: string) {
     );
     status.value = "重新关联差异已生成，请确认后再更新书架记录";
   } catch (error) {
-    errorMessage.value = "重新关联扫描失败：" + String(error);
-    status.value = "重新关联扫描失败，旧目录仍保持不变";
+    const message = String(error);
+    const timedOut = message.includes("超时") || message.includes("时间上限");
+    errorMessage.value = timedOut
+      ? "重新关联扫描超时：" + message
+      : "重新关联扫描失败：" + message;
+    status.value = timedOut
+      ? "重新关联扫描超时，旧目录仍保持不变"
+      : "重新关联扫描失败，旧目录仍保持不变";
   } finally {
     imageRelinkBusy.value = false;
   }
