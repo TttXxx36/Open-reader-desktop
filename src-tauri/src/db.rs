@@ -82,6 +82,15 @@ pub struct BookMetadataWrite {
     pub custom_order: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct BookMetadataBatchWrite {
+    pub book_ids: Vec<String>,
+    #[serde(default)]
+    pub shelf_group: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ChapterSummary {
     pub id: String,
@@ -517,6 +526,78 @@ impl Database {
         }
         drop(connection);
         self.get_book_summary(&write.book_id)
+    }
+
+    pub fn update_books_metadata(
+        &self,
+        write: BookMetadataBatchWrite,
+    ) -> Result<Vec<BookSummary>, DbError> {
+        let mut book_ids = Vec::new();
+        let mut seen = HashSet::new();
+        for book_id in write.book_ids {
+            let book_id = book_id.trim();
+            if book_id.is_empty() {
+                continue;
+            }
+            if seen.insert(book_id.to_string()) {
+                book_ids.push(book_id.to_string());
+            }
+        }
+        if book_ids.is_empty() {
+            return Err(DbError::InvalidBookMetadata(
+                "至少选择一本书".to_string(),
+            ));
+        }
+        if book_ids.len() > 256 {
+            return Err(DbError::InvalidBookMetadata(
+                "单次批量编辑不能超过 256 本书".to_string(),
+            ));
+        }
+
+        let shelf_group = write.shelf_group.as_deref().map(str::trim);
+        if let Some(group) = shelf_group {
+            if group.len() > 128 {
+                return Err(DbError::InvalidBookMetadata(
+                    "书架分组不能超过 128 字节".to_string(),
+                ));
+            }
+        }
+        let tags_json = if let Some(tags) = write.tags.as_ref() {
+            let tags = normalize_book_tags(tags)?;
+            Some(serde_json::to_string(&tags).map_err(|error| {
+                DbError::InvalidBookMetadata(format!("标签序列化失败：{error}"))
+            })?)
+        } else {
+            None
+        };
+        if shelf_group.is_none() && tags_json.is_none() {
+            return Err(DbError::InvalidBookMetadata(
+                "批量编辑至少需要提供分组或标签".to_string(),
+            ));
+        }
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        for book_id in &book_ids {
+            let changed = transaction.execute(
+                "UPDATE books
+                 SET shelf_group = COALESCE(?1, shelf_group),
+                     tags_json = COALESCE(?2, tags_json),
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?3",
+                params![shelf_group, tags_json.as_deref(), book_id],
+            )?;
+            if changed == 0 {
+                return Err(DbError::NotFound);
+            }
+        }
+        transaction.commit()?;
+        drop(connection);
+
+        book_ids
+            .into_iter()
+            .map(|book_id| self.get_book_summary(&book_id))
+            .collect()
     }
 
     pub fn save_image_sequence(
@@ -3380,6 +3461,81 @@ mod tests {
             custom_order: 0,
         });
         assert!(invalid.is_err());
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn batch_updates_book_metadata_transactionally() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-batch-metadata-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            for (id, title) in [("book-alpha", "阿尔法"), ("book-beta", "贝塔")] {
+                connection
+                    .execute(
+                        "INSERT INTO books (id, title, path, format)
+                         VALUES (?1, ?2, ?3, 'txt')",
+                        params![id, title, format!("{id}.txt")],
+                    )
+                    .expect("fixture book should insert");
+            }
+        }
+
+        let updated = database
+            .update_books_metadata(BookMetadataBatchWrite {
+                book_ids: vec![
+                    "book-alpha".to_string(),
+                    "book-beta".to_string(),
+                    "book-alpha".to_string(),
+                ],
+                shelf_group: Some("待读".to_string()),
+                tags: Some(vec!["精选".to_string(), "精选".to_string()]),
+            })
+            .expect("batch metadata should save");
+        assert_eq!(updated.len(), 2);
+        assert!(updated.iter().all(|book| book.shelf_group == "待读"));
+        assert!(updated
+            .iter()
+            .all(|book| book.tags == vec!["精选".to_string()]));
+
+        let preserved = database
+            .update_books_metadata(BookMetadataBatchWrite {
+                book_ids: vec!["book-alpha".to_string()],
+                shelf_group: Some("收藏".to_string()),
+                tags: None,
+            })
+            .expect("partial batch metadata should save");
+        assert_eq!(preserved[0].shelf_group, "收藏");
+        assert_eq!(preserved[0].tags, vec!["精选".to_string()]);
+
+        let cleared = database
+            .update_books_metadata(BookMetadataBatchWrite {
+                book_ids: vec!["book-alpha".to_string()],
+                shelf_group: Some(String::new()),
+                tags: Some(Vec::new()),
+            })
+            .expect("batch metadata should clear");
+        assert!(cleared[0].shelf_group.is_empty());
+        assert!(cleared[0].tags.is_empty());
+
+        let invalid = database.update_books_metadata(BookMetadataBatchWrite {
+            book_ids: vec!["book-alpha".to_string(), "missing".to_string()],
+            shelf_group: Some("回滚".to_string()),
+            tags: None,
+        });
+        assert!(invalid.is_err());
+        let unchanged = database
+            .get_book_summary("book-alpha")
+            .expect("book should remain readable");
+        assert!(unchanged.shelf_group.is_empty());
 
         drop(database);
         let _ = fs::remove_dir_all(directory);
