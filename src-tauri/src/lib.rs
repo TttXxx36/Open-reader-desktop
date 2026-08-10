@@ -284,12 +284,12 @@ fn cache_image_sequence(
     operation_id: Option<String>,
 ) -> Result<ImageThumbnailCacheSummary, String> {
     let operation_id = normalize_image_cache_operation_id(operation_id)?;
-    let token = cancellation.register(&operation_id)?;
     let cache_root = app
         .path()
         .app_cache_dir()
         .map_err(|error| format!("无法获取应用缓存目录：{error}"))?
         .join("image-sequences");
+    let token = cancellation.register(&operation_id)?;
     let result = cache_image_sequence_files_with_cancel(
         &cache_root,
         &cache_key,
