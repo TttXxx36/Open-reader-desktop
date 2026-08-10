@@ -55,6 +55,15 @@ type FormatProbeMetadata =
   | { kind: "image"; mime: string; width: number | null; height: number | null }
   | { kind: "mobi"; record_offset: number; header_length: number | null };
 
+interface ImageDocumentPreview {
+  file_name: string;
+  mime: string;
+  width: number;
+  height: number;
+  color_type: string;
+  decoded_bytes: number;
+}
+
 interface BookFormatProbe {
   format: string;
   support: BookFormatSupport;
@@ -495,6 +504,8 @@ const status = ref("正在加载书架…");
 const errorMessage = ref("");
 const isImporting = ref(false);
 const bookImportPreview = ref<BookImportPreview | null>(null);
+const imagePreview = ref<ImageDocumentPreview | null>(null);
+const imagePreviewUrl = ref("");
 const bookImportFileName = ref("");
 const bookImportBytes = ref<number[]>([]);
 const txtParseOptions = ref<TxtParseOptions>({
@@ -2025,6 +2036,11 @@ function openFilePicker() {
 
 function resetBookImportPreview() {
   bookImportPreview.value = null;
+  imagePreview.value = null;
+  if (imagePreviewUrl.value) {
+    URL.revokeObjectURL(imagePreviewUrl.value);
+    imagePreviewUrl.value = "";
+  }
   bookImportFileName.value = "";
   bookImportBytes.value = [];
   txtParseOptions.value = {
@@ -2126,7 +2142,7 @@ async function confirmBookImport() {
 function cancelBookImportPreview() {
   resetBookImportPreview();
   errorMessage.value = "";
-  status.value = "已取消 TXT 导入";
+  status.value = "已取消文件预览";
 }
 
 async function importFile(event: Event) {
@@ -2150,6 +2166,30 @@ async function importFile(event: Event) {
       bytes,
     });
     const probeMessage = describeBookFormatProbe(probe);
+    if (probe.format === "image" && probe.support === "probe_only") {
+      isImporting.value = true;
+      status.value = "正在验证图片《" + file.name + "》…";
+      try {
+        const preview = await invoke<ImageDocumentPreview>("preview_image_document", {
+          fileName: file.name,
+          bytes,
+        });
+        imagePreview.value = preview;
+        bookImportFileName.value = file.name;
+        bookImportBytes.value = bytes;
+        imagePreviewUrl.value = URL.createObjectURL(new Blob(
+          [new Uint8Array(bytes)],
+          { type: preview.mime },
+        ));
+        status.value = "图片已通过受限解码，可进行单页预览";
+      } catch (error) {
+        errorMessage.value = String(error);
+        status.value = "图片预览失败";
+      } finally {
+        isImporting.value = false;
+      }
+      return;
+    }
     if (probe.support !== "importable") {
       errorMessage.value = probeMessage;
       status.value = probeMessage;
@@ -2289,7 +2329,7 @@ function nextChapter() {
   if (next) void loadChapter(next.id);
 }
 
-provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceRequestMetrics, sourceRuleMetrics, sourceMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, chapterLinks, scrollToFragment, openContentLink, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, loadSourceRequestMetrics, loadSourceRuleMetrics, formatBytes, formatPercent, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
+provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, imagePreview, imagePreviewUrl, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchPageLimit, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, retryingSourceId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceRequestMetrics, sourceRuleMetrics, sourceMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, nextPagePolicy, remoteNextPageStatus, sourceJson, chapterParagraphs, chapterBlocks, chapterLinks, scrollToFragment, openContentLink, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadNextPagePolicy, loadBooks, openSources, openSettings, closeSettings, resetSettings, resetNextPagePolicy, loadSources, loadSourceSnapshots, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, loadSourceRequestMetrics, loadSourceRuleMetrics, formatBytes, formatPercent, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, deleteSource, searchSources, retrySourceSearch, cancelSearch, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, cancelRemoteOperation, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, openBook, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter });
 </script>
 
 <template>
@@ -2327,7 +2367,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         ref="fileInput"
         class="file-input"
         type="file"
-        accept=".txt,.epub,text/plain,application/epub+zip"
+        accept=".txt,.epub,.png,.jpg,.jpeg,.gif,.webp,text/plain,application/epub+zip,image/png,image/jpeg,image/gif,image/webp"
         @change="importFile"
       />
 
@@ -2355,7 +2395,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             取消搜索
           </button>
           <button class="import-button" type="button" :disabled="isImporting" @click="openFilePicker">
-            {{ isImporting ? "解析中…" : "导入 TXT / EPUB" }}
+            {{ isImporting ? "解析中…" : "导入 TXT / EPUB / 图片" }}
           </button>
         </div>
       </header>
@@ -2427,6 +2467,30 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <button class="text-button" type="button" :disabled="bookImportBusy || isImporting" @click="cancelBookImportPreview">
             取消
           </button>
+        </div>
+      </section>
+
+
+      <section v-if="imagePreview" class="image-import-preview" aria-live="polite">
+        <div class="book-import-preview-heading">
+          <div>
+            <span class="eyebrow">IMAGE SINGLE-PAGE PREVIEW</span>
+            <h2>图片预览</h2>
+          </div>
+          <span class="book-import-preview-count">{{ imagePreview.width }}×{{ imagePreview.height }}</span>
+        </div>
+        <div class="book-import-preview-meta">
+          <span>文件：{{ imagePreview.file_name }}</span>
+          <span>格式：{{ imagePreview.mime }}</span>
+          <span>色彩：{{ imagePreview.color_type }}</span>
+          <span>解码缓冲：{{ formatBytes(imagePreview.decoded_bytes) }}</span>
+        </div>
+        <div class="image-import-preview-media">
+          <img v-if="imagePreviewUrl" :src="imagePreviewUrl" :alt="imagePreview.file_name" />
+        </div>
+        <div class="book-import-preview-actions">
+          <span>当前为单页、只读预览，不写入书架；图片序列与双页模式将在下一步接入。</span>
+          <button class="text-button" type="button" @click="cancelBookImportPreview">关闭预览</button>
         </div>
       </section>
 
@@ -3550,6 +3614,33 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   border-radius: 50%;
   background: #79e3ba;
   box-shadow: 0 0 12px #79e3ba;
+}
+
+
+.image-import-preview {
+  margin-top: 22px;
+  padding: 20px;
+  border: 1px solid rgba(134, 223, 194, 0.28);
+  border-radius: 16px;
+  background: rgba(17, 44, 48, 0.72);
+}
+
+.image-import-preview-media {
+  display: grid;
+  min-height: 180px;
+  margin-top: 18px;
+  place-items: center;
+  padding: 18px;
+  border: 1px dashed rgba(134, 223, 194, 0.35);
+  border-radius: 12px;
+  background: rgba(12, 17, 27, 0.52);
+}
+
+.image-import-preview-media img {
+  display: block;
+  max-width: min(100%, 860px);
+  max-height: 520px;
+  object-fit: contain;
 }
 
 .book-import-preview {
