@@ -90,6 +90,14 @@ interface ImageSequenceInput {
   bytes: number[];
 }
 
+interface ImageReadingLocation {
+  cache_key: string;
+  page_index: number;
+  zoom: number;
+  direction: ImageReadingDirection;
+  spread: ImageSpreadMode;
+}
+
 interface BookFormatProbe {
   format: string;
   support: BookFormatSupport;
@@ -484,6 +492,7 @@ interface MultiSourceSearchResult {
 const MAX_IMAGE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_SEQUENCE_INPUT_BYTES = 256 * 1024 * 1024;
 const MAX_IMAGE_THUMBNAILS = 24;
+const IMAGE_LOCATION_KEY_PREFIX = "open-reader.image-location.";
 const SETTINGS_KEY = "open-reader.settings";
 const SETTINGS_VERSION = 2;
 const NEXT_PAGE_POLICY_KEY = "open-reader.next-page-policy";
@@ -539,6 +548,7 @@ const imageSequencePreview = ref<ImageSequencePreview | null>(null);
 const imageSequenceUrls = ref<string[]>([]);
 const imageSequenceDirection = ref<ImageReadingDirection>("ltr");
 const imageSequenceSpread = ref<ImageSpreadMode>("single");
+const imageSequenceLocation = ref<ImageReadingLocation | null>(null);
 const bookImportFileName = ref("");
 const bookImportBytes = ref<number[]>([]);
 const txtParseOptions = ref<TxtParseOptions>({
@@ -2079,6 +2089,7 @@ function resetBookImportPreview() {
   imageSequenceUrls.value = [];
   imageSequenceDirection.value = "ltr";
   imageSequenceSpread.value = "single";
+  imageSequenceLocation.value = null;
   bookImportFileName.value = "";
   bookImportBytes.value = [];
   txtParseOptions.value = {
@@ -2183,6 +2194,110 @@ function cancelBookImportPreview() {
   status.value = "已取消文件预览";
 }
 
+function fallbackHashBytes(bytes: Uint8Array) {
+  let hash = 2166136261;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+async function digestBytes(bytes: Uint8Array) {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return fallbackHashBytes(bytes);
+  try {
+    const digest = await subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    return fallbackHashBytes(bytes);
+  }
+}
+
+async function buildImageSequenceCacheKey(
+  pageDigests: string[],
+  preview: ImageSequencePreview,
+) {
+  const material = JSON.stringify({
+    version: 1,
+    direction: preview.direction,
+    spread: preview.spread,
+    page_count: preview.page_count,
+    total_pixels: preview.total_pixels,
+    total_decoded_bytes: preview.total_decoded_bytes,
+    pages: pageDigests,
+  });
+  const digest = await digestBytes(new TextEncoder().encode(material));
+  return `imgseq-v1-${digest}`;
+}
+
+function loadImageSequenceLocation(cacheKey: string, preview: ImageSequencePreview) {
+  try {
+    const raw = localStorage.getItem(IMAGE_LOCATION_KEY_PREFIX + cacheKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ImageReadingLocation>;
+    if (parsed.cache_key !== cacheKey) return null;
+    return {
+      cache_key: cacheKey,
+      page_index: Math.min(
+        Math.max(Number(parsed.page_index) || 0, 0),
+        Math.max(preview.page_count - 1, 0),
+      ),
+      zoom: Math.min(Math.max(Number(parsed.zoom) || 1, 0.5), 3),
+      direction: parsed.direction ?? preview.direction,
+      spread: parsed.spread ?? preview.spread,
+    } satisfies ImageReadingLocation;
+  } catch {
+    return null;
+  }
+}
+
+function persistImageSequenceLocation() {
+  const location = imageSequenceLocation.value;
+  if (!location) return;
+  try {
+    localStorage.setItem(
+      IMAGE_LOCATION_KEY_PREFIX + location.cache_key,
+      JSON.stringify(location),
+    );
+  } catch {
+    // localStorage 不可用时保持当前会话位置，不阻断预览。
+  }
+}
+
+function selectImageSequencePage(index: number) {
+  if (!imageSequenceLocation.value || !imageSequencePreview.value) return;
+  imageSequenceLocation.value = {
+    ...imageSequenceLocation.value,
+    page_index: Math.min(
+      Math.max(index, 0),
+      Math.max(imageSequencePreview.value.page_count - 1, 0),
+    ),
+  };
+  persistImageSequenceLocation();
+}
+
+function moveImageSequencePage(delta: number) {
+  const current = imageSequenceLocation.value?.page_index ?? 0;
+  selectImageSequencePage(current + delta);
+}
+
+function updateImageSequenceZoom(value: number) {
+  if (!imageSequenceLocation.value) return;
+  imageSequenceLocation.value = {
+    ...imageSequenceLocation.value,
+    zoom: Math.min(Math.max(value, 0.5), 3),
+  };
+  persistImageSequenceLocation();
+}
+
+function handleImageSequenceZoom(event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  if (target) updateImageSequenceZoom(Number(target.value));
+}
+
 function imageDirectionLabel(direction: ImageReadingDirection) {
   return direction === "rtl" ? "从右到左" : direction === "vertical" ? "纵向长图" : "从左到右";
 }
@@ -2198,6 +2313,14 @@ function updateImageSequenceLayout() {
     direction: imageSequenceDirection.value,
     spread: imageSequenceSpread.value,
   };
+  if (imageSequenceLocation.value) {
+    imageSequenceLocation.value = {
+      ...imageSequenceLocation.value,
+      direction: imageSequenceDirection.value,
+      spread: imageSequenceSpread.value,
+    };
+    persistImageSequenceLocation();
+  }
   status.value = `图片序列已切换为${imageDirectionLabel(imageSequenceDirection.value)} · ${imageSpreadLabel(imageSequenceSpread.value)}`;
 }
 
@@ -2225,23 +2348,37 @@ async function importImageSequence(files: File[]) {
   status.value = `正在验证 ${files.length} 张图片…`;
   try {
     const pages: ImageSequenceInput[] = [];
+    const pageDigests: string[] = [];
     for (const file of files) {
+      const raw = new Uint8Array(await file.arrayBuffer());
       pages.push({
         file_name: file.name,
-        bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+        bytes: Array.from(raw),
       });
+      pageDigests.push(await digestBytes(raw));
     }
     const preview = await invoke<ImageSequencePreview>("preview_image_sequence", {
       pages,
       direction: imageSequenceDirection.value,
       spread: imageSequenceSpread.value,
     });
+    const cacheKey = await buildImageSequenceCacheKey(pageDigests, preview);
     imageSequencePreview.value = preview;
+    imageSequenceLocation.value = loadImageSequenceLocation(cacheKey, preview) ?? {
+      cache_key: cacheKey,
+      page_index: 0,
+      zoom: 1,
+      direction: preview.direction,
+      spread: preview.spread,
+    };
+    imageSequenceDirection.value = imageSequenceLocation.value.direction;
+    imageSequenceSpread.value = imageSequenceLocation.value.spread;
+    persistImageSequenceLocation();
     imageSequenceUrls.value = files
       .slice(0, MAX_IMAGE_THUMBNAILS)
       .map((file) => URL.createObjectURL(file));
     bookImportFileName.value = `${files.length} 个图片文件`;
-    status.value = `图片序列已通过受限解码，可预览 ${files.length} 页`;
+    status.value = `图片序列已通过受限解码，可预览 ${files.length} 页，已恢复第 ${imageSequenceLocation.value.page_index + 1} 页`;
   } catch (error) {
     errorMessage.value = String(error);
     status.value = "图片序列预览失败";
@@ -2623,6 +2760,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <span>总像素：{{ imageSequencePreview.total_pixels.toLocaleString() }}</span>
           <span>解码内存：{{ formatBytes(imageSequencePreview.total_decoded_bytes) }}</span>
           <span>已显示缩略图：{{ Math.min(imageSequencePreview.page_count, MAX_IMAGE_THUMBNAILS) }}</span>
+          <span v-if="imageSequenceLocation">缓存键：{{ imageSequenceLocation.cache_key.slice(0, 16) }}…</span>
         </div>
         <div class="book-import-preview-controls image-sequence-controls">
           <label class="book-import-preview-field">
@@ -2642,11 +2780,43 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             </select>
           </label>
         </div>
+        <div v-if="imageSequenceLocation" class="image-sequence-reader">
+          <div class="image-sequence-reader-toolbar">
+            <button class="text-button" type="button" :disabled="imageSequenceLocation.page_index <= 0" @click="moveImageSequencePage(-1)">上一页</button>
+            <span>第 {{ imageSequenceLocation.page_index + 1 }} / {{ imageSequencePreview.page_count }} 页</span>
+            <button class="text-button" type="button" :disabled="imageSequenceLocation.page_index >= imageSequencePreview.page_count - 1" @click="moveImageSequencePage(1)">下一页</button>
+            <label>
+              <span>缩放</span>
+              <input
+                type="range"
+                min="0.5"
+                max="3"
+                step="0.1"
+                :value="imageSequenceLocation.zoom"
+                @input="handleImageSequenceZoom"
+              />
+              <span>{{ Math.round(imageSequenceLocation.zoom * 100) }}%</span>
+            </label>
+          </div>
+          <div class="image-sequence-reader-media">
+            <img
+              v-if="imageSequenceUrls[imageSequenceLocation.page_index]"
+              :src="imageSequenceUrls[imageSequenceLocation.page_index]"
+              :alt="imageSequencePreview.pages[imageSequenceLocation.page_index]?.file_name || '图片页面'"
+              :style="{ transform: `scale(${imageSequenceLocation.zoom})` }"
+            />
+            <p v-else>当前页面未生成临时缩略图；先选择前 {{ MAX_IMAGE_THUMBNAILS }} 页可预览。</p>
+          </div>
+        </div>
         <div class="image-sequence-grid">
           <figure
             v-for="page in imageSequencePreview.pages.slice(0, MAX_IMAGE_THUMBNAILS)"
             :key="page.index"
             class="image-sequence-thumb"
+            :class="{ selected: imageSequenceLocation?.page_index === page.index }"
+            tabindex="0"
+            @click="selectImageSequencePage(page.index)"
+            @keydown.enter="selectImageSequencePage(page.index)"
           >
             <img
               v-if="imageSequenceUrls[page.index]"
@@ -2657,7 +2827,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           </figure>
         </div>
         <div class="book-import-preview-actions">
-          <span>已完成批量安全解码；当前仍是只读预览，不写入书架，缓存和阅读位置将在下一小阶段接入。</span>
+          <span>位置会按内容摘要缓存键保存在本机；当前仍是只读预览，不写入书架，持久化文件缓存将在下一阶段接入。</span>
           <button class="text-button" type="button" @click="cancelBookImportPreview">关闭预览</button>
         </div>
       </section>
@@ -3830,6 +4000,66 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   margin-top: 18px;
 }
 
+.image-sequence-reader {
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid rgba(134, 223, 194, 0.2);
+  border-radius: 12px;
+  background: rgba(12, 17, 27, 0.42);
+}
+
+.image-sequence-reader-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #aebbd0;
+  font-size: 11px;
+}
+
+.image-sequence-reader-toolbar > span {
+  min-width: 120px;
+  text-align: center;
+}
+
+.image-sequence-reader-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.image-sequence-reader-toolbar input {
+  width: 120px;
+  accent-color: #86dfc2;
+}
+
+.image-sequence-reader-media {
+  display: grid;
+  min-height: 220px;
+  margin-top: 12px;
+  place-items: center;
+  overflow: auto;
+  padding: 16px;
+  border: 1px dashed rgba(134, 223, 194, 0.25);
+  border-radius: 10px;
+  background: rgba(12, 17, 27, 0.72);
+}
+
+.image-sequence-reader-media img {
+  display: block;
+  max-width: 100%;
+  max-height: 560px;
+  object-fit: contain;
+  transform-origin: center center;
+  transition: transform 120ms ease;
+}
+
+.image-sequence-reader-media p {
+  color: #8391a6;
+  font-size: 11px;
+}
+
 .image-sequence-thumb {
   min-width: 0;
   margin: 0;
@@ -3845,6 +4075,16 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   height: 150px;
   object-fit: contain;
   background: rgba(12, 17, 27, 0.72);
+}
+
+.image-sequence-thumb.selected {
+  border-color: rgba(134, 223, 194, 0.86);
+  box-shadow: 0 0 0 2px rgba(134, 223, 194, 0.16);
+}
+
+.image-sequence-thumb:focus-visible {
+  outline: 2px solid rgba(121, 201, 255, 0.82);
+  outline-offset: 2px;
 }
 
 .image-sequence-thumb figcaption {
