@@ -8,6 +8,7 @@ mod xpath_poc;
 
 use db::{
     BookDetail, BookListOptions, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
+    DuplicateBookGroup,
     ChapterContent, Database, ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite,
     SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
     SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
@@ -251,6 +252,15 @@ fn cancel_source_operation(
 #[tauri::command]
 fn list_books(database: tauri::State<'_, Database>) -> Result<Vec<BookSummary>, String> {
     database.list_books().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn find_duplicate_books(
+    database: tauri::State<'_, Database>,
+) -> Result<Vec<DuplicateBookGroup>, String> {
+    database
+        .find_duplicate_books()
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2040,6 +2050,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_books,
+            find_duplicate_books,
             list_books_with_options,
             update_book_metadata,
             update_books_metadata,
