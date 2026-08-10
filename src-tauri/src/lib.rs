@@ -6,9 +6,10 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookDetail, BookSummary, ChapterContent, Database, SourceCacheStats, SourceFailureHistory,
-    SourceFailureStats, SourceMetadata, SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome,
-    SourceSnapshotSummary, SourceSummary, SourceWrite,
+    BookDetail, BookSummary, ChapterContent, Database, ImageSequenceDetail, ImageSequenceSummary,
+    ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
+    SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary,
+    SourceWrite,
 };
 use library::{
     cache_image_sequence_files_with_cancel, parse_book_bytes_with_options, preview_book_bytes,
@@ -271,6 +272,49 @@ fn preview_image_sequence(
         spread.unwrap_or_default(),
     )
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_image_sequences(
+    database: tauri::State<'_, Database>,
+) -> Result<Vec<ImageSequenceSummary>, String> {
+    database
+        .list_image_sequences()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_image_sequence(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+) -> Result<ImageSequenceDetail, String> {
+    database
+        .get_image_sequence(&book_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_image_sequence(
+    database: tauri::State<'_, Database>,
+    write: ImageSequenceWrite,
+) -> Result<ImageSequenceSummary, String> {
+    database
+        .save_image_sequence(write)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_image_sequence_progress(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+    current_page: i64,
+    zoom: f64,
+    direction: String,
+    spread: String,
+) -> Result<ImageSequenceSummary, String> {
+    database
+        .save_image_sequence_progress(&book_id, current_page, zoom, &direction, &spread)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1851,6 +1895,10 @@ pub fn run() {
             probe_book_format,
             preview_image_document,
             preview_image_sequence,
+            list_image_sequences,
+            get_image_sequence,
+            save_image_sequence,
+            save_image_sequence_progress,
             cache_image_sequence,
             read_image_sequence_thumbnails,
             get_book_detail,
