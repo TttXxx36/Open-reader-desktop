@@ -11,8 +11,10 @@ use db::{
 };
 use library::{
     parse_book_bytes_with_options, preview_book_bytes, preview_image_bytes,
-    probe_book_format as probe_book_format_bytes, require_importable_format, BookFormatProbe,
-    BookImportPreview, ImageDocumentPreview, TxtParseOptions, MAX_IMAGE_INPUT_BYTES,
+    preview_image_sequence_bytes, probe_book_format as probe_book_format_bytes,
+    require_importable_format, BookFormatProbe, BookImportPreview, ImageDocumentPreview,
+    ImageReadingDirection, ImageSequenceInput, ImageSequencePreview, ImageSpreadMode,
+    TxtParseOptions, MAX_IMAGE_INPUT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use source::{
@@ -186,6 +188,20 @@ fn preview_image_document(
         ));
     }
     preview_image_bytes(&file_name, &bytes).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn preview_image_sequence(
+    pages: Vec<ImageSequenceInput>,
+    direction: Option<ImageReadingDirection>,
+    spread: Option<ImageSpreadMode>,
+) -> Result<ImageSequencePreview, String> {
+    preview_image_sequence_bytes(
+        pages,
+        direction.unwrap_or_default(),
+        spread.unwrap_or_default(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1717,6 +1733,7 @@ pub fn run() {
             preview_book_import,
             probe_book_format,
             preview_image_document,
+            preview_image_sequence,
             get_book_detail,
             get_chapter_content,
             save_progress,
