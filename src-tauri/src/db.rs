@@ -979,7 +979,11 @@ impl Database {
             } else {
                 "stale"
             };
-            let observed_modified_at_ns = (state == "ready").then(|| modified_at_ns(&metadata));
+            let observed_modified_at_ns = if state == "ready" {
+                modified_at_ns(&metadata)
+            } else {
+                None
+            };
             page_updates.push((page.page_index, state.to_string(), observed_modified_at_ns));
         }
 
