@@ -16,6 +16,8 @@ pub enum ImagePathError {
     ControlCharacter,
     #[error("image relative path contains an invalid segment")]
     InvalidSegment,
+    #[error("image root path must be absolute")]
+    RootNotAbsolute,
 }
 
 /// Normalizes the persisted path identity for an image page.
@@ -63,6 +65,35 @@ pub fn normalize_relative_image_path(value: &str) -> Result<String, ImagePathErr
     }
 
     Ok(segments.join("/"))
+}
+
+/// Validates a user-approved root path without converting it into a cache key.
+///
+/// Windows drive paths, UNC paths, and POSIX absolute paths are accepted. Relative
+/// roots are rejected so page records can never escape the selected root scope.
+pub fn validate_image_root_path(value: &str) -> Result<String, ImagePathError> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(ImagePathError::Empty);
+    }
+    if normalized.len() > MAX_IMAGE_RELATIVE_PATH_BYTES {
+        return Err(ImagePathError::TooLong);
+    }
+    if normalized
+        .chars()
+        .any(|character| character == '\0' || character.is_control())
+    {
+        return Err(ImagePathError::ControlCharacter);
+    }
+
+    let bytes = normalized.as_bytes();
+    let is_absolute = normalized.starts_with('/')
+        || normalized.starts_with(r"\\")
+        || (bytes.len() >= 2 && bytes[1] == b':');
+    if !is_absolute {
+        return Err(ImagePathError::RootNotAbsolute);
+    }
+    Ok(normalized.to_string())
 }
 
 #[cfg(test)]
@@ -114,6 +145,20 @@ mod tests {
                 Err(ImagePathError::Traversal | ImagePathError::InvalidSegment)
             ));
         }
+    }
+
+    #[test]
+    fn accepts_absolute_root_paths_and_rejects_relative_roots() {
+        for value in [r"C:\books", r"\\server\share", "/home/user/books"] {
+            assert_eq!(
+                validate_image_root_path(value).expect("absolute root should pass"),
+                value
+            );
+        }
+        assert_eq!(
+            validate_image_root_path("books"),
+            Err(ImagePathError::RootNotAbsolute)
+        );
     }
 
     #[test]
