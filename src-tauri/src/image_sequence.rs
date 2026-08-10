@@ -31,7 +31,10 @@ pub fn normalize_relative_image_path(value: &str) -> Result<String, ImagePathErr
     if value.len() > MAX_IMAGE_RELATIVE_PATH_BYTES {
         return Err(ImagePathError::TooLong);
     }
-    if value.chars().any(|character| character == '\0' || character.is_control()) {
+    if value
+        .chars()
+        .any(|character| character == '\0' || character.is_control())
+    {
         return Err(ImagePathError::ControlCharacter);
     }
 
@@ -86,7 +89,11 @@ mod tests {
 
     #[test]
     fn rejects_absolute_drive_and_unc_paths() {
-        for value in [r"C:\books\page.png", r"\\server\share\page.png", "/books/page.png"] {
+        for value in [
+            r"C:\books\page.png",
+            r"\\server\share\page.png",
+            "/books/page.png",
+        ] {
             assert_eq!(
                 normalize_relative_image_path(value),
                 Err(ImagePathError::Absolute)
@@ -96,7 +103,12 @@ mod tests {
 
     #[test]
     fn rejects_traversal_and_ambiguous_separators() {
-        for value in ["../page.png", "chapter/../page.png", "./page.png", "chapter//page.png"] {
+        for value in [
+            "../page.png",
+            "chapter/../page.png",
+            "./page.png",
+            "chapter//page.png",
+        ] {
             assert!(matches!(
                 normalize_relative_image_path(value),
                 Err(ImagePathError::Traversal | ImagePathError::InvalidSegment)
