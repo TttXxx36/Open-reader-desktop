@@ -176,7 +176,7 @@ pub fn preview_relink(
     })
 }
 
-pub fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
+fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
     let root = validate_image_root_path(root_path)
         .map_err(|error| format!("图片根目录无效：{error}"))?;
     let root = PathBuf::from(root);
@@ -270,7 +270,7 @@ mod tests {
         let new_root = root.join("new");
         fs::create_dir_all(new_root.join("chapter")).expect("new root should exist");
         fs::write(new_root.join("001.png"), b"one").expect("first page should write");
-        fs::write(new_root.join("chapter/003.png"), b"three").expect("moved page should write");
+        fs::write(new_root.join("chapter/002.png"), b"two22").expect("moved page should write");
         fs::write(new_root.join("extra.jpg"), b"extra").expect("added page should write");
 
         let preview = preview_relink(
