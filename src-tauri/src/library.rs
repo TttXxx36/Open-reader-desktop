@@ -3201,6 +3201,75 @@ mod tests {
     }
 
     #[test]
+    fn reads_current_and_adjacent_cached_thumbnails() {
+        let root = temporary_image_cache_root();
+        let key = "imgseq-v1-13572468";
+        let inputs = vec![ImageSequenceInput {
+            file_name: "001.png".to_string(),
+            bytes: tiny_png_fixture(),
+        }];
+        cache_image_sequence_files(
+            &root,
+            key,
+            &inputs,
+            ImageReadingDirection::Ltr,
+            ImageSpreadMode::Single,
+            false,
+        )
+        .expect("cache write should succeed");
+
+        let pages =
+            read_image_thumbnail_files(&root, key, &[0, 0, 1]).expect("cached pages should read");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].page_index, 0);
+        assert_eq!(pages[0].mime, "image/png");
+        assert_eq!(pages[0].bytes.get(..PNG_SIGNATURE.len()), Some(PNG_SIGNATURE.as_slice()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cancels_image_thumbnail_cache_before_writing() {
+        let root = temporary_image_cache_root();
+        let key = "imgseq-v1-24681357";
+        let inputs = vec![ImageSequenceInput {
+            file_name: "001.png".to_string(),
+            bytes: tiny_png_fixture(),
+        }];
+        let cancelled = AtomicBool::new(true);
+
+        let error = cache_image_sequence_files_with_cancel(
+            &root,
+            key,
+            &inputs,
+            ImageReadingDirection::Ltr,
+            ImageSpreadMode::Single,
+            false,
+            Some(&cancelled),
+        )
+        .expect_err("cancelled cache should stop before writing");
+        assert!(error.to_string().contains("取消"));
+        assert!(!root.join(key).exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removes_orphaned_thumbnail_temp_files_on_prune() {
+        let root = temporary_image_cache_root();
+        let cache_dir = root.join("imgseq-v1-abcdef01");
+        fs::create_dir_all(&cache_dir).expect("cache directory should be created");
+        let temp = cache_dir.join(".page-0000.png.tmp-0-1");
+        fs::write(&temp, [1_u8; 4]).expect("orphan temp should be writable");
+
+        let result = prune_image_thumbnail_cache(&root, 0).expect("pruning should succeed");
+        assert_eq!(result.cleaned_temp_files, 1);
+        assert!(!temp.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn prunes_image_thumbnail_cache_by_oldest_file_first() {
         let root = temporary_image_cache_root();
         let cache_dir = root.join("imgseq-v1-01234567");
