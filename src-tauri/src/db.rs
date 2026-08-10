@@ -4336,7 +4336,7 @@ mod tests {
             .is_err());
         assert!(database
             .preview_book_merge(BookMergePreviewRequest {
-                book_ids: vec!["merge-canonical".to_string(), "missing-book".to_string(),]
+                book_ids: vec!["merge-canonical".to_string(), "missing-book".to_string()],
                 canonical_book_id: "merge-canonical".to_string(),
             })
             .is_err());
