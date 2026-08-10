@@ -130,16 +130,16 @@ M9.3 首切片已完成，并由 main CI run [31385269180](https://github.com/Tt
 
 ### M9.3.1 设计阶段：封面缓存与可撤销重复书合并
 
-M9.3 的查询、单本编辑、批量元数据和重复候选只读预览已经完成。下一步设计已单独记录在 [M9.3.1 封面缓存与可撤销重复书合并设计](m9.3.1-cover-merge-plan.md)，当前只推进 9.3.1-a 纯只读契约：
+M9.3 的查询、单本编辑、批量元数据和重复候选只读预览已经完成。下一步设计已单独记录在 [M9.3.1 封面缓存与可撤销重复书合并设计](m9.3.1-cover-merge-plan.md)，9.3.1-a/b/c 安全首切片已通过，当前进入 9.3.1-d 的事务合并前评审：
 
 - 封面采用“来源元数据 + 本机缓存”两层模型，区分本地路径、显式刷新远程 URL 和占位图；默认不抓取远程封面，不保存凭据或敏感请求头；
 - 缓存键使用版本化内容/文件指纹，临时文件写入后原子安装，并设置单文件 8 MiB、总量 256 MiB 的配额；失效时回退到占位图，不阻塞正文阅读；
 - 重复书合并要求用户显式选择保留项，先生成带输入指纹和过期时间的预览；任何章节、进度、分组/标签、封面或图片序列冲突默认阻止提交；
 - 后续迁移将保留原始书籍和章节，通过归档状态、别名和操作快照实现事务及 7 天撤销；在模型和纯读取预览通过前，不执行删除或自动覆盖；
-- 9.3.1-a 已完成首个纯函数切片：`src-tauri/src/cover.rs` 负责本地/远程封面来源规范化和版本化缓存键，提交 [91bc285d654568b942fbcc59e779c6efb43ea79d](https://github.com/TttXxx36/Open-reader-desktop/commit/91bc285d654568b942fbcc59e779c6efb43ea79d) 对应 CI run [31394712988](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31394712988) 已通过；仍未创建迁移或执行网络/合并写入；
-- 9.3.1-b 已完成缓存文件层首切片：`src-tauri/src/cover_cache.rs` 提供 8 MiB 单文件、256 MiB 总量、有界读取、临时文件清理、原子安装和最旧项清理，提交 [31126216e1372fae54c3c5ac3507be0e8c7b0e5d](https://github.com/TttXxx36/Open-reader-desktop/commit/31126216e1372fae54c3c5ac3507be0e8c7b0e5d) 对应 CI run [31396383467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31396383467) 已通过；数据库迁移、封面状态查询和书架占位图仍待接入；
-- 9.3.1-c/d/e 分别对应重复合并预览、事务合并/撤销和真实 Windows 验收，完成一阶段才进入下一阶段。
+- 9.3.1-a 已完成首个纯函数切片：`src-tauri/src/cover.rs` 负责本地/远程封面来源规范化和版本化缓存键，提交 [91bc285d654568b942fbcc59e779c6efb43ea79d](https://github.com/TttXxx36/Open-reader-desktop/commit/91bc285d654568b942fbcc59e779c6efb43ea79d) 对应 CI run [31394712988](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31394712988) 已通过；
+- 9.3.1-b 已完成封面缓存文件层与 `book_covers` 元数据首切片：`src-tauri/src/cover_cache.rs` 提供 8 MiB 单文件、256 MiB 总量、有界读取、临时文件清理、原子安装和最旧项清理；迁移 `0015_book_covers.sql`、`get_book_cover`/`save_book_cover` 和 `BookSummary.cover_state` 已接入书架与最近阅读状态展示，提交 [a91d1af7ffb1c5c8ccc91187615550a65cca2647](https://github.com/TttXxx36/Open-reader-desktop/commit/a91d1af7ffb1c5c8ccc91187615550a65cca2647) 对应 CI run [31402819722](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31402819722) 已通过；远程封面仍默认关闭，实际解码/刷新后续实现；
+- 9.3.1-c 的纯只读重复合并预览已完成：`preview_book_merge` 限制 2—8 本、显式 canonical，返回章节/进度/元数据/封面候选、冲突和图片序列阻断原因，并生成 5 分钟 preview_id 与输入指纹；书架面板只读展示，提交 [a91d1af7ffb1c5c8ccc91187615550a65cca2647](https://github.com/TttXxx36/Open-reader-desktop/commit/a91d1af7ffb1c5c8ccc91187615550a65cca2647) 对应 CI run [31402819722](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31402819722) 已通过；过期/输入变化二次校验和实际事务仍留在 9.3.1-d。
 
 ## 后续顺序
 
-M9.2 的自动化切片已完成；最新 Windows release run [31391524135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135) 已在 `main` 生成包含 M9.3 重复候选预览首切片的安装版、便携版和 `release-sha256.txt`，artifact [9064180342](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135#artifacts) 摘要为 `sha256:473ff8c0717e82ae7fc2268e5fe15775083f5786670890138dfa0a2ea235e616`；installer smoke run [31392423285](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31392423285) 已通过自动化安装/卸载和启动检查。M9.3 已完成查询/单本编辑、批量分组/标签和重复候选预览首切片；真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、升级、取消交互、断目录后的状态恢复）仍待用户在目标环境完成并保存记录。当前进入 [M9.3.1 封面缓存与可撤销重复书合并设计](m9.3.1-cover-merge-plan.md) 的 9.3.1-a 只读契约阶段；完成封面来源规范化、缓存键和合并预览约束后，再按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
+M9.2 的自动化切片已完成；最新 Windows release run [31391524135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135) 已在 `main` 生成包含 M9.3 重复候选预览首切片的安装版、便携版和 `release-sha256.txt`，artifact [9064180342](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135#artifacts) 摘要为 `sha256:473ff8c0717e82ae7fc2268e5fe15775083f5786670890138dfa0a2ea235e616`；installer smoke run [31392423285](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31392423285) 已通过自动化安装/卸载和启动检查。M9.3.1-a/b/c 已通过 main CI run [31402819722](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31402819722)，真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、升级、取消交互、断目录后的状态恢复）仍待用户在目标环境完成并保存记录。当前暂停在 9.3.1-d 的事务合并前评审：先实现过期/输入变化二次校验、操作快照、归档/别名和撤销测试，再决定是否创建 `0016` 迁移；任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
