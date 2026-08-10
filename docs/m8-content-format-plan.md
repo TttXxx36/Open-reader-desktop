@@ -49,6 +49,7 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 
 - M8.5.4a 已把格式探测接入本地文件导入前置流程：只有 importable 才进入预览/导入，PDF、图片和 MOBI/AZW 会显示只读边界及已探测元数据；run [31337644268](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31337644268) 的前端、Rust checks 和 Windows sampler 全部通过，artifact [9044864924](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31337644268#artifacts) 已上传。
 - M8.5.4b 已冻结 PDF 与图片/漫画的独立阅读模型、缓存/资源配额、受保护内容拒绝策略和依赖采用闸门，详见 [PDF/图片阅读模型契约](m8-reader-model.md)；本切片不引入解析器或渲染依赖。
+- M8.5.5 依赖评估结论已记录在 [M8.5.5 依赖与 Windows 渲染路径评估](m8.5.5-dependency-evaluation.md)：图片优先采用受限 feature 的 Rust 原生解码链，PDF 继续只读探测；下一步是 M8.5.5a 图片最小闭环。
 - PDF：独立评估渲染、搜索、目录和页码定位模型，不转成普通文本章节。
 - 漫画/图片：独立建模缓存、缩放、双页和阅读方向；不复用文本章节字段。
 
