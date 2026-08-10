@@ -2568,6 +2568,28 @@ function imageSequenceStateLabel(state: string) {
   return "尚未检测";
 }
 
+function imageSequenceHealthLabel(book: BookSummary) {
+  if (book.content_kind !== "image_sequence" || !book.image_sequence_state) return "";
+  if (book.image_sequence_state === "needs_relink") return "目录需重新关联";
+  if (book.image_sequence_state === "missing") {
+    return book.image_sequence_missing_pages > 0
+      ? `${book.image_sequence_missing_pages} 页缺失`
+      : "存在缺页";
+  }
+  if (book.image_sequence_state === "stale") {
+    return book.image_sequence_stale_pages > 0
+      ? `${book.image_sequence_stale_pages} 页待复核`
+      : "有变化待复核";
+  }
+  return "图片正常";
+}
+
+function imageSequenceHealthClass(book: BookSummary) {
+  return book.image_sequence_state === "ready" ? "ready"
+    : book.image_sequence_state === "stale" ? "stale"
+      : "missing";
+}
+
 function imageRelinkAssignmentLabel(assignment: ImageRelinkAssignment) {
   if (assignment.status === "missing") return "缺失";
   if (assignment.match_kind === "basename_size") return "按文件名和大小候选，待复核";
@@ -3599,6 +3621,11 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             <span class="book-format">{{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }}</span>
             <h2>{{ book.title }}</h2>
             <p>{{ book.author || "本地导入" }}</p>
+            <span
+              v-if="imageSequenceHealthLabel(book)"
+              class="book-health-badge"
+              :class="imageSequenceHealthClass(book)"
+            >{{ imageSequenceHealthLabel(book) }}</span>
             <div class="progress-track"><span :style="{ width: `${book.progress * 100}%` }"></span></div>
           </div>
         </article>
@@ -4989,6 +5016,28 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 
 .book-card-body p {
   margin: 0;
+}
+
+.book-health-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #ffd39b;
+  background: rgba(139, 90, 34, 0.2);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.book-health-badge.ready {
+  color: #b9f6dd;
+  background: rgba(30, 101, 82, 0.24);
+}
+
+.book-health-badge.missing {
+  color: #ffb0bc;
+  background: rgba(188, 59, 83, 0.16);
 }
 
 .progress-track {
