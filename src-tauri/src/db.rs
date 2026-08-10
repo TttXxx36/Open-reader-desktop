@@ -1,4 +1,5 @@
 use crate::{
+    cover::{cover_cache_key, normalize_cover_source, CoverSourceKind},
     image_relink::{
         preview_relink_with_cancel, sha256_file, ImageRelinkAssignment, ImageRelinkPreview,
         RelinkPage, MAX_DIGEST_FILE_BYTES, MAX_DIGEST_TOTAL_BYTES,
@@ -89,6 +90,32 @@ pub struct BookMetadataBatchWrite {
     pub shelf_group: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookCoverSummary {
+    pub book_id: String,
+    pub source_kind: String,
+    pub source_value: String,
+    pub source_fingerprint: String,
+    pub cache_key: String,
+    pub state: String,
+    pub mime: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub byte_size: i64,
+    pub fetched_at: Option<String>,
+    pub last_error: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BookCoverWrite {
+    pub book_id: String,
+    pub source_kind: CoverSourceKind,
+    pub source_value: String,
+    #[serde(default)]
+    pub source_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -498,6 +525,98 @@ impl Database {
         }
 
         Ok(groups)
+    }
+
+    pub fn get_book_cover(&self, book_id: &str) -> Result<Option<BookCoverSummary>, DbError> {
+        let book_id = book_id.trim();
+        if book_id.is_empty() {
+            return Err(DbError::InvalidBookMetadata(
+                "书籍 ID 不能为空".to_string(),
+            ));
+        }
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        connection
+            .query_row(
+                "SELECT book_id, source_kind, source_value, source_fingerprint, cache_key,
+                        state, mime, width, height, byte_size, fetched_at, last_error, updated_at
+                 FROM book_covers
+                 WHERE book_id = ?1",
+                params![book_id],
+                book_cover_from_row,
+            )
+            .optional()
+            .map_err(DbError::from)
+    }
+
+    pub fn save_book_cover(&self, write: BookCoverWrite) -> Result<BookCoverSummary, DbError> {
+        let book_id = write.book_id.trim();
+        if book_id.is_empty() {
+            return Err(DbError::InvalidBookMetadata(
+                "书籍 ID 不能为空".to_string(),
+            ));
+        }
+
+        let source = normalize_cover_source(write.source_kind, &write.source_value)
+            .map_err(|error| DbError::InvalidBookMetadata(format!("封面来源无效：{error}")))?;
+        let fingerprint = write.source_fingerprint.unwrap_or_default().trim().to_string();
+        if fingerprint.len() > 512 || fingerprint.chars().any(|character| character.is_control()) {
+            return Err(DbError::InvalidBookMetadata(
+                "封面校验信息无效".to_string(),
+            ));
+        }
+        let cache_key = cover_cache_key(&source, Some(&fingerprint))
+            .map_err(|error| DbError::InvalidBookMetadata(format!("封面缓存键无效：{error}")))?;
+        let source_kind = match write.source_kind {
+            CoverSourceKind::None => "none",
+            CoverSourceKind::LocalPath => "local_path",
+            CoverSourceKind::RemoteUrl => "remote_url",
+        };
+        let state = if write.source_kind == CoverSourceKind::None {
+            "missing"
+        } else {
+            "stale"
+        };
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        let exists: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM books WHERE id = ?1",
+            params![book_id],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Err(DbError::NotFound);
+        }
+        transaction.execute(
+            "INSERT INTO book_covers (
+                 book_id, source_kind, source_value, source_fingerprint, cache_key,
+                 state, mime, width, height, byte_size, fetched_at, last_error, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, NULL, 0, NULL, NULL, CURRENT_TIMESTAMP)
+             ON CONFLICT(book_id) DO UPDATE SET
+                 source_kind = excluded.source_kind,
+                 source_value = excluded.source_value,
+                 source_fingerprint = excluded.source_fingerprint,
+                 cache_key = excluded.cache_key,
+                 state = excluded.state,
+                 mime = NULL,
+                 width = NULL,
+                 height = NULL,
+                 byte_size = 0,
+                 fetched_at = NULL,
+                 last_error = NULL,
+                 updated_at = CURRENT_TIMESTAMP",
+            params![
+                book_id,
+                source_kind,
+                source.value,
+                fingerprint,
+                cache_key,
+                state
+            ],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_book_cover(book_id)?.ok_or(DbError::NotFound)
     }
 
     pub fn import_book(
@@ -2241,6 +2360,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             14_i64,
             include_str!("../migrations/0014_book_shelf_metadata.sql"),
         ),
+        (15_i64, include_str!("../migrations/0015_book_covers.sql")),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -2262,6 +2382,24 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
     }
 
     Ok(())
+}
+
+fn book_cover_from_row(row: &Row<'_>) -> rusqlite::Result<BookCoverSummary> {
+    Ok(BookCoverSummary {
+        book_id: row.get(0)?,
+        source_kind: row.get(1)?,
+        source_value: row.get(2)?,
+        source_fingerprint: row.get(3)?,
+        cache_key: row.get(4)?,
+        state: row.get(5)?,
+        mime: row.get(6)?,
+        width: row.get(7)?,
+        height: row.get(8)?,
+        byte_size: row.get(9)?,
+        fetched_at: row.get(10)?,
+        last_error: row.get(11)?,
+        updated_at: row.get(12)?,
+    })
 }
 
 fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
@@ -3599,6 +3737,78 @@ mod tests {
             .get_book_summary("book-alpha")
             .expect("book should remain readable");
         assert!(unchanged.shelf_group.is_empty());
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn persists_book_cover_source_without_network() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-cover-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, path, format)
+                     VALUES (?1, ?2, ?3, 'txt')",
+                    params!["cover-book", "封面测试", "cover.txt"],
+                )
+                .expect("book should insert");
+        }
+
+        let saved = database
+            .save_book_cover(BookCoverWrite {
+                book_id: "cover-book".to_string(),
+                source_kind: CoverSourceKind::LocalPath,
+                source_value: r"C:\书架\封面.png".to_string(),
+                source_fingerprint: Some("size=12;mtime=34".to_string()),
+            })
+            .expect("local cover source should save");
+        assert_eq!(saved.source_kind, "local_path");
+        assert_eq!(saved.source_value, "C:/书架/封面.png");
+        assert_eq!(saved.state, "stale");
+        assert!(saved.cache_key.starts_with("cover-v1-"));
+
+        let loaded = database
+            .get_book_cover("cover-book")
+            .expect("cover should load")
+            .expect("cover should exist");
+        assert_eq!(loaded.source_fingerprint, "size=12;mtime=34");
+
+        let cleared = database
+            .save_book_cover(BookCoverWrite {
+                book_id: "cover-book".to_string(),
+                source_kind: CoverSourceKind::None,
+                source_value: String::new(),
+                source_fingerprint: None,
+            })
+            .expect("cover source should clear");
+        assert_eq!(cleared.source_kind, "none");
+        assert_eq!(cleared.source_value, "");
+        assert_eq!(cleared.state, "missing");
+
+        let invalid = database.save_book_cover(BookCoverWrite {
+            book_id: "cover-book".to_string(),
+            source_kind: CoverSourceKind::RemoteUrl,
+            source_value: "http://example.com/cover.png".to_string(),
+            source_fingerprint: None,
+        });
+        assert!(invalid.is_err());
+        assert_eq!(
+            database
+                .get_book_cover("cover-book")
+                .expect("cover should remain readable")
+                .expect("cover should remain")
+                .state,
+            "missing"
+        );
 
         drop(database);
         let _ = fs::remove_dir_all(directory);
