@@ -179,8 +179,8 @@ pub fn preview_relink(
 }
 
 fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
-    let root = validate_image_root_path(root_path)
-        .map_err(|error| format!("图片根目录无效：{error}"))?;
+    let root =
+        validate_image_root_path(root_path).map_err(|error| format!("图片根目录无效：{error}"))?;
     let root = PathBuf::from(root);
     if !fs::metadata(&root)
         .map(|metadata| metadata.is_dir())
