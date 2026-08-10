@@ -13,7 +13,8 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use std::{
+use sha2::{Digest, Sha256};
+use std{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
@@ -21,7 +22,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
-use sha2::{Digest, Sha256};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -138,7 +138,6 @@ pub struct DuplicateBookGroup {
     pub key: String,
     pub books: Vec<BookSummary>,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BookMergePreviewRequest {
@@ -617,7 +616,6 @@ impl Database {
         Ok(groups)
     }
 
-
     pub fn preview_book_merge(
         &self,
         request: BookMergePreviewRequest,
@@ -853,7 +851,11 @@ impl Database {
             conflicts.push("图片序列根目录不同".to_string());
         }
         if snapshots.iter().any(|snapshot| {
-            snapshot.book.image_sequence_state.as_deref().is_some_and(|state| state != "ready")
+            snapshot
+                .book
+                .image_sequence_state
+                .as_deref()
+                .is_some_and(|state| state != "ready")
         }) {
             conflicts.push("存在图片序列缺页或待复核状态".to_string());
         }
@@ -873,7 +875,10 @@ impl Database {
             input_fingerprint,
             canonical_book_id,
             archived_book_ids,
-            books: snapshots.iter().map(|snapshot| snapshot.book.clone()).collect(),
+            books: snapshots
+                .iter()
+                .map(|snapshot| snapshot.book.clone())
+                .collect(),
             append_candidates,
             chapter_conflicts,
             identical_chapter_count,
@@ -2782,26 +2787,36 @@ fn merge_preview_fingerprint(snapshots: &[MergeBookSnapshot]) -> String {
     for snapshot in snapshots {
         merge_hash_part(&mut hasher, &snapshot.book.id);
         merge_hash_part(&mut hasher, &snapshot.book.title);
-        merge_hash_part(
-            &mut hasher,
-            snapshot.book.author.as_deref().unwrap_or(""),
-        );
+        merge_hash_part(&mut hasher, snapshot.book.author.as_deref().unwrap_or(""));
         merge_hash_part(&mut hasher, &snapshot.book.format);
         merge_hash_part(&mut hasher, &snapshot.book.content_kind);
         merge_hash_part(&mut hasher, &snapshot.book.shelf_group);
         merge_hash_part(&mut hasher, &snapshot.book.tags.join("\u{1f}"));
         merge_hash_part(&mut hasher, &format!("{:.6}", snapshot.book.progress));
         merge_hash_part(&mut hasher, &snapshot.book.current_chapter.to_string());
-        merge_hash_part(&mut hasher, snapshot.book.cover_state.as_deref().unwrap_or(""));
-        merge_hash_part(&mut hasher, snapshot.cover_source_kind.as_deref().unwrap_or(""));
-        merge_hash_part(&mut hasher, snapshot.cover_cache_key.as_deref().unwrap_or(""));
+        merge_hash_part(
+            &mut hasher,
+            snapshot.book.cover_state.as_deref().unwrap_or(""),
+        );
+        merge_hash_part(
+            &mut hasher,
+            snapshot.cover_source_kind.as_deref().unwrap_or(""),
+        );
+        merge_hash_part(
+            &mut hasher,
+            snapshot.cover_cache_key.as_deref().unwrap_or(""),
+        );
         merge_hash_part(
             &mut hasher,
             snapshot.book.image_sequence_state.as_deref().unwrap_or(""),
         );
         merge_hash_part(
             &mut hasher,
-            snapshot.book.image_sequence_root_id.as_deref().unwrap_or(""),
+            snapshot
+                .book
+                .image_sequence_root_id
+                .as_deref()
+                .unwrap_or(""),
         );
         merge_hash_part(
             &mut hasher,
@@ -4244,7 +4259,6 @@ mod tests {
         let _ = fs::remove_dir_all(directory);
     }
 
-
     #[test]
     fn previews_book_merge_without_mutating_library() {
         let directory = std::env::temp_dir().join(format!(
@@ -4320,10 +4334,7 @@ mod tests {
             .is_err());
         assert!(database
             .preview_book_merge(BookMergePreviewRequest {
-                book_ids: vec![
-                    "merge-canonical".to_string(),
-                    "missing-book".to_string(),
-                ],
+                book_ids: vec!["merge-canonical".to_string(), "missing-book".to_string(),]
                 canonical_book_id: "merge-canonical".to_string(),
             })
             .is_err());
