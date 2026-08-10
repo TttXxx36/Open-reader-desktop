@@ -327,6 +327,138 @@ pub fn preview_image_bytes(
     })
 }
 
+const MAX_IMAGE_SEQUENCE_PAGES: usize = 2_048;
+const MAX_IMAGE_SEQUENCE_PIXELS: u64 = 128_000_000;
+const MAX_IMAGE_SEQUENCE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageReadingDirection {
+    Ltr,
+    Rtl,
+    Vertical,
+}
+
+impl Default for ImageReadingDirection {
+    fn default() -> Self {
+        Self::Ltr
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageSpreadMode {
+    Single,
+    Double,
+    LongStrip,
+}
+
+impl Default for ImageSpreadMode {
+    fn default() -> Self {
+        Self::Single
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSequencePage {
+    pub index: usize,
+    pub file_name: String,
+    pub mime: String,
+    pub width: u32,
+    pub height: u32,
+    pub decoded_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSequencePreview {
+    pub direction: ImageReadingDirection,
+    pub spread: ImageSpreadMode,
+    pub page_count: usize,
+    pub total_pixels: u64,
+    pub total_decoded_bytes: u64,
+    pub pages: Vec<ImageSequencePage>,
+}
+
+/// Builds the serializable page/sequence contract after each page has passed the decoder gate.
+/// It does not decode or trust arbitrary paths, URLs, or raw bytes; callers must provide
+/// ImageDocumentPreview values returned by preview_image_bytes.
+pub fn build_image_sequence_preview(
+    pages: Vec<ImageDocumentPreview>,
+    direction: ImageReadingDirection,
+    spread: ImageSpreadMode,
+) -> Result<ImageSequencePreview, ImportError> {
+    if pages.is_empty() {
+        return Err(ImportError::InvalidImage(
+            "图片序列不能为空".to_string(),
+        ));
+    }
+    if pages.len() > MAX_IMAGE_SEQUENCE_PAGES {
+        return Err(ImportError::InvalidImage(format!(
+            "图片序列页数超过 {} 页上限",
+            MAX_IMAGE_SEQUENCE_PAGES
+        )));
+    }
+
+    let mut total_pixels = 0_u64;
+    let mut total_decoded_bytes = 0_u64;
+    let mut sequence_pages = Vec::with_capacity(pages.len());
+    for (index, page) in pages.into_iter().enumerate() {
+        if page.width == 0 || page.height == 0 || page.mime.is_empty() {
+            return Err(ImportError::InvalidImage(format!(
+                "第 {} 页图片元数据无效",
+                index + 1
+            )));
+        }
+        let pixels = u64::from(page.width)
+            .checked_mul(u64::from(page.height))
+            .ok_or_else(|| ImportError::InvalidImage("图片序列像素数溢出".to_string()))?;
+        total_pixels = total_pixels
+            .checked_add(pixels)
+            .ok_or_else(|| ImportError::InvalidImage("图片序列总像素数溢出".to_string()))?;
+        total_decoded_bytes = total_decoded_bytes
+            .checked_add(page.decoded_bytes)
+            .ok_or_else(|| ImportError::InvalidImage("图片序列解码内存溢出".to_string()))?;
+        if total_pixels > MAX_IMAGE_SEQUENCE_PIXELS {
+            return Err(ImportError::InvalidImage(format!(
+                "图片序列总像素数超过 {} 上限",
+                MAX_IMAGE_SEQUENCE_PIXELS
+            )));
+        }
+        if total_decoded_bytes > MAX_IMAGE_SEQUENCE_DECODED_BYTES {
+            return Err(ImportError::InvalidImage(format!(
+                "图片序列解码内存超过 {} MiB 上限",
+                MAX_IMAGE_SEQUENCE_DECODED_BYTES / (1024 * 1024)
+            )));
+        }
+
+        let ImageDocumentPreview {
+            file_name,
+            mime,
+            width,
+            height,
+            decoded_bytes,
+        } = page;
+        sequence_pages.push(ImageSequencePage {
+            index,
+            file_name,
+            mime,
+            width,
+            height,
+            decoded_bytes,
+        });
+    }
+
+    Ok(ImageSequencePreview {
+        direction,
+        spread,
+        page_count: sequence_pages.len(),
+        total_pixels,
+        total_decoded_bytes,
+        pages: sequence_pages,
+    })
+}
+
+
 fn formats_compatible(extension_kind: BookFormatKind, magic_kind: BookFormatKind) -> bool {
     if extension_kind == BookFormatKind::Unknown || magic_kind == BookFormatKind::Unknown {
         return true;
@@ -2475,6 +2607,64 @@ mod tests {
         STANDARD
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
             .expect("fixture PNG should decode")
+    }
+
+
+    fn image_page_fixture(file_name: &str, width: u32, height: u32) -> ImageDocumentPreview {
+        ImageDocumentPreview {
+            file_name: file_name.to_string(),
+            mime: "image/png".to_string(),
+            width,
+            height,
+            color_type: "L8".to_string(),
+            decoded_bytes: u64::from(width) * u64::from(height),
+        }
+    }
+
+    #[test]
+    fn builds_bounded_image_sequence_with_direction_and_spread() {
+        let sequence = build_image_sequence_preview(
+            vec![
+                image_page_fixture("001.png", 2, 3),
+                image_page_fixture("002.png", 4, 5),
+            ],
+            ImageReadingDirection::Rtl,
+            ImageSpreadMode::Double,
+        )
+        .expect("valid image sequence should build");
+
+        assert_eq!(sequence.direction, ImageReadingDirection::Rtl);
+        assert_eq!(sequence.spread, ImageSpreadMode::Double);
+        assert_eq!(sequence.page_count, 2);
+        assert_eq!(sequence.total_pixels, 26);
+        assert_eq!(sequence.total_decoded_bytes, 26);
+        assert_eq!(sequence.pages[0].index, 0);
+        assert_eq!(sequence.pages[1].file_name, "002.png");
+    }
+
+    #[test]
+    fn rejects_image_sequence_over_total_pixel_quota() {
+        let error = build_image_sequence_preview(
+            vec![
+                image_page_fixture("001.png", 10_000, 10_000),
+                image_page_fixture("002.png", 10_000, 10_000),
+            ],
+            ImageReadingDirection::Ltr,
+            ImageSpreadMode::Single,
+        )
+        .expect_err("sequence pixel quota should be enforced");
+        assert!(error.to_string().contains("总像素数超过"));
+    }
+
+    #[test]
+    fn rejects_empty_image_sequence() {
+        let error = build_image_sequence_preview(
+            Vec::new(),
+            ImageReadingDirection::Vertical,
+            ImageSpreadMode::LongStrip,
+        )
+        .expect_err("empty sequence should be rejected");
+        assert!(error.to_string().contains("不能为空"));
     }
 
     #[test]
