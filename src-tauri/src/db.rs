@@ -50,6 +50,9 @@ pub struct BookSummary {
     pub current_chapter: i64,
     pub progress: f64,
     pub updated_at: String,
+    pub image_sequence_state: Option<String>,
+    pub image_sequence_missing_pages: i64,
+    pub image_sequence_stale_pages: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -352,7 +355,12 @@ impl Database {
     pub fn list_books(&self) -> Result<Vec<BookSummary>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let mut statement = connection.prepare(
-            "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                     b.current_chapter, b.progress, b.updated_at
+            "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                     b.current_chapter, b.progress, b.updated_at,
+                    (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
+                    COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                              WHERE p.sequence_id = b.id AND p.state = 'missing'), 0),
+                    COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                              WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
              FROM books b
              LEFT JOIN chapters c ON c.book_id = b.id
              GROUP BY b.id
@@ -1810,7 +1818,12 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let book = connection
             .query_row(
-                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
+                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at,
+                    (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
+                    COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                              WHERE p.sequence_id = b.id AND p.state = 'missing'), 0),
+                    COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                              WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
                  FROM books b
                  LEFT JOIN chapters c ON c.book_id = b.id
                  WHERE b.id = ?1
@@ -1902,7 +1915,12 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         connection
             .query_row(
-                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
+                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at,
+                    (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
+                    COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                              WHERE p.sequence_id = b.id AND p.state = 'missing'), 0),
+                    COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                              WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
                  FROM books b
                  LEFT JOIN chapters c ON c.book_id = b.id
                  WHERE b.id = ?1
@@ -1995,6 +2013,9 @@ fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
         current_chapter: row.get(6)?,
         progress: row.get(7)?,
         updated_at: row.get(8)?,
+        image_sequence_state: row.get(9)?,
+        image_sequence_missing_pages: row.get(10)?,
+        image_sequence_stale_pages: row.get(11)?,
     })
 }
 
