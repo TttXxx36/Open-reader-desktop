@@ -152,8 +152,6 @@ impl ImageRelinkCancellationState {
 
 static NEXT_SOURCE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_IMAGE_CACHE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_SOURCE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_IMAGE_CACHE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_IMAGE_RELINK_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn normalize_source_operation_id(value: Option<String>) -> Result<String, String> {
