@@ -11,8 +11,7 @@ mod xpath_poc;
 use db::{
     BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMergePreview,
     BookMergePreviewRequest, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
-    ChapterContent,
-    Database, DuplicateBookGroup,
+    ChapterContent, Database, DuplicateBookGroup,
     ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite, SourceCacheStats,
     SourceFailureHistory, SourceFailureStats, SourceMetadata, SourceRequestMetrics,
     SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
