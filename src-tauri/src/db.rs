@@ -223,7 +223,6 @@ struct MergeBookSnapshot {
     chapters: Vec<MergeChapterSnapshot>,
 }
 
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageSequencePageSummary {
     pub sequence_id: String,
