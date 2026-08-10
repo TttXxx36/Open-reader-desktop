@@ -2406,7 +2406,7 @@ fn book_cover_from_row(row: &Row<'_>) -> rusqlite::Result<BookCoverSummary> {
 }
 
 fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
-    let tags_json: String = row.get(7)?;
+    let tags_json: String = row.get(8)?;
     Ok(BookSummary {
         id: row.get(0)?,
         title: row.get(1)?,
