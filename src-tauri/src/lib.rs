@@ -10,9 +10,9 @@ use db::{
     SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::{
-    parse_book_bytes_with_options, preview_book_bytes,
+    parse_book_bytes_with_options, preview_book_bytes, preview_image_bytes,
     probe_book_format as probe_book_format_bytes, require_importable_format, BookFormatProbe,
-    BookImportPreview, TxtParseOptions,
+    BookImportPreview, ImageDocumentPreview, TxtParseOptions, MAX_IMAGE_INPUT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use source::{
@@ -172,6 +172,21 @@ fn probe_book_format(file_name: String, bytes: Vec<u8>) -> Result<BookFormatProb
         return Err("文件超过 64 MB 限制".to_string());
     }
     Ok(probe_book_format_bytes(&file_name, &bytes))
+}
+
+
+#[tauri::command]
+fn preview_image_document(
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<ImageDocumentPreview, String> {
+    if bytes.len() > MAX_IMAGE_INPUT_BYTES {
+        return Err(format!(
+            "文件超过 {} MB 图片输入上限",
+            MAX_IMAGE_INPUT_BYTES / (1024 * 1024)
+        ));
+    }
+    preview_image_bytes(&file_name, &bytes).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1702,6 +1717,7 @@ pub fn run() {
             import_book_with_options,
             preview_book_import,
             probe_book_format,
+            preview_image_document,
             get_book_detail,
             get_chapter_content,
             save_progress,
