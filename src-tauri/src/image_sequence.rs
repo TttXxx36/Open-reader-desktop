@@ -192,7 +192,10 @@ mod tests {
     fn resolves_pages_only_under_the_validated_root() {
         let resolved = resolve_image_page_path("/tmp/books", r"chapter\001.png")
             .expect("relative page should resolve");
-        assert_eq!(resolved, PathBuf::from("/tmp/books").join("chapter/001.png"));
+        assert_eq!(
+            resolved,
+            PathBuf::from("/tmp/books").join("chapter/001.png")
+        );
         assert!(matches!(
             resolve_image_page_path("/tmp/books", "../outside.png"),
             Err(ImagePathError::Traversal)
