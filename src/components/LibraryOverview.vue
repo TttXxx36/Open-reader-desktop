@@ -8,6 +8,7 @@ interface BookSummary {
   format: string;
   content_kind: string;
   cover_path: string | null;
+  cover_state: string | null;
   shelf_group: string;
   tags: string[];
   custom_order: number;
@@ -40,6 +41,13 @@ const libraryStats = computed(() => ({
 
 function formatProgress(progress: number) {
   return `${Math.round(progress * 100)}%`;
+}
+
+function coverStateLabel(book: BookSummary) {
+  if (!book.cover_state || book.cover_state === "ready") return "";
+  if (book.cover_state === "stale") return "封面待刷新";
+  if (book.cover_state === "blocked") return "封面已阻止";
+  return "使用占位图";
 }
 
 function imageHealthLabel(book: BookSummary) {
@@ -155,6 +163,7 @@ function continueWith(book: BookSummary | null) {
           <span class="recent-book-copy">
             <strong>{{ book.title }}</strong>
             <small>{{ formatProgress(book.progress) }} · {{ book.chapter_count }} 章</small>
+            <small v-if="coverStateLabel(book)" class="recent-book-cover-status">{{ coverStateLabel(book) }}</small>
             <small v-if="book.shelf_group || book.tags.length" class="recent-book-metadata">
               {{ book.shelf_group || "未分组" }}<span v-if="book.tags.length"> · {{ book.tags.slice(0, 2).join(" · ") }}</span>
             </small>
@@ -413,6 +422,10 @@ function continueWith(book: BookSummary | null) {
 .recent-book-copy small {
   color: #8391a6;
   font-size: 10px;
+}
+
+.recent-book-cover-status {
+  color: #ffd39b !important;
 }
 
 @media (max-width: 900px) {
