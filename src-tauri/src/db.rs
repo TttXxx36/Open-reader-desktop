@@ -4408,10 +4408,6 @@ mod tests {
             })
             .is_err());
 
-        drop(database);
-        let _ = fs::remove_dir_all(directory);
-    }
-
         let validated = database
             .revalidate_book_merge_preview(BookMergePreviewRevalidateRequest {
                 preview: BookMergePreviewRequest {
@@ -4463,6 +4459,10 @@ mod tests {
                 input_fingerprint: "merge-v1-expired".to_string(),
             })
             .is_err());
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn finds_duplicate_books_without_mutating_library() {
