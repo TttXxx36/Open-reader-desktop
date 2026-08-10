@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn normalizes_windows_separators_without_losing_order() {
         assert_eq!(
-            normalize_relative_image_path(r"chapter\\001\\page 01.png")
+            normalize_relative_image_path(r"chapter\001\page 01.png")
                 .expect("relative path should normalize"),
             "chapter/001/page 01.png"
         );
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn rejects_absolute_drive_and_unc_paths() {
-        for value in [r"C:\\books\\page.png", r"\\\\server\\share\\page.png", "/books/page.png"] {
+        for value in [r"C:\books\page.png", r"\\server\share\page.png", "/books/page.png"] {
             assert_eq!(
                 normalize_relative_image_path(value),
                 Err(ImagePathError::Absolute)
