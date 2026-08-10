@@ -174,7 +174,6 @@ fn probe_book_format(file_name: String, bytes: Vec<u8>) -> Result<BookFormatProb
     Ok(probe_book_format_bytes(&file_name, &bytes))
 }
 
-
 #[tauri::command]
 fn preview_image_document(
     file_name: String,
