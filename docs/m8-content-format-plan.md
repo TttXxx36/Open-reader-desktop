@@ -54,8 +54,8 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - M8.5.5b 图片序列/双页模型已完成：后端提供 `ltr`/`rtl`/`vertical` 阅读方向、`single`/`double`/`long_strip` 排版模式和稳定页索引；序列上限为 2,048 页、128,000,000 总像素、512 MiB 总解码字节，暂不接入多文件书架导入。GitHub Actions run [31351541210](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31351541210) 的前端、Rust 105 项测试、TXT 性能证据和 Windows 编译/峰值 RSS 采样全部通过。
 - M8.5.5c 多图片安全预览已完成：后端逐页调用受限解码后再构建序列，额外限制原始输入总量 256 MiB；前端支持多选图片、最多 24 个临时缩略图、方向切换、单页/双页/长图选择和只读预览，不写入书架。GitHub Actions run [31352828101](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31352828101) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
 - M8.5.5d1 已完成：前端为每个图片页生成内容摘要，组合为不含绝对路径的序列缓存键，并在本机恢复页码、缩放、方向和排版；当前只保存位置元数据，不写入书架或磁盘缩略图。GitHub Actions run [31353873233](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31353873233) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
-- M8.5.5e1-e3 已完成：Rust 在 Tauri 应用缓存目录下按内容摘要键写入 PNG 缩略图；单页最多 8 MiB、缓存总量最多 512 MiB；临时文件完成 sync_all 后 rename 安装，损坏条目自动重建，超额按最早修改时间清理。前端序列导入已触发缓存并显示命中/写入/占用摘要，当前仍不写入书架。GitHub Actions run [31357348416](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31357348416) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
-- 下一步在不突破上述配额的前提下实现取消/重试、页序调整、相邻页恢复和崩溃恢复夹具；PDF 继续独立评估，不转成普通文本章节。
+- M8.5.5e1-e4 已完成：Rust 在 Tauri 应用缓存目录下按内容摘要键写入 PNG 缩略图；单页最多 8 MiB、缓存总量最多 512 MiB；临时文件完成 sync_all 后 rename 安装，损坏条目自动重建，超额按最早修改时间清理。e4 复用独立取消 token 支持协作式取消，前端提供重试入口；缓存读取命令一次最多恢复当前页及相邻两页，位置恢复后优先使用磁盘缩略图；内容摘要键保留文件选择顺序，换序后不会复用错误页序；清理上一次进程遗留的临时文件。图片序列仍不写入书架或 SQLite。GitHub Actions run [31359196211](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31359196211) 的前端、Rust fmt/check/tests、TXT 性能证据和 Windows 编译/峰值 RSS 采样全部通过。
+- 下一阶段需要单独制定 M9 图片序列持久化与书架恢复计划：先冻结数据库 schema、相对路径/文件变更检测、原始文件不可用时的失效提示和恢复测试；PDF 继续独立评估，不转成普通文本章节。
 - PDF：独立评估渲染、搜索、目录和页码定位模型，不转成普通文本章节。
 - 漫画/图片：独立建模缓存、缩放、双页和阅读方向；不复用文本章节字段。
 
