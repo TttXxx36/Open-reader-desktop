@@ -50,6 +50,7 @@ pub struct BookSummary {
     pub format: String,
     pub content_kind: String,
     pub cover_path: Option<String>,
+    pub cover_state: Option<String>,
     pub shelf_group: String,
     pub tags: Vec<String>,
     pub custom_order: i64,
@@ -446,6 +447,7 @@ impl Database {
         };
         let sql = format!(
             "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                    (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
                     b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
                     b.current_chapter, b.progress, b.updated_at,
                     (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
@@ -493,6 +495,7 @@ impl Database {
         for (normalized_title, normalized_author, book_format) in group_keys {
             let mut statement = connection.prepare(
                 "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                    (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
                         b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
                         b.current_chapter, b.progress, b.updated_at,
                         (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
@@ -2190,6 +2193,7 @@ impl Database {
         let book = connection
             .query_row(
                 "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                    (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
                     b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
                     b.current_chapter, b.progress, b.updated_at,
                     (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
@@ -2289,6 +2293,7 @@ impl Database {
         connection
             .query_row(
                 "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                    (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
                     b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
                     b.current_chapter, b.progress, b.updated_at,
                     (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
@@ -2409,16 +2414,17 @@ fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
         format: row.get(3)?,
         content_kind: row.get(4)?,
         cover_path: row.get(5)?,
-        shelf_group: row.get(6)?,
+        cover_state: row.get(6)?,
+        shelf_group: row.get(7)?,
         tags: serde_json::from_str(&tags_json).unwrap_or_default(),
-        custom_order: row.get(8)?,
-        chapter_count: row.get(9)?,
-        current_chapter: row.get(10)?,
-        progress: row.get(11)?,
-        updated_at: row.get(12)?,
-        image_sequence_state: row.get(13)?,
-        image_sequence_missing_pages: row.get(14)?,
-        image_sequence_stale_pages: row.get(15)?,
+        custom_order: row.get(9)?,
+        chapter_count: row.get(10)?,
+        current_chapter: row.get(11)?,
+        progress: row.get(12)?,
+        updated_at: row.get(13)?,
+        image_sequence_state: row.get(14)?,
+        image_sequence_missing_pages: row.get(15)?,
+        image_sequence_stale_pages: row.get(16)?,
     })
 }
 
