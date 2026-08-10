@@ -40,6 +40,60 @@ interface DuplicateBookGroup {
   books: BookSummary[];
 }
 
+
+interface BookMergeBookPreview {
+  id: string;
+  title: string;
+  author: string | null;
+  format: string;
+  content_kind: string;
+  chapter_count: number;
+  progress: number;
+  current_chapter: number;
+  shelf_group: string;
+  tags: string[];
+  cover_state: string | null;
+  image_sequence_state: string | null;
+  image_sequence_root_id: string | null;
+  image_sequence_page_count: number | null;
+}
+
+interface BookMergeChapterCandidate {
+  source_book_id: string;
+  chapter_id: string;
+  title: string;
+  reason: string;
+}
+
+interface BookMergePreview {
+  preview_id: string;
+  created_at: number;
+  expires_at: number;
+  input_fingerprint: string;
+  canonical_book_id: string;
+  archived_book_ids: string[];
+  books: BookMergeBookPreview[];
+  append_candidates: BookMergeChapterCandidate[];
+  chapter_conflicts: BookMergeChapterCandidate[];
+  identical_chapter_count: number;
+  progress_candidates: Array<{
+    book_id: string;
+    progress: number;
+    current_chapter: number;
+  }>;
+  suggested_shelf_group: string;
+  suggested_tags: string[];
+  cover_candidates: Array<{
+    book_id: string;
+    state: string | null;
+    source_kind: string | null;
+    cache_key: string | null;
+  }>;
+  image_sequence_blocked: boolean;
+  conflicts: string[];
+  blocked_reasons: string[];
+}
+
 type TxtChapterRule = "auto" | "disabled" | "regex";
 
 interface TxtReplacement {
@@ -649,6 +703,8 @@ const batchMetadataBusy = ref(false);
 const duplicatePanelOpen = ref(false);
 const duplicateBusy = ref(false);
 const duplicateGroups = ref<DuplicateBookGroup[]>([]);
+const duplicatePreviewBusy = ref(false);
+const duplicatePreview = ref<BookMergePreview | null>(null);
 const bookGroups = computed(() =>
   [...new Set(books.value.map((book) => book.shelf_group.trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right, "zh-CN")),
@@ -1180,6 +1236,32 @@ async function toggleDuplicatePanel() {
     await loadDuplicateGroups();
   }
 }
+
+async function previewDuplicateMerge(group: DuplicateBookGroup, canonicalBookId: string) {
+  if (duplicatePreviewBusy.value) return;
+  duplicatePreviewBusy.value = true;
+  errorMessage.value = "";
+  try {
+    duplicatePreview.value = await invoke<BookMergePreview>("preview_book_merge", {
+      request: {
+        book_ids: group.books.map((book) => book.id),
+        canonical_book_id: canonicalBookId,
+      },
+    });
+    status.value = "重复书合并预览已生成，尚未修改任何数据";
+  } catch (error) {
+    duplicatePreview.value = null;
+    errorMessage.value = "生成合并预览失败：" + String(error);
+    status.value = "重复书合并预览失败";
+  } finally {
+    duplicatePreviewBusy.value = false;
+  }
+}
+
+function clearDuplicatePreview() {
+  duplicatePreview.value = null;
+}
+
 
 function beginBookMetadataEdit(book: BookSummary) {
   editingBookId.value = book.id;
@@ -3629,10 +3711,57 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
               <li v-for="book in group.books" :key="book.id">
                 <span>{{ book.id }} · {{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }}</span>
                 <span>{{ book.shelf_group || "未分组" }}</span>
+                <button
+                  class="text-button duplicate-preview-button"
+                  type="button"
+                  :disabled="duplicatePreviewBusy"
+                  @click.stop="previewDuplicateMerge(group, book.id)"
+                >
+                  {{ duplicatePreviewBusy ? "预览中…" : "保留并预览" }}
+                </button>
               </li>
             </ul>
           </article>
         </div>
+        <section v-if="duplicatePreview" class="duplicate-preview-panel" aria-live="polite">
+          <div class="duplicate-preview-heading">
+            <div>
+              <span class="eyebrow">MERGE PREVIEW</span>
+              <h3>只读合并预览</h3>
+            </div>
+            <button class="text-button" type="button" @click="clearDuplicatePreview">关闭</button>
+          </div>
+          <p class="duplicate-preview-note">
+            保留：{{ duplicatePreview.books.find((book) => book.id === duplicatePreview.canonical_book_id)?.title || duplicatePreview.canonical_book_id }}
+            · 预览有效期约 5 分钟 · 尚未写入任何数据
+          </p>
+          <div class="duplicate-preview-books">
+            <div v-for="book in duplicatePreview.books" :key="book.id" class="duplicate-preview-book">
+              <strong>{{ book.id }}</strong>
+              <span>{{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }} · {{ book.shelf_group || "未分组" }}</span>
+              <small v-if="book.id === duplicatePreview.canonical_book_id">保留项</small>
+              <small v-else>将归档（预览）</small>
+            </div>
+          </div>
+          <div class="duplicate-preview-stats">
+            <span>相同章节 {{ duplicatePreview.identical_chapter_count }}</span>
+            <span>可追加章节 {{ duplicatePreview.append_candidates.length }}</span>
+            <span>标题冲突 {{ duplicatePreview.chapter_conflicts.length }}</span>
+            <span>标签建议 {{ duplicatePreview.suggested_tags.length }}</span>
+          </div>
+          <ul v-if="duplicatePreview.conflicts.length" class="duplicate-preview-conflicts">
+            <li v-for="conflict in duplicatePreview.conflicts" :key="conflict">{{ conflict }}</li>
+          </ul>
+          <ul v-if="duplicatePreview.blocked_reasons.length" class="duplicate-preview-blocked">
+            <li v-for="reason in duplicatePreview.blocked_reasons" :key="reason">{{ reason }}</li>
+          </ul>
+          <p v-if="duplicatePreview.append_candidates.length" class="duplicate-preview-note">
+            可追加：{{ duplicatePreview.append_candidates.map((chapter) => chapter.title).join("、") }}
+          </p>
+          <p v-if="duplicatePreview.chapter_conflicts.length" class="duplicate-preview-note">
+            冲突章节：{{ duplicatePreview.chapter_conflicts.map((chapter) => chapter.title).join("、") }}
+          </p>
+        </section>
         <p class="duplicate-books-note">
           当前只提供候选预览，不会自动删除或覆盖书籍；确认保留项后再进入合并操作。
         </p>
@@ -4250,6 +4379,95 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   font-size: 12px;
   line-height: 1.55;
 }
+
+
+.duplicate-preview-panel {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid rgba(121, 201, 255, 0.26);
+  border-radius: 11px;
+  background: rgba(28, 48, 74, 0.3);
+}
+
+.duplicate-preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.duplicate-preview-heading h3 {
+  margin: 7px 0 0;
+  color: #e7f3ff;
+  font-size: 15px;
+}
+
+.duplicate-preview-note {
+  margin: 0;
+  color: #a9bdd3;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.duplicate-preview-books {
+  display: grid;
+  gap: 6px;
+}
+
+.duplicate-preview-book {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: rgba(12, 17, 27, 0.38);
+  color: #b9c8dc;
+  font-size: 11px;
+}
+
+.duplicate-preview-book strong {
+  overflow: hidden;
+  color: #dcecff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duplicate-preview-book small {
+  color: #9be7d8;
+  font-size: 10px;
+}
+
+.duplicate-preview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  color: #b9c8dc;
+  font-size: 11px;
+}
+
+.duplicate-preview-stats span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: rgba(121, 201, 255, 0.12);
+}
+
+.duplicate-preview-conflicts,
+.duplicate-preview-blocked {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #ffd39b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.duplicate-preview-blocked {
+  color: #ffb0bc;
+}
+
 
 .batch-metadata-panel {
   display: grid;
