@@ -25,6 +25,9 @@ interface BookSummary {
   current_chapter: number;
   progress: number;
   updated_at: string;
+  image_sequence_state: string | null;
+  image_sequence_missing_pages: number;
+  image_sequence_stale_pages: number;
 }
 
 type TxtChapterRule = "auto" | "disabled" | "regex";
