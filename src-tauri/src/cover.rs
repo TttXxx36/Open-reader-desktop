@@ -212,7 +212,7 @@ mod tests {
             "https://Example.com/cover.png#fragment",
         )
         .expect("https should normalize");
-        assert_eq!(source.value, "https://Example.com/cover.png");
+        assert_eq!(source.value, "https://example.com/cover.png");
 
         assert_eq!(
             normalize_cover_source(CoverSourceKind::RemoteUrl, "http://example.com/cover.png"),
