@@ -645,6 +645,7 @@ const imageSequenceBookId = ref<string | null>(null);
 const imageSequenceBookTitle = ref("");
 const imageSequenceRootPath = ref("");
 const imageSequencePageDigests = ref<string[]>([]);
+const imageSequencePageStates = ref<string[]>([]);
 const imageSequenceRecordState = ref("");
 const imageSequenceReadyPages = ref(0);
 const imageSequenceMissingPages = ref(0);
@@ -2208,6 +2209,7 @@ function resetBookImportPreview() {
   imageSequenceBookTitle.value = "";
   imageSequenceRootPath.value = "";
   imageSequencePageDigests.value = [];
+  imageSequencePageStates.value = [];
   imageSequenceRecordState.value = "";
   imageSequenceReadyPages.value = 0;
   imageSequenceMissingPages.value = 0;
@@ -2444,7 +2446,15 @@ async function loadImageSequenceThumbnails(indices: number[]) {
 }
 
 function imageSequencePageUrl(index: number) {
+  if (imageSequencePageStates.value[index] === "missing") return "";
   return imageSequenceCachedUrls.value[index] || imageSequenceUrls.value[index] || "";
+}
+
+function imageSequencePageStateLabel(index: number) {
+  const state = imageSequencePageStates.value[index];
+  if (state === "missing") return "原文件缺失";
+  if (state === "stale") return "原文件已变化，等待 SHA-256 复核";
+  return "";
 }
 
 function loadImageSequenceLocation(cacheKey: string, preview: ImageSequencePreview) {
@@ -3068,6 +3078,7 @@ async function openPersistedImageSequenceBook(bookId: string) {
   bookImportFileName.value = sequence.title;
   imageSequenceUrls.value = [];
   imageSequencePageDigests.value = loaded.pages.map((page) => page.content_digest || "");
+  imageSequencePageStates.value = loaded.pages.map((page) => page.state);
   detail.value = null;
   chapter.value = null;
   view.value = "library";
@@ -3469,6 +3480,32 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             </label>
           </div>
           <div class="image-sequence-reader-media">
+            <div
+              v-if="imageSequencePageStateLabel(imageSequenceLocation.page_index)"
+              class="image-sequence-page-warning"
+              role="status"
+            >
+              <strong>{{ imageSequencePageStateLabel(imageSequenceLocation.page_index) }}</strong>
+              <span v-if="imageSequencePageStates[imageSequenceLocation.page_index] === 'missing'">
+                已隐藏可能过期的缩略图，选择新目录后可重新关联。
+              </span>
+              <span v-else>当前缓存仅供参考，确认目录后再继续阅读。</span>
+              <div class="image-sequence-page-warning-actions">
+                <button
+                  class="text-button"
+                  type="button"
+                  :disabled="imageRelinkBusy || imageRelinkApplying || imageCacheBusy"
+                  @click="chooseImageSequenceRelinkRoot"
+                >重新关联目录</button>
+                <button
+                  v-if="imageSequencePageStates[imageSequenceLocation.page_index] === 'stale'"
+                  class="text-button"
+                  type="button"
+                  :disabled="imageDigestBusy || imageRelinkBusy || imageRelinkApplying || imageCacheBusy"
+                  @click="verifyImageSequenceDigests"
+                >{{ imageDigestBusy ? "正在复核…" : "复核变化页" }}</button>
+              </div>
+            </div>
             <img
               v-if="imageSequencePageUrl(imageSequenceLocation.page_index)"
               :src="imageSequencePageUrl(imageSequenceLocation.page_index)"
@@ -4772,6 +4809,32 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 .image-sequence-reader-media p {
   color: #8391a6;
   font-size: 11px;
+}
+
+.image-sequence-page-warning {
+  display: grid;
+  max-width: 520px;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(255, 176, 188, 0.3);
+  border-radius: 10px;
+  color: #ffcf9b;
+  background: rgba(139, 90, 34, 0.18);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.image-sequence-page-warning strong {
+  color: #ffe2bb;
+  font-size: 13px;
+}
+
+.image-sequence-page-warning-actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .image-sequence-thumb {
