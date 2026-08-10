@@ -117,6 +117,17 @@ M9.3 首切片已完成，并由 main CI run [31385269180](https://github.com/Tt
 
 基于该提交的 Windows Release run [31388689695](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695) 已生成安装版、便携版和 SHA-256 清单，artifact [9063016672](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695#artifacts)，artifact 摘要为 `sha256:be69fe9375574afa7e4db529039fae0699e2a3497200e6408d38ebadd2d11232`；installer smoke run [31389443472](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31389443472) 已通过产物校验、便携版启动、NSIS/MSI 安装卸载和数据保留自动化检查。真实 Windows 手工升级、WebView2、中文/UNC 路径和目录恢复交互仍需用户环境补验。
 
+### M9.3 重复候选预览首切片
+
+重复书治理的只读预览已完成，提交 [789efa3ca44bc5bb42c6a274a814fe64c866b776](https://github.com/TttXxx36/Open-reader-desktop/commit/789efa3ca44bc5bb42c6a274a814fe64c866b776) 对应 main CI run [31390991820](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31390991820)：
+
+- 数据库按规范化书名、作者和格式分组，最多返回 128 组、每组最多 256 条记录；只读查询不写入书架；
+- Tauri 提供 `find_duplicate_books`；书架增加“检查重复书”面板，列出候选记录、章节数、进度和分组；
+- UI 明确当前只做候选预览，不自动删除、覆盖或选择保留项；
+- Windows Release run [31391524135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135) 已生成安装版、便携版和 SHA-256 清单，artifact [9064180342](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135#artifacts)，摘要为 `sha256:473ff8c0717e82ae7fc2268e5fe15775083f5786670890138dfa0a2ea235e616`；installer smoke run [31392423285](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31392423285) 已通过。
+
+真正的合并操作仍需先确定：保留书籍的章节和阅读进度来源、标签/分组合并规则、图片序列及根目录冲突、重复书回滚/撤销能力，以及合并后旧 ID 的跳转兼容；在这些规则写入新的数据模型和迁移前，不执行不可逆删除。
+
 ## 后续顺序
 
-M9.2 的自动化切片已完成；最新 Windows release run [31388689695](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695) 已在 `main` 生成包含 M9.3 批量元数据首切片的安装版、便携版和 `release-sha256.txt`，artifact [9063016672](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695#artifacts) 摘要为 `sha256:be69fe9375574afa7e4db529039fae0699e2a3497200e6408d38ebadd2d11232`；installer smoke run [31389443472](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31389443472) 已通过自动化安装/卸载和启动检查。M9.3 已完成查询/单本编辑与批量分组/标签首切片；真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、升级、取消交互、断目录后的状态恢复）仍待用户在目标环境完成并保存记录。之后继续 M9.3 的封面缓存策略和重复书合并，再按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
+M9.2 的自动化切片已完成；最新 Windows release run [31391524135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135) 已在 `main` 生成包含 M9.3 重复候选预览首切片的安装版、便携版和 `release-sha256.txt`，artifact [9064180342](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135#artifacts) 摘要为 `sha256:473ff8c0717e82ae7fc2268e5fe15775083f5786670890138dfa0a2ea235e616`；installer smoke run [31392423285](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31392423285) 已通过自动化安装/卸载和启动检查。M9.3 已完成查询/单本编辑、批量分组/标签和重复候选预览首切片；真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、升级、取消交互、断目录后的状态恢复）仍待用户在目标环境完成并保存记录。下一阶段先补充封面缓存策略和可回滚的重复书合并设计，再按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
