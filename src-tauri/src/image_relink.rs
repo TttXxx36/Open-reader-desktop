@@ -8,6 +8,7 @@ use std::{
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
@@ -96,11 +97,21 @@ pub fn preview_relink(
     new_root_path: &str,
     pages: &[RelinkPage],
 ) -> Result<ImageRelinkPreview, String> {
+    preview_relink_with_cancel(book_id, old_root_path, new_root_path, pages, None)
+}
+
+pub fn preview_relink_with_cancel(
+    book_id: &str,
+    old_root_path: &str,
+    new_root_path: &str,
+    pages: &[RelinkPage],
+    cancel: Option<&AtomicBool>,
+) -> Result<ImageRelinkPreview, String> {
     let old_root_path =
         validate_image_root_path(old_root_path).map_err(|error| format!("旧目录无效：{error}"))?;
     let new_root_path =
         validate_image_root_path(new_root_path).map_err(|error| format!("新目录无效：{error}"))?;
-    let candidates = scan_image_root(&new_root_path)?;
+    let candidates = scan_image_root(&new_root_path, cancel)?;
 
     let mut exact_paths = HashMap::new();
     let mut basename_sizes: HashMap<(String, i64), Vec<usize>> = HashMap::new();
@@ -217,7 +228,10 @@ pub fn preview_relink(
     })
 }
 
-fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
+fn scan_image_root(
+    root_path: &str,
+    cancel: Option<&AtomicBool>,
+) -> Result<Vec<CandidateFile>, String> {
     let root =
         validate_image_root_path(root_path).map_err(|error| format!("图片根目录无效：{error}"))?;
     let root = PathBuf::from(root);
@@ -233,6 +247,9 @@ fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
     let mut candidates = Vec::new();
     let mut total_bytes = 0_u64;
     while let Some(directory) = directories.pop() {
+        if cancel.is_some_and(|token| token.load(Ordering::Relaxed)) {
+            return Err("重新关联扫描已取消".to_string());
+        }
         if started_at.elapsed().as_millis() > MAX_RELINK_DURATION_MS {
             return Err(format!(
                 "新目录扫描超过 {} 秒时间上限",
@@ -242,6 +259,9 @@ fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
         let entries =
             fs::read_dir(&directory).map_err(|error| format!("读取图片目录失败：{error}"))?;
         for entry in entries {
+            if cancel.is_some_and(|token| token.load(Ordering::Relaxed)) {
+                return Err("重新关联扫描已取消".to_string());
+            }
             if started_at.elapsed().as_millis() > MAX_RELINK_DURATION_MS {
                 return Err(format!(
                     "新目录扫描超过 {} 秒时间上限",
@@ -383,6 +403,33 @@ mod tests {
         let oversized = sha256_file(&path, 2);
         assert!(oversized.is_err());
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn respects_cooperative_cancellation() {
+        let root = std::env::temp_dir().join(format!(
+            "open-reader-relink-cancel-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("cancel root should exist");
+        fs::write(root.join("001.png"), b"one").expect("cancel fixture should write");
+        let cancel = AtomicBool::new(true);
+
+        let result = preview_relink_with_cancel(
+            "book-cancel",
+            &root.to_string_lossy(),
+            &root.to_string_lossy(),
+            &[],
+            Some(&cancel),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .expect_err("canceled scan should fail")
+            .contains("已取消"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
