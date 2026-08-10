@@ -95,6 +95,17 @@ Rust 数据库层已提供：
 - 重新关联扫描通过 `operation_id` 注册取消令牌；前端显示“取消扫描”，取消、超时或普通失败都只返回错误，不触碰旧根目录、旧页路径和缩略图缓存；
 - 超时首切片提交 [eb520ff4fd88a992f5b3ccdd10db1443c90a95eb](https://github.com/TttXxx36/Open-reader-desktop/commit/eb520ff4fd88a992f5b3ccdd10db1443c90a95eb) 对应 CI run [31378331544](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31378331544) 已通过前端、Rust fmt/check/tests、TXT 性能证据和 Windows 编译/峰值 RSS 采样；取消令牌最终提交 [8e234f37290ec42f048702064270159011a36904](https://github.com/TttXxx36/Open-reader-desktop/commit/8e234f37290ec42f048702064270159011a36904) 对应 CI run [31380314725](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31380314725) 已通过同一组检查。
 
+## M9.3 首切片：书架元数据与查询
+
+M9.3 首切片已完成，并由 main CI run [31385269180](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31385269180) 验证通过：
+
+- 新增迁移 `0014_book_shelf_metadata.sql`，为书籍增加 `shelf_group`、`tags_json` 和 `custom_order`，保留现有封面路径字段并建立分组/顺序索引；
+- 数据库层新增可选分组、标题/作者/标签搜索、固定白名单排序和升降序查询；元数据写入会校验分组、去重标签、限制数量与长度，并在事务后返回最新书籍摘要；
+- 前端书架新增搜索、分组筛选、排序和升降序切换；书籍卡片展示分组/标签，并支持单本分组、标签和自定义顺序编辑；
+- 首页最近阅读卡片同步展示分组和标签，便于确认元数据已进入统一查询模型。
+
+本切片只覆盖可自动化验证的查询与单本编辑基础；真实 Windows 安装版/便携版中的中文路径、UNC 路径、目录重新关联取消交互和断目录恢复仍属于独立手工验收项，不能用 CI 代替。
+
 ## 后续顺序
 
-M9.2 的自动化切片已完成；Windows release run [31381532400](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400) 已在 `main` 生成安装版、便携版和 `release-sha256.txt`，artifact [9060259690](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400#artifacts) 摘要为 `sha256:8b614c668724378694081954d5a2b201a65d8404ea1646760fc83a5fe864e2b8`。下一道边界是补做真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、取消交互、断目录后的状态恢复），并保存验收记录。手工验收通过后，再进入 M9.3 书架分组/标签/排序与封面策略；随后按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
+M9.2 的自动化切片已完成；Windows release run [31381532400](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400) 已在 `main` 生成安装版、便携版和 `release-sha256.txt`，artifact [9060259690](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400#artifacts) 摘要为 `sha256:8b614c668724378694081954d5a2b201a65d8404ea1646760fc83a5fe864e2b8`。M9.3 首切片（分组、标签、筛选、排序和单本编辑）已由上述 main CI 验证；真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、取消交互、断目录后的状态恢复）仍待用户在目标环境完成并保存记录。之后继续 M9.3 的批量操作、封面缓存策略和重复书合并，再按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
