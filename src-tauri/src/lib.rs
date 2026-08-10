@@ -7,8 +7,9 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookDetail, BookSummary, ChapterContent, Database, ImageSequenceDetail, ImageSequenceSummary,
-    ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
+    BookDetail, BookListOptions, BookMetadataWrite, BookSummary, ChapterContent, Database,
+    ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite, SourceCacheStats,
+    SourceFailureHistory, SourceFailureStats, SourceMetadata,
     SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
     SourceSummary, SourceWrite,
 };
@@ -250,6 +251,26 @@ fn cancel_source_operation(
 #[tauri::command]
 fn list_books(database: tauri::State<'_, Database>) -> Result<Vec<BookSummary>, String> {
     database.list_books().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn list_books_with_options(
+    database: tauri::State<'_, Database>,
+    options: Option<BookListOptions>,
+) -> Result<Vec<BookSummary>, String> {
+    database
+        .list_books_with_options(&options.unwrap_or_default())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn update_book_metadata(
+    database: tauri::State<'_, Database>,
+    write: BookMetadataWrite,
+) -> Result<BookSummary, String> {
+    database
+        .update_book_metadata(write)
+        .map_err(|error| error.to_string())
 }
 
 fn import_book_impl(
@@ -2009,6 +2030,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_books,
+            list_books_with_options,
+            update_book_metadata,
             import_book,
             import_book_with_options,
             preview_book_import,
