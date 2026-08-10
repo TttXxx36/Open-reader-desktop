@@ -11,6 +11,9 @@ interface BookSummary {
   current_chapter: number;
   progress: number;
   updated_at: string;
+  image_sequence_state: string | null;
+  image_sequence_missing_pages: number;
+  image_sequence_stale_pages: number;
 }
 
 const props = defineProps<{
@@ -33,6 +36,28 @@ const libraryStats = computed(() => ({
 
 function formatProgress(progress: number) {
   return `${Math.round(progress * 100)}%`;
+}
+
+function imageHealthLabel(book: BookSummary) {
+  if (book.content_kind !== "image_sequence" || !book.image_sequence_state) return "";
+  if (book.image_sequence_state === "needs_relink") return "目录需重新关联";
+  if (book.image_sequence_state === "missing") {
+    return book.image_sequence_missing_pages > 0
+      ? `${book.image_sequence_missing_pages} 页缺失`
+      : "存在缺页";
+  }
+  if (book.image_sequence_state === "stale") {
+    return book.image_sequence_stale_pages > 0
+      ? `${book.image_sequence_stale_pages} 页待复核`
+      : "有变化待复核";
+  }
+  return "图片正常";
+}
+
+function imageHealthClass(book: BookSummary) {
+  if (book.image_sequence_state === "ready") return "ready";
+  if (book.image_sequence_state === "stale") return "stale";
+  return "missing";
 }
 
 function continueWith(book: BookSummary | null) {
@@ -61,7 +86,14 @@ function continueWith(book: BookSummary | null) {
         <div>
           <span class="eyebrow">CONTINUE READING</span>
           <h3>{{ continueBook.title }}</h3>
-          <p>{{ continueBook.author || "本地导入" }} · 已读 {{ formatProgress(continueBook.progress) }}</p>
+          <p>
+            {{ continueBook.author || "本地导入" }} · 已读 {{ formatProgress(continueBook.progress) }}
+            <span
+              v-if="imageHealthLabel(continueBook)"
+              class="book-health"
+              :class="imageHealthClass(continueBook)"
+            >{{ imageHealthLabel(continueBook) }}</span>
+          </p>
         </div>
         <button class="continue-card-action" type="button" @click.stop="continueWith(continueBook)">
           继续阅读 →
@@ -119,6 +151,11 @@ function continueWith(book: BookSummary | null) {
           <span class="recent-book-copy">
             <strong>{{ book.title }}</strong>
             <small>{{ formatProgress(book.progress) }} · {{ book.chapter_count }} 章</small>
+            <small
+              v-if="imageHealthLabel(book)"
+              class="recent-book-health"
+              :class="imageHealthClass(book)"
+            >{{ imageHealthLabel(book) }}</small>
           </span>
         </button>
       </div>
@@ -203,9 +240,38 @@ function continueWith(book: BookSummary | null) {
 }
 
 .continue-card p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   color: #a9bdd3;
   font-size: 12px;
+}
+
+.book-health,
+.recent-book-health {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #ffd39b;
+  background: rgba(139, 90, 34, 0.2);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.book-health.ready,
+.recent-book-health.ready {
+  color: #b9f6dd;
+  background: rgba(30, 101, 82, 0.24);
+}
+
+.book-health.missing,
+.recent-book-health.missing {
+  color: #ffb0bc;
+  background: rgba(188, 59, 83, 0.16);
 }
 
 .continue-card-actions {
