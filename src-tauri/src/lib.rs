@@ -7,10 +7,11 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookDetail, BookListOptions, BookMetadataBatchWrite, BookMetadataWrite, BookSummary, ChapterContent, Database,
-    ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite, SourceCacheStats,
-    SourceFailureHistory, SourceFailureStats, SourceMetadata, SourceRequestMetrics,
-    SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
+    BookDetail, BookListOptions, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
+    ChapterContent, Database, ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite,
+    SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
+    SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
+    SourceSummary, SourceWrite,
 };
 use image_relink::{ImageRelinkAssignment, ImageRelinkPreview};
 use library::{
