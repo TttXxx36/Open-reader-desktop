@@ -1,6 +1,7 @@
 use crate::{
     image_relink::{
-        preview_relink, sha256_file, ImageRelinkAssignment, ImageRelinkPreview, RelinkPage,
+        preview_relink_with_cancel, sha256_file, ImageRelinkAssignment, ImageRelinkPreview,
+        RelinkPage,
         MAX_DIGEST_FILE_BYTES, MAX_DIGEST_TOTAL_BYTES,
     },
     image_sequence::{
@@ -16,7 +17,7 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{atomic::AtomicBool, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
@@ -630,6 +631,15 @@ impl Database {
         book_id: &str,
         new_root_path: &str,
     ) -> Result<ImageRelinkPreview, DbError> {
+        self.preview_image_sequence_relink_with_cancel(book_id, new_root_path, None)
+    }
+
+    pub fn preview_image_sequence_relink_with_cancel(
+        &self,
+        book_id: &str,
+        new_root_path: &str,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<ImageRelinkPreview, DbError> {
         let detail = self.get_image_sequence(book_id)?;
         let pages = detail
             .pages
@@ -640,8 +650,14 @@ impl Database {
                 file_size: page.file_size,
             })
             .collect::<Vec<_>>();
-        preview_relink(book_id, &detail.sequence.root_path, new_root_path, &pages)
-            .map_err(DbError::InvalidImageSequence)
+        preview_relink_with_cancel(
+            book_id,
+            &detail.sequence.root_path,
+            new_root_path,
+            &pages,
+            cancel,
+        )
+        .map_err(DbError::InvalidImageSequence)
     }
 
     pub fn apply_image_sequence_relink(
