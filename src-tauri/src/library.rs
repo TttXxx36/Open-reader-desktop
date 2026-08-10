@@ -221,7 +221,6 @@ pub fn probe_book_format(file_name: &str, bytes: &[u8]) -> BookFormatProbe {
     }
 }
 
-
 pub const MAX_IMAGE_INPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION: u32 = 20_000;
 const MAX_IMAGE_PIXELS: u64 = 32_000_000;
@@ -2471,7 +2470,6 @@ mod tests {
     fn peak_rss_bytes() -> Option<u64> {
         None
     }
-
 
     fn tiny_png_fixture() -> Vec<u8> {
         STANDARD
