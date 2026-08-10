@@ -1,8 +1,7 @@
 use crate::{
     image_relink::{
         preview_relink_with_cancel, sha256_file, ImageRelinkAssignment, ImageRelinkPreview,
-        RelinkPage,
-        MAX_DIGEST_FILE_BYTES, MAX_DIGEST_TOTAL_BYTES,
+        RelinkPage, MAX_DIGEST_FILE_BYTES, MAX_DIGEST_TOTAL_BYTES,
     },
     image_sequence::{
         modified_at_ns, normalize_relative_image_path, resolve_image_page_path,
