@@ -16,6 +16,7 @@ tauri-build = { version = "2" }
 tauri = { version = "2" }
 base64 = "0.22"
 encoding_rs = "0.8"
+image = { version = "0.25.9", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
