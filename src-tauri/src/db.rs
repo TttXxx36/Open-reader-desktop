@@ -1195,7 +1195,10 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             12_i64,
             include_str!("../migrations/0012_source_rule_skipped.sql"),
         ),
-        (13_i64, include_str!("../migrations/0013_image_sequences.sql")),
+        (
+            13_i64,
+            include_str!("../migrations/0013_image_sequences.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -1373,7 +1376,6 @@ fn source_failure_history_from_row(row: &Row<'_>) -> rusqlite::Result<SourceFail
 mod tests {
     use super::*;
 
-
     #[test]
     fn persists_image_sequence_schema_and_enforces_recovery_contract() {
         let directory = std::env::temp_dir().join(format!(
@@ -1413,7 +1415,12 @@ mod tests {
             .execute(
                 "INSERT INTO books (id, title, format, content_kind)
                  VALUES (?1, ?2, ?3, ?4)",
-                params!["image-book", "Image fixture", "image-sequence", "image_sequence"],
+                params![
+                    "image-book",
+                    "Image fixture",
+                    "image-sequence",
+                    "image_sequence"
+                ],
             )
             .expect("image book should insert");
         connection
