@@ -1,5 +1,8 @@
 use crate::{
-    image_sequence::{normalize_relative_image_path, validate_image_root_path},
+    image_sequence::{
+        modified_at_ns, normalize_relative_image_path, resolve_image_page_path,
+        validate_image_root_path,
+    },
     library::ParsedBook,
     source::BookSource,
 };
@@ -607,6 +610,95 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(ImageSequenceDetail { sequence, pages })
+    }
+
+    pub fn refresh_image_sequence_state(
+        &self,
+        book_id: &str,
+    ) -> Result<ImageSequenceDetail, DbError> {
+        let detail = self.get_image_sequence(book_id)?;
+        let root_available = fs::metadata(&detail.sequence.root_path)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false);
+        let mut page_updates = Vec::with_capacity(detail.pages.len());
+        let mut missing_pages = 0usize;
+        let mut stale_pages = 0usize;
+
+        if root_available {
+            for page in &detail.pages {
+                let path = resolve_image_page_path(&detail.sequence.root_path, &page.relative_path)
+                    .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
+                let metadata = fs::metadata(path)
+                    .ok()
+                    .filter(|metadata| metadata.is_file());
+                let (state, observed_modified_at_ns) = match metadata {
+                    None => {
+                        missing_pages += 1;
+                        ("missing".to_string(), None)
+                    }
+                    Some(metadata) => {
+                        let observed_size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+                        let observed_modified_at_ns = modified_at_ns(&metadata);
+                        let bootstrap = page.modified_at_ns.is_none()
+                            && page.file_size == observed_size
+                            && page.state != "stale";
+                        let matches = page.file_size == observed_size
+                            && page.modified_at_ns == observed_modified_at_ns
+                            && page.state != "stale";
+                        if bootstrap || matches {
+                            ("ready".to_string(), observed_modified_at_ns)
+                        } else {
+                            stale_pages += 1;
+                            ("stale".to_string(), None)
+                        }
+                    }
+                };
+                page_updates.push((page.page_index, state, observed_modified_at_ns));
+            }
+        }
+
+        let root_state = if root_available {
+            "available"
+        } else {
+            "needs_relink"
+        };
+        let sequence_state = if !root_available {
+            "needs_relink"
+        } else if missing_pages > 0 {
+            "missing"
+        } else if stale_pages > 0 {
+            "stale"
+        } else {
+            "ready"
+        };
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "UPDATE library_roots
+             SET state = ?1, updated_at = CURRENT_TIMESTAMP,
+                 last_verified_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![root_state, detail.sequence.root_id.as_str()],
+        )?;
+        transaction.execute(
+            "UPDATE image_sequences
+             SET state = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE book_id = ?2",
+            params![sequence_state, book_id],
+        )?;
+        for (page_index, state, observed_modified_at_ns) in page_updates {
+            transaction.execute(
+                "UPDATE image_sequence_pages
+                 SET state = ?1,
+                     modified_at_ns = COALESCE(?2, modified_at_ns)
+                 WHERE sequence_id = ?3 AND page_index = ?4",
+                params![state, observed_modified_at_ns, book_id, page_index],
+            )?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        self.get_image_sequence(book_id)
     }
 
     pub fn save_image_sequence_progress(
@@ -2091,6 +2183,109 @@ mod tests {
         ));
 
         drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn refreshes_image_sequence_states_and_bootstraps_file_metadata() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-image-state-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let root = directory.join("images");
+        fs::create_dir_all(&root).expect("image root should exist");
+        fs::write(root.join("001.png"), b"one").expect("first page should write");
+        fs::write(root.join("002.png"), b"two-two").expect("second page should write");
+
+        let root_path = root.to_string_lossy().to_string();
+        let database = Database::open(&directory).expect("database should open");
+        let saved = database
+            .save_image_sequence(ImageSequenceWrite {
+                book_id: None,
+                title: "State fixture".to_string(),
+                author: None,
+                root_path: root_path.clone(),
+                cache_key: "imgseq-v1-state".to_string(),
+                direction: "ltr".to_string(),
+                spread: "single".to_string(),
+                page_count: 2,
+                total_pixels: 20,
+                total_decoded_bytes: 40,
+                current_page: 0,
+                zoom: 1.0,
+                pages: vec![
+                    ImageSequencePageWrite {
+                        page_index: 0,
+                        relative_path: "001.png".to_string(),
+                        file_size: 3,
+                        modified_at_ns: None,
+                        content_digest: None,
+                        digest_version: 1,
+                        mime: "image/png".to_string(),
+                        width: 1,
+                        height: 1,
+                    },
+                    ImageSequencePageWrite {
+                        page_index: 1,
+                        relative_path: "002.png".to_string(),
+                        file_size: 7,
+                        modified_at_ns: None,
+                        content_digest: None,
+                        digest_version: 1,
+                        mime: "image/png".to_string(),
+                        width: 1,
+                        height: 1,
+                    },
+                ],
+            })
+            .expect("image sequence should save");
+
+        let ready = database
+            .refresh_image_sequence_state(&saved.book_id)
+            .expect("existing files should be ready");
+        assert_eq!(ready.sequence.state, "ready");
+        assert!(ready
+            .pages
+            .iter()
+            .all(|page| page.state == "ready" && page.modified_at_ns.is_some()));
+
+        fs::write(root.join("001.png"), b"changed").expect("first page should change");
+        let stale = database
+            .refresh_image_sequence_state(&saved.book_id)
+            .expect("changed file should be inspected");
+        assert_eq!(stale.sequence.state, "stale");
+        assert_eq!(stale.pages[0].state, "stale");
+        assert_eq!(stale.pages[1].state, "ready");
+
+        fs::remove_file(root.join("002.png")).expect("second page should delete");
+        let missing = database
+            .refresh_image_sequence_state(&saved.book_id)
+            .expect("missing file should be inspected");
+        assert_eq!(missing.sequence.state, "missing");
+        assert_eq!(missing.pages[0].state, "stale");
+        assert_eq!(missing.pages[1].state, "missing");
+
+        fs::remove_dir_all(&root).expect("image root should remove");
+        let relink = database
+            .refresh_image_sequence_state(&saved.book_id)
+            .expect("missing root should be recoverable");
+        assert_eq!(relink.sequence.state, "needs_relink");
+
+        let connection = database.connection.lock().expect("database lock");
+        let root_state: String = connection
+            .query_row(
+                "SELECT state FROM library_roots WHERE id = ?1",
+                params![relink.sequence.root_id.as_str()],
+                |row| row.get(0),
+            )
+            .expect("root state should read");
+        assert_eq!(root_state, "needs_relink");
+
+        drop(connection);
+        drop(database);
         let _ = fs::remove_dir_all(directory);
     }
 
