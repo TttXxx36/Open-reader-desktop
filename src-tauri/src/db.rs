@@ -31,6 +31,7 @@ pub struct BookSummary {
     pub title: String,
     pub author: Option<String>,
     pub format: String,
+    pub content_kind: String,
     pub chapter_count: i64,
     pub current_chapter: i64,
     pub progress: f64,
@@ -253,6 +254,7 @@ impl Database {
         fs::create_dir_all(app_data_dir)?;
         let database_path: PathBuf = app_data_dir.join("open-reader.db");
         let mut connection = Connection::open(database_path)?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         apply_migrations(&mut connection)?;
         backfill_source_metadata(&connection)?;
 
@@ -264,7 +266,7 @@ impl Database {
     pub fn list_books(&self) -> Result<Vec<BookSummary>, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let mut statement = connection.prepare(
-            "SELECT b.id, b.title, b.author, b.format, COUNT(c.id),                     b.current_chapter, b.progress, b.updated_at
+            "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                     b.current_chapter, b.progress, b.updated_at
              FROM books b
              LEFT JOIN chapters c ON c.book_id = b.id
              GROUP BY b.id
@@ -302,8 +304,8 @@ impl Database {
         )?;
         transaction.execute("DELETE FROM books WHERE path = ?1", params![source_name])?;
         transaction.execute(
-            "INSERT INTO books (id, title, author, path, format, current_chapter, progress)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, 0)",
+            "INSERT INTO books (id, title, author, path, format, content_kind, current_chapter, progress)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'text', 0, 0)",
             params![book_id, title, author, source_name, format],
         )?;
 
@@ -1046,7 +1048,7 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let book = connection
             .query_row(
-                "SELECT b.id, b.title, b.author, b.format, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
+                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
                  FROM books b
                  LEFT JOIN chapters c ON c.book_id = b.id
                  WHERE b.id = ?1
@@ -1138,7 +1140,7 @@ impl Database {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         connection
             .query_row(
-                "SELECT b.id, b.title, b.author, b.format, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
+                "SELECT b.id, b.title, b.author, b.format, b.content_kind, COUNT(c.id),                         b.current_chapter, b.progress, b.updated_at
                  FROM books b
                  LEFT JOIN chapters c ON c.book_id = b.id
                  WHERE b.id = ?1
@@ -1193,6 +1195,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             12_i64,
             include_str!("../migrations/0012_source_rule_skipped.sql"),
         ),
+        (13_i64, include_str!("../migrations/0013_image_sequences.sql")),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -1222,10 +1225,11 @@ fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
         title: row.get(1)?,
         author: row.get(2)?,
         format: row.get(3)?,
-        chapter_count: row.get(4)?,
-        current_chapter: row.get(5)?,
-        progress: row.get(6)?,
-        updated_at: row.get(7)?,
+        content_kind: row.get(4)?,
+        chapter_count: row.get(5)?,
+        current_chapter: row.get(6)?,
+        progress: row.get(7)?,
+        updated_at: row.get(8)?,
     })
 }
 
@@ -1368,6 +1372,136 @@ fn source_failure_history_from_row(row: &Row<'_>) -> rusqlite::Result<SourceFail
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn persists_image_sequence_schema_and_enforces_recovery_contract() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-image-schema-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        let connection = database.connection.lock().expect("database lock");
+        let root_path = directory.join("images").to_string_lossy().to_string();
+
+        connection
+            .execute(
+                "INSERT INTO books (id, title, format) VALUES (?1, ?2, ?3)",
+                params!["legacy-book", "Legacy", "txt"],
+            )
+            .expect("legacy book should insert");
+        let legacy_kind: String = connection
+            .query_row(
+                "SELECT content_kind FROM books WHERE id = ?1",
+                params!["legacy-book"],
+                |row| row.get(0),
+            )
+            .expect("legacy content kind should read");
+        assert_eq!(legacy_kind, "text");
+
+        connection
+            .execute(
+                "INSERT INTO library_roots (id, display_name, root_path, state)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params!["root-1", "Fixture images", root_path, "available"],
+            )
+            .expect("library root should insert");
+        connection
+            .execute(
+                "INSERT INTO books (id, title, format, content_kind)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params!["image-book", "Image fixture", "image-sequence", "image_sequence"],
+            )
+            .expect("image book should insert");
+        connection
+            .execute(
+                "INSERT INTO image_sequences
+                   (book_id, root_id, cache_key, page_count, total_pixels, total_decoded_bytes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    "image-book",
+                    "root-1",
+                    "imgseq-v1-fixture",
+                    1_i64,
+                    100_i64,
+                    400_i64
+                ],
+            )
+            .expect("image sequence should insert");
+        connection
+            .execute(
+                "INSERT INTO image_sequence_pages
+                   (sequence_id, page_index, relative_path, file_size, modified_at_ns,
+                    content_digest, mime, width, height)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    "image-book",
+                    0_i64,
+                    "chapter/001.png",
+                    123_i64,
+                    456_i64,
+                    "sha256:fixture",
+                    "image/png",
+                    10_i64,
+                    10_i64
+                ],
+            )
+            .expect("image page should insert");
+
+        let stored: (String, String, String, i64) = connection
+            .query_row(
+                "SELECT b.content_kind, s.state, p.relative_path, s.current_page
+                 FROM books b
+                 JOIN image_sequences s ON s.book_id = b.id
+                 JOIN image_sequence_pages p ON p.sequence_id = s.book_id
+                 WHERE b.id = ?1",
+                params!["image-book"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("image sequence should read");
+        assert_eq!(
+            stored,
+            (
+                "image_sequence".to_string(),
+                "ready".to_string(),
+                "chapter/001.png".to_string(),
+                0,
+            )
+        );
+
+        let invalid_direction = connection.execute(
+            "UPDATE image_sequences SET direction = 'diagonal' WHERE book_id = ?1",
+            params!["image-book"],
+        );
+        assert!(invalid_direction.is_err());
+
+        connection
+            .execute("DELETE FROM books WHERE id = ?1", params!["image-book"])
+            .expect("book deletion should cascade");
+        let remaining_sequences: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM image_sequences WHERE book_id = ?1",
+                params!["image-book"],
+                |row| row.get(0),
+            )
+            .expect("sequence count should read");
+        let remaining_pages: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM image_sequence_pages WHERE sequence_id = ?1",
+                params!["image-book"],
+                |row| row.get(0),
+            )
+            .expect("page count should read");
+        assert_eq!(remaining_sequences, 0);
+        assert_eq!(remaining_pages, 0);
+
+        drop(connection);
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn persists_and_orders_source_metadata() {
