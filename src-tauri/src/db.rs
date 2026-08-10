@@ -1,6 +1,10 @@
-use crate::{library::ParsedBook, source::BookSource};
+use crate::{
+    image_sequence::{normalize_relative_image_path, validate_image_root_path},
+    library::ParsedBook,
+    source::BookSource,
+};
 use rusqlite::{params, Connection, OptionalExtension, Row};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -19,6 +23,8 @@ pub enum DbError {
     Lock,
     #[error("book not found")]
     NotFound,
+    #[error("invalid image sequence: {0}")]
+    InvalidImageSequence(String),
 }
 
 pub struct Database {
@@ -49,6 +55,78 @@ pub struct ChapterSummary {
 pub struct BookDetail {
     pub book: BookSummary,
     pub chapters: Vec<ChapterSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageSequencePageSummary {
+    pub sequence_id: String,
+    pub page_index: i64,
+    pub relative_path: String,
+    pub file_size: i64,
+    pub modified_at_ns: Option<i64>,
+    pub content_digest: Option<String>,
+    pub digest_version: i64,
+    pub mime: String,
+    pub width: i64,
+    pub height: i64,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageSequenceSummary {
+    pub book_id: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub root_id: String,
+    pub root_path: String,
+    pub cache_key: String,
+    pub direction: String,
+    pub spread: String,
+    pub page_count: i64,
+    pub total_pixels: i64,
+    pub total_decoded_bytes: i64,
+    pub current_page: i64,
+    pub zoom: f64,
+    pub state: String,
+    pub progress: f64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageSequenceDetail {
+    pub sequence: ImageSequenceSummary,
+    pub pages: Vec<ImageSequencePageSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageSequencePageWrite {
+    pub page_index: i64,
+    pub relative_path: String,
+    pub file_size: i64,
+    pub modified_at_ns: Option<i64>,
+    pub content_digest: Option<String>,
+    #[serde(default = "default_digest_version")]
+    pub digest_version: i64,
+    pub mime: String,
+    pub width: i64,
+    pub height: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageSequenceWrite {
+    pub book_id: Option<String>,
+    pub title: String,
+    pub author: Option<String>,
+    pub root_path: String,
+    pub cache_key: String,
+    pub direction: String,
+    pub spread: String,
+    pub page_count: i64,
+    pub total_pixels: i64,
+    pub total_decoded_bytes: i64,
+    pub current_page: i64,
+    pub zoom: f64,
+    pub pages: Vec<ImageSequencePageWrite>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -328,6 +406,271 @@ impl Database {
         transaction.commit()?;
         drop(connection);
         self.get_book_summary(&book_id)
+    }
+
+    pub fn save_image_sequence(
+        &self,
+        write: ImageSequenceWrite,
+    ) -> Result<ImageSequenceSummary, DbError> {
+        let pages = validate_image_sequence_write(&write)?;
+        let root_path = validate_image_root_path(&write.root_path)
+            .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
+        let book_id = write
+            .book_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| generated_id("image-book"));
+        let title = write.title.trim();
+        let cache_key = write.cache_key.trim();
+        let root_display_name = root_path
+            .rsplit(['/', '\\\\'])
+            .find(|value| !value.is_empty())
+            .unwrap_or(root_path.as_str());
+        let progress = if write.page_count <= 1 {
+            0.0
+        } else {
+            (write.current_page as f64 / (write.page_count - 1) as f64).clamp(0.0, 1.0)
+        };
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+
+        let existing_kind: Option<String> = transaction
+            .query_row(
+                "SELECT content_kind FROM books WHERE id = ?1",
+                params![book_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(kind) = existing_kind {
+            if kind != "image_sequence" {
+                return Err(DbError::InvalidImageSequence(
+                    "不能把文本书籍改写为图片序列".to_string(),
+                ));
+            }
+        }
+
+        let root_id: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM library_roots WHERE root_path = ?1",
+                params![root_path.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let root_id = root_id.unwrap_or_else(|| generated_id("library-root"));
+        transaction.execute(
+            "INSERT INTO library_roots
+                (id, display_name, root_path, state, last_verified_at)
+             VALUES (?1, ?2, ?3, 'available', CURRENT_TIMESTAMP)
+             ON CONFLICT(root_path) DO UPDATE SET
+                display_name = excluded.display_name,
+                state = 'available',
+                updated_at = CURRENT_TIMESTAMP,
+                last_verified_at = CURRENT_TIMESTAMP",
+            params![root_id.as_str(), root_display_name, root_path.as_str()],
+        )?;
+        let root_id: String = transaction.query_row(
+            "SELECT id FROM library_roots WHERE root_path = ?1",
+            params![root_path.as_str()],
+            |row| row.get(0),
+        )?;
+
+        transaction.execute(
+            "INSERT INTO books
+                (id, title, author, path, format, content_kind, current_chapter, progress)
+             VALUES (?1, ?2, ?3, ?4, 'image-sequence', 'image_sequence', ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                author = excluded.author,
+                path = excluded.path,
+                format = excluded.format,
+                content_kind = excluded.content_kind,
+                current_chapter = excluded.current_chapter,
+                progress = excluded.progress,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                book_id.as_str(),
+                title,
+                write.author.as_deref(),
+                root_path.as_str(),
+                write.current_page,
+                progress,
+            ],
+        )?;
+
+        transaction.execute(
+            "INSERT INTO image_sequences
+                (book_id, root_id, cache_key, direction, spread, page_count,
+                 total_pixels, total_decoded_bytes, current_page, zoom, state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'ready')
+             ON CONFLICT(book_id) DO UPDATE SET
+                root_id = excluded.root_id,
+                cache_key = excluded.cache_key,
+                direction = excluded.direction,
+                spread = excluded.spread,
+                page_count = excluded.page_count,
+                total_pixels = excluded.total_pixels,
+                total_decoded_bytes = excluded.total_decoded_bytes,
+                current_page = excluded.current_page,
+                zoom = excluded.zoom,
+                state = 'ready',
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                book_id.as_str(),
+                root_id.as_str(),
+                cache_key,
+                write.direction.as_str(),
+                write.spread.as_str(),
+                write.page_count,
+                write.total_pixels,
+                write.total_decoded_bytes,
+                write.current_page,
+                write.zoom,
+            ],
+        )?;
+
+        transaction.execute(
+            "DELETE FROM image_sequence_pages WHERE sequence_id = ?1",
+            params![book_id.as_str()],
+        )?;
+        for page in pages {
+            transaction.execute(
+                "INSERT INTO image_sequence_pages
+                    (sequence_id, page_index, relative_path, file_size, modified_at_ns,
+                     content_digest, digest_version, mime, width, height, state)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'ready')",
+                params![
+                    book_id.as_str(),
+                    page.page_index,
+                    page.relative_path,
+                    page.file_size,
+                    page.modified_at_ns,
+                    page.content_digest,
+                    page.digest_version,
+                    page.mime,
+                    page.width,
+                    page.height,
+                ],
+            )?;
+        }
+
+        transaction.commit()?;
+        drop(connection);
+        self.get_image_sequence(&book_id)
+            .map(|detail| detail.sequence)
+    }
+
+    pub fn list_image_sequences(&self) -> Result<Vec<ImageSequenceSummary>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let mut statement = connection.prepare(
+            "SELECT s.book_id, b.title, b.author, s.root_id, r.root_path,
+                    s.cache_key, s.direction, s.spread, s.page_count,
+                    s.total_pixels, s.total_decoded_bytes, s.current_page,
+                    s.zoom, s.state, b.progress, s.updated_at
+             FROM image_sequences s
+             JOIN books b ON b.id = s.book_id
+             JOIN library_roots r ON r.id = s.root_id
+             ORDER BY s.updated_at DESC, s.book_id DESC",
+        )?;
+        let rows = statement.query_map([], image_sequence_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn get_image_sequence(&self, book_id: &str) -> Result<ImageSequenceDetail, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let sequence = connection
+            .query_row(
+                "SELECT s.book_id, b.title, b.author, s.root_id, r.root_path,
+                        s.cache_key, s.direction, s.spread, s.page_count,
+                        s.total_pixels, s.total_decoded_bytes, s.current_page,
+                        s.zoom, s.state, b.progress, s.updated_at
+                 FROM image_sequences s
+                 JOIN books b ON b.id = s.book_id
+                 JOIN library_roots r ON r.id = s.root_id
+                 WHERE s.book_id = ?1",
+                params![book_id],
+                image_sequence_from_row,
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)?;
+
+        let mut statement = connection.prepare(
+            "SELECT sequence_id, page_index, relative_path, file_size, modified_at_ns,
+                    content_digest, digest_version, mime, width, height, state
+             FROM image_sequence_pages
+             WHERE sequence_id = ?1
+             ORDER BY page_index",
+        )?;
+        let pages = statement
+            .query_map(params![book_id], image_sequence_page_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(ImageSequenceDetail { sequence, pages })
+    }
+
+    pub fn save_image_sequence_progress(
+        &self,
+        book_id: &str,
+        current_page: i64,
+        zoom: f64,
+        direction: &str,
+        spread: &str,
+    ) -> Result<ImageSequenceSummary, DbError> {
+        if !matches!(direction, "ltr" | "rtl" | "vertical") {
+            return Err(DbError::InvalidImageSequence(
+                "阅读方向无效".to_string(),
+            ));
+        }
+        if !matches!(spread, "single" | "double" | "long_strip") {
+            return Err(DbError::InvalidImageSequence(
+                "排版模式无效".to_string(),
+            ));
+        }
+        if !zoom.is_finite() || !(0.0 < zoom && zoom <= 8.0) {
+            return Err(DbError::InvalidImageSequence(
+                "缩放比例必须在 0 到 8 之间".to_string(),
+            ));
+        }
+
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let page_count: i64 = connection
+            .query_row(
+                "SELECT page_count FROM image_sequences WHERE book_id = ?1",
+                params![book_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)?;
+        if current_page < 0 || current_page >= page_count {
+            return Err(DbError::InvalidImageSequence(
+                "当前页码超出图片序列范围".to_string(),
+            ));
+        }
+        let progress = if page_count <= 1 {
+            0.0
+        } else {
+            (current_page as f64 / (page_count - 1) as f64).clamp(0.0, 1.0)
+        };
+        let mut transaction = connection.unchecked_transaction()?;
+        transaction.execute(
+            "UPDATE image_sequences
+             SET current_page = ?1, zoom = ?2, direction = ?3, spread = ?4,
+                 state = CASE WHEN state IN ('missing', 'stale') THEN state ELSE 'ready' END,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE book_id = ?5",
+            params![current_page, zoom, direction, spread, book_id],
+        )?;
+        transaction.execute(
+            "UPDATE books
+             SET current_chapter = ?1, progress = ?2, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?3",
+            params![current_page, progress, book_id],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_image_sequence(book_id)
+            .map(|detail| detail.sequence)
     }
 
     pub fn list_sources(&self) -> Result<Vec<SourceSummary>, DbError> {
@@ -1309,6 +1652,130 @@ fn backfill_source_metadata(connection: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+fn default_digest_version() -> i64 {
+    1
+}
+
+fn validate_image_sequence_write(
+    write: &ImageSequenceWrite,
+) -> Result<Vec<ImageSequencePageWrite>, DbError> {
+    if write.title.trim().is_empty() {
+        return Err(DbError::InvalidImageSequence(
+            "图片序列标题不能为空".to_string(),
+        ));
+    }
+    if write.cache_key.trim().is_empty() || write.cache_key.len() > 256 {
+        return Err(DbError::InvalidImageSequence(
+            "图片序列缓存键无效".to_string(),
+        ));
+    }
+    if !matches!(write.direction.as_str(), "ltr" | "rtl" | "vertical") {
+        return Err(DbError::InvalidImageSequence(
+            "阅读方向无效".to_string(),
+        ));
+    }
+    if !matches!(write.spread.as_str(), "single" | "double" | "long_strip") {
+        return Err(DbError::InvalidImageSequence(
+            "排版模式无效".to_string(),
+        ));
+    }
+    if write.page_count <= 0
+        || write.page_count > 2_048
+        || write.pages.len() as i64 != write.page_count
+    {
+        return Err(DbError::InvalidImageSequence(
+            "图片页数与页清单不一致或超出上限".to_string(),
+        ));
+    }
+    if write.total_pixels < 0 || write.total_decoded_bytes < 0 {
+        return Err(DbError::InvalidImageSequence(
+            "图片序列资源统计不能为负数".to_string(),
+        ));
+    }
+    if write.current_page < 0 || write.current_page >= write.page_count {
+        return Err(DbError::InvalidImageSequence(
+            "当前页码超出图片序列范围".to_string(),
+        ));
+    }
+    if !write.zoom.is_finite() || !(0.0 < write.zoom && write.zoom <= 8.0) {
+        return Err(DbError::InvalidImageSequence(
+            "缩放比例必须在 0 到 8 之间".to_string(),
+        ));
+    }
+
+    let mut pages = write.pages.clone();
+    for (expected_index, page) in pages.iter_mut().enumerate() {
+        if page.page_index != expected_index as i64 {
+            return Err(DbError::InvalidImageSequence(
+                "图片页码必须从 0 连续递增".to_string(),
+            ));
+        }
+        page.relative_path = normalize_relative_image_path(&page.relative_path)
+            .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
+        if page.file_size < 0
+            || page.width <= 0
+            || page.height <= 0
+            || page.digest_version <= 0
+        {
+            return Err(DbError::InvalidImageSequence(
+                "图片页元数据无效".to_string(),
+            ));
+        }
+        if !matches!(
+            page.mime.as_str(),
+            "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+        ) {
+            return Err(DbError::InvalidImageSequence(
+                "图片 MIME 类型不受支持".to_string(),
+            ));
+        }
+        if page.content_digest.as_ref().is_some_and(|value| value.len() > 128) {
+            return Err(DbError::InvalidImageSequence(
+                "图片摘要不能超过 128 字节".to_string(),
+            ));
+        }
+    }
+
+    Ok(pages)
+}
+
+fn image_sequence_from_row(row: &Row<'_>) -> rusqlite::Result<ImageSequenceSummary> {
+    Ok(ImageSequenceSummary {
+        book_id: row.get(0)?,
+        title: row.get(1)?,
+        author: row.get(2)?,
+        root_id: row.get(3)?,
+        root_path: row.get(4)?,
+        cache_key: row.get(5)?,
+        direction: row.get(6)?,
+        spread: row.get(7)?,
+        page_count: row.get(8)?,
+        total_pixels: row.get(9)?,
+        total_decoded_bytes: row.get(10)?,
+        current_page: row.get(11)?,
+        zoom: row.get(12)?,
+        state: row.get(13)?,
+        progress: row.get(14)?,
+        updated_at: row.get(15)?,
+    })
+}
+
+fn image_sequence_page_from_row(row: &Row<'_>) -> rusqlite::Result<ImageSequencePageSummary> {
+    Ok(ImageSequencePageSummary {
+        sequence_id: row.get(0)?,
+        page_index: row.get(1)?,
+        relative_path: row.get(2)?,
+        file_size: row.get(3)?,
+        modified_at_ns: row.get(4)?,
+        content_digest: row.get(5)?,
+        digest_version: row.get(6)?,
+        mime: row.get(7)?,
+        width: row.get(8)?,
+        height: row.get(9)?,
+        state: row.get(10)?,
+    })
+}
+
 fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1507,6 +1974,137 @@ mod tests {
 
         drop(connection);
         drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn saves_and_restores_image_sequence_records() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-image-record-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let root_path = directory.join("images").to_string_lossy().to_string();
+        let database = Database::open(&directory).expect("database should open");
+        let saved = database
+            .save_image_sequence(ImageSequenceWrite {
+                book_id: None,
+                title: "Image fixture".to_string(),
+                author: Some("Fixture author".to_string()),
+                root_path: root_path.clone(),
+                cache_key: "imgseq-v1-record".to_string(),
+                direction: "ltr".to_string(),
+                spread: "single".to_string(),
+                page_count: 2,
+                total_pixels: 20_000,
+                total_decoded_bytes: 80_000,
+                current_page: 0,
+                zoom: 1.0,
+                pages: vec![
+                    ImageSequencePageWrite {
+                        page_index: 0,
+                        relative_path: "chapter/001.png".to_string(),
+                        file_size: 100,
+                        modified_at_ns: Some(1),
+                        content_digest: Some("sha256:first".to_string()),
+                        digest_version: 1,
+                        mime: "image/png".to_string(),
+                        width: 100,
+                        height: 100,
+                    },
+                    ImageSequencePageWrite {
+                        page_index: 1,
+                        relative_path: r"chapter\002.png".to_string(),
+                        file_size: 200,
+                        modified_at_ns: Some(2),
+                        content_digest: None,
+                        digest_version: 1,
+                        mime: "image/png".to_string(),
+                        width: 100,
+                        height: 100,
+                    },
+                ],
+            })
+            .expect("image sequence should save");
+        assert_eq!(saved.title, "Image fixture");
+        assert_eq!(saved.page_count, 2);
+        assert_eq!(saved.current_page, 0);
+        assert_eq!(saved.progress, 0.0);
+
+        let detail = database
+            .get_image_sequence(&saved.book_id)
+            .expect("image sequence should read");
+        assert_eq!(detail.pages.len(), 2);
+        assert_eq!(detail.pages[1].relative_path, "chapter/002.png");
+
+        let listed = database
+            .list_image_sequences()
+            .expect("image sequences should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].book_id, saved.book_id);
+
+        let progressed = database
+            .save_image_sequence_progress(
+                &saved.book_id,
+                1,
+                1.25,
+                "rtl",
+                "double",
+            )
+            .expect("image progress should save");
+        assert_eq!(progressed.current_page, 1);
+        assert_eq!(progressed.progress, 1.0);
+        assert_eq!(progressed.direction, "rtl");
+        assert_eq!(progressed.spread, "double");
+
+        drop(database);
+        let reopened = Database::open(&directory).expect("database should reopen");
+        let restored = reopened
+            .get_image_sequence(&saved.book_id)
+            .expect("image sequence should restore");
+        assert_eq!(restored.sequence.current_page, 1);
+        assert_eq!(restored.sequence.zoom, 1.25);
+        assert_eq!(restored.sequence.state, "ready");
+        assert_eq!(restored.pages[1].relative_path, "chapter/002.png");
+
+        let mut invalid = ImageSequenceWrite {
+            book_id: None,
+            title: "Invalid".to_string(),
+            author: None,
+            root_path,
+            cache_key: "imgseq-v1-invalid".to_string(),
+            direction: "ltr".to_string(),
+            spread: "single".to_string(),
+            page_count: 1,
+            total_pixels: 1,
+            total_decoded_bytes: 4,
+            current_page: 0,
+            zoom: 1.0,
+            pages: vec![ImageSequencePageWrite {
+                page_index: 0,
+                relative_path: "../escape.png".to_string(),
+                file_size: 1,
+                modified_at_ns: None,
+                content_digest: None,
+                digest_version: 1,
+                mime: "image/png".to_string(),
+                width: 1,
+                height: 1,
+            }],
+        };
+        assert!(matches!(
+            reopened.save_image_sequence(invalid.clone()),
+            Err(DbError::InvalidImageSequence(_))
+        ));
+        invalid.root_path = "relative-root".to_string();
+        assert!(matches!(
+            reopened.save_image_sequence(invalid),
+            Err(DbError::InvalidImageSequence(_))
+        ));
+
+        drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
 
