@@ -4,12 +4,49 @@ use crate::image_sequence::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    fs,
+    fs::{self, File},
+    io::Read,
     path::{Path, PathBuf},
 };
+use sha2::{Digest, Sha256};
 
 const MAX_RELINK_FILES: usize = 4096;
 const MAX_RELINK_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_DIGEST_FILE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_DIGEST_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+
+pub fn sha256_file(path: &Path, max_bytes: u64) -> Result<(String, u64), String> {
+    let mut file = File::open(path).map_err(|error| format!("读取图片失败：{error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut total_bytes = 0_u64;
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("读取图片失败：{error}"))?;
+        if read == 0 {
+            break;
+        }
+        total_bytes = total_bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| "图片大小超出 SHA-256 复核范围".to_string())?;
+        if total_bytes > max_bytes {
+            return Err(format!(
+                "图片大小超过 {} MB SHA-256 复核上限",
+                max_bytes / (1024 * 1024)
+            ));
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    let digest = hasher.finalize();
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok((digest, total_bytes))
+}
 
 #[derive(Debug, Clone)]
 pub struct RelinkPage {
@@ -308,6 +345,29 @@ mod tests {
         assert_eq!(preview.assignments[2].status, "missing");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hashes_a_file_with_a_bounded_reader() {
+        let path = std::env::temp_dir().join(format!(
+            "open-reader-sha256-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::write(&path, b"abc").expect("fixture should write");
+
+        let (digest, bytes) = sha256_file(&path, 64).expect("digest should succeed");
+        assert_eq!(bytes, 3);
+        assert_eq!(
+            digest,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+
+        let oversized = sha256_file(&path, 2);
+        assert!(oversized.is_err());
+        let _ = fs::remove_file(path);
     }
 
     #[test]
