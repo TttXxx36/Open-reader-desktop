@@ -637,9 +637,17 @@ const metadataGroupDraft = ref("");
 const metadataTagsDraft = ref("");
 const metadataOrderDraft = ref("0");
 const metadataBusy = ref(false);
+const selectedBookIds = ref<string[]>([]);
+const batchMetadataGroupDraft = ref("");
+const batchMetadataTagsDraft = ref("");
+const batchMetadataBusy = ref(false);
 const bookGroups = computed(() =>
   [...new Set(books.value.map((book) => book.shelf_group.trim()).filter(Boolean))]
     .sort((left, right) => left.localeCompare(right, "zh-CN")),
+);
+const allVisibleBooksSelected = computed(() =>
+  books.value.length > 0 &&
+  books.value.every((book) => selectedBookIds.value.includes(book.id)),
 );
 const recentBooks = computed(() => books.value.slice(0, 4));
 const continueBook = computed(() =>
@@ -1133,6 +1141,9 @@ async function loadBooks() {
     });
     if (loadId !== libraryLoadId.value) return;
     books.value = loaded;
+    selectedBookIds.value = selectedBookIds.value.filter((id) =>
+      loaded.some((book) => book.id === id),
+    );
     status.value = books.value.length ? `共 ${books.value.length} 本书` : "书架已准备好";
     errorMessage.value = "";
   } catch (error) {
@@ -1184,6 +1195,52 @@ async function saveBookMetadata(book: BookSummary) {
     status.value = "书籍元数据保存失败";
   } finally {
     metadataBusy.value = false;
+  }
+}
+
+function toggleBookSelection(bookId: string) {
+  selectedBookIds.value = selectedBookIds.value.includes(bookId)
+    ? selectedBookIds.value.filter((id) => id !== bookId)
+    : [...selectedBookIds.value, bookId];
+}
+
+function toggleVisibleBookSelection() {
+  selectedBookIds.value = allVisibleBooksSelected.value
+    ? []
+    : books.value.map((book) => book.id);
+}
+
+function clearBookSelection() {
+  selectedBookIds.value = [];
+  batchMetadataGroupDraft.value = "";
+  batchMetadataTagsDraft.value = "";
+}
+
+async function saveBatchBookMetadata() {
+  if (batchMetadataBusy.value || selectedBookIds.value.length === 0) return;
+  const tags = batchMetadataTagsDraft.value
+    .split(/[,，、\n]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  batchMetadataBusy.value = true;
+  errorMessage.value = "";
+  try {
+    await invoke<BookSummary[]>("update_books_metadata", {
+      write: {
+        book_ids: selectedBookIds.value,
+        shelf_group: batchMetadataGroupDraft.value.trim(),
+        tags,
+      },
+    });
+    const count = selectedBookIds.value.length;
+    clearBookSelection();
+    await loadBooks();
+    status.value = `已批量更新 ${count} 本书的分组和标签`;
+  } catch (error) {
+    errorMessage.value = "批量保存书籍元数据失败：" + String(error);
+    status.value = "批量元数据保存失败";
+  } finally {
+    batchMetadataBusy.value = false;
   }
 }
 
@@ -3433,7 +3490,64 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         >
           清除筛选
         </button>
+        <button class="secondary-button" type="button" @click="toggleVisibleBookSelection">
+          {{ allVisibleBooksSelected ? "取消全选" : "全选当前" }}
+        </button>
+        <span v-if="selectedBookIds.length" class="library-selection-count">
+          已选 {{ selectedBookIds.length }} 本
+        </span>
       </div>
+
+      <section
+        v-if="selectedBookIds.length"
+        class="batch-metadata-panel"
+        aria-label="批量编辑书籍元数据"
+      >
+        <div class="batch-metadata-heading">
+          <div>
+            <span class="eyebrow">BATCH EDIT</span>
+            <h2>批量设置分组和标签</h2>
+          </div>
+          <span>空值会清空对应字段</span>
+        </div>
+        <div class="batch-metadata-fields">
+          <label>
+            <span>分组</span>
+            <input
+              v-model="batchMetadataGroupDraft"
+              type="text"
+              maxlength="128"
+              placeholder="例如：待读 / 收藏"
+            />
+          </label>
+          <label>
+            <span>标签</span>
+            <input
+              v-model="batchMetadataTagsDraft"
+              type="text"
+              placeholder="用逗号分隔多个标签"
+            />
+          </label>
+        </div>
+        <div class="batch-metadata-actions">
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="batchMetadataBusy"
+            @click="saveBatchBookMetadata"
+          >
+            {{ batchMetadataBusy ? "保存中…" : "保存批量修改" }}
+          </button>
+          <button
+            class="text-button"
+            type="button"
+            :disabled="batchMetadataBusy"
+            @click="clearBookSelection"
+          >
+            取消选择
+          </button>
+        </div>
+      </section>
 
       <section v-if="bookImportPreview" class="book-import-preview" aria-live="polite">
         <div class="book-import-preview-heading">
@@ -3810,10 +3924,20 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           v-for="book in books"
           :key="book.id"
           class="book-card"
+          :class="{ selected: selectedBookIds.includes(book.id) }"
           tabindex="0"
           @click="continueReading(book)"
           @keydown.enter="continueReading(book)"
         >
+          <label class="book-select-control" @click.stop>
+            <input
+              type="checkbox"
+              :checked="selectedBookIds.includes(book.id)"
+              :aria-label="'选择 ' + book.title"
+              @change="toggleBookSelection(book.id)"
+            />
+            <span>选择</span>
+          </label>
           <div class="book-cover" :class="`format-${book.format}`">
             <span>{{ book.format.toUpperCase() }}</span>
           </div>
@@ -3944,6 +4068,70 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 12px;
   background: rgba(15, 24, 38, 0.62);
+}
+
+.library-selection-count {
+  align-self: center;
+  color: #b9f6dd;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.batch-metadata-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid rgba(134, 223, 194, 0.28);
+  border-radius: 14px;
+  background: rgba(22, 57, 54, 0.32);
+}
+
+.batch-metadata-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.batch-metadata-heading h2 {
+  margin: 8px 0 0;
+  color: #eafbf5;
+  font-size: 17px;
+}
+
+.batch-metadata-heading > span {
+  color: #9fb1c8;
+  font-size: 11px;
+}
+
+.batch-metadata-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.batch-metadata-fields label {
+  display: grid;
+  gap: 6px;
+  color: #a9bdd3;
+  font-size: 12px;
+}
+
+.batch-metadata-fields input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  color: #dce7f7;
+  background: #0c111b;
+}
+
+.batch-metadata-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
 }
 
 .library-filter-field {
@@ -4848,6 +5036,17 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   }
 }
 
+@media (max-width: 720px) {
+  .batch-metadata-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-metadata-heading {
+    align-items: start;
+    flex-direction: column;
+  }
+}
+
 @media (max-width: 900px) {
   .source-library-actions {
     align-items: flex-start;
@@ -5252,6 +5451,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 }
 
 .book-card {
+  position: relative;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 16px;
@@ -5265,6 +5465,35 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   border-color: rgba(139, 183, 255, 0.7);
   outline: none;
   transform: translateY(-2px);
+}
+
+.book-card.selected {
+  border-color: rgba(134, 223, 194, 0.72);
+  box-shadow: 0 0 0 1px rgba(134, 223, 194, 0.18);
+}
+
+.book-select-control {
+  position: absolute;
+  z-index: 2;
+  top: 11px;
+  right: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  color: #e7f8f2;
+  background: rgba(7, 13, 23, 0.72);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.book-select-control input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #86dfc2;
 }
 
 .book-cover {
