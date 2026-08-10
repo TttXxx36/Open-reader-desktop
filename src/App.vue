@@ -19,6 +19,7 @@ interface BookSummary {
   title: string;
   author: string | null;
   format: string;
+  content_kind: string;
   chapter_count: number;
   current_chapter: number;
   progress: number;
