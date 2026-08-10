@@ -97,4 +97,4 @@ Rust 数据库层已提供：
 
 ## 后续顺序
 
-M9.2 的自动化切片已完成；下一道边界是补做真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、取消交互、断目录后的状态恢复），并保存验收记录。手工验收通过后，再进入 M9.3 书架分组/标签/排序与封面策略；随后按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
+M9.2 的自动化切片已完成；Windows release run [31381532400](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400) 已在 `main` 生成安装版、便携版和 `release-sha256.txt`，artifact [9060259690](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400#artifacts) 摘要为 `sha256:8b614c668724378694081954d5a2b201a65d8404ea1646760fc83a5fe864e2b8`。下一道边界是补做真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、取消交互、断目录后的状态恢复），并保存验收记录。手工验收通过后，再进入 M9.3 书架分组/标签/排序与封面策略；随后按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
