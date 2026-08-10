@@ -8,8 +8,8 @@ mod xpath_poc;
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, ImageSequenceDetail, ImageSequenceSummary,
     ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
-    SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary,
-    SourceWrite,
+    SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
+    SourceSummary, SourceWrite,
 };
 use library::{
     cache_image_sequence_files_with_cancel, parse_book_bytes_with_options, preview_book_bytes,
