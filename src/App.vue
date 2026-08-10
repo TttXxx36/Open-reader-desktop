@@ -649,6 +649,7 @@ const imageSequenceStalePages = ref(0);
 const imageRelinkPreview = ref<ImageRelinkPreview | null>(null);
 const imageRelinkBusy = ref(false);
 const imageRelinkApplying = ref(false);
+const imageDigestBusy = ref(false);
 const imageThumbnailCache = ref<ImageThumbnailCacheSummary | null>(null);
 const imageCacheBusy = ref(false);
 const imageCacheOperationId = ref<string | null>(null);
@@ -2654,6 +2655,35 @@ async function applyImageSequenceRelink() {
   }
 }
 
+async function verifyImageSequenceDigests() {
+  const bookId = imageSequenceBookId.value;
+  if (!bookId || imageDigestBusy.value) return;
+
+  imageDigestBusy.value = true;
+  errorMessage.value = "";
+  status.value = "正在对变化页执行 SHA-256 复核…";
+  try {
+    const verified = await invoke<ImageSequenceRecordDetail>(
+      "verify_image_sequence_digests",
+      { bookId },
+    );
+    const counts = imageSequencePageStateCounts(verified.pages);
+    await openPersistedImageSequenceBook(bookId);
+    if (counts.stale > 0) {
+      status.value = "SHA-256 复核完成，仍有 " + counts.stale + " 页保持待复核";
+    } else if (counts.missing > 0) {
+      status.value = "SHA-256 复核完成，仍有 " + counts.missing + " 页缺失";
+    } else {
+      status.value = "SHA-256 复核完成，变化页已恢复";
+    }
+  } catch (error) {
+    errorMessage.value = "SHA-256 复核失败：" + String(error);
+    status.value = "变化页复核失败，原有状态未被清除";
+  } finally {
+    imageDigestBusy.value = false;
+  }
+}
+
 function imageSequencePageStateCounts(pages: ImageSequenceRecordPage[]) {
   return pages.reduce(
     (counts, page) => {
@@ -3454,6 +3484,15 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             @click="chooseImageSequenceRelinkRoot"
           >
             {{ imageRelinkBusy ? "正在扫描…" : "选择新目录并扫描" }}
+          </button>
+          <button
+            v-if="imageSequenceBookId && imageSequenceStalePages > 0"
+            class="text-button"
+            type="button"
+            :disabled="imageDigestBusy || imageRelinkBusy || imageRelinkApplying || imageCacheBusy"
+            @click="verifyImageSequenceDigests"
+          >
+            {{ imageDigestBusy ? "正在复核…" : "复核变化页" }}
           </button>
           <button
             v-if="!imageSequenceBookId"
