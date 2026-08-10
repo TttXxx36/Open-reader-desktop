@@ -49,7 +49,10 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 
 - M8.5.4a 已把格式探测接入本地文件导入前置流程：只有 importable 才进入预览/导入，PDF、图片和 MOBI/AZW 会显示只读边界及已探测元数据；run [31337644268](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31337644268) 的前端、Rust checks 和 Windows sampler 全部通过，artifact [9044864924](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31337644268#artifacts) 已上传。
 - M8.5.4b 已冻结 PDF 与图片/漫画的独立阅读模型、缓存/资源配额、受保护内容拒绝策略和依赖采用闸门，详见 [PDF/图片阅读模型契约](m8-reader-model.md)；本切片不引入解析器或渲染依赖。
-- M8.5.5 依赖评估结论已记录在 [M8.5.5 依赖与 Windows 渲染路径评估](m8.5.5-dependency-evaluation.md)：图片优先采用受限 feature 的 Rust 原生解码链，PDF 继续只读探测；下一步是 M8.5.5a 图片最小闭环。
+- M8.5.5 依赖评估结论已记录在 [M8.5.5 依赖与 Windows 渲染路径评估](m8.5.5-dependency-evaluation.md)：图片优先采用受限 feature 的 Rust 原生解码链，PDF 继续只读探测；依赖与 Windows 渲染路径闸门已收口。
+- M8.5.5a 图片单页最小闭环已完成：以 `image 0.25.9` 的受限 feature 解码 PNG/JPEG/GIF/WebP，执行 64 MiB 输入、20,000 边长、32,000,000 像素和 128 MiB 单页解码缓冲配额；Tauri 只返回安全元数据，前端显示单页预览，不写入书架。GitHub Actions run [31350842759](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31350842759) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
+- M8.5.5b 图片序列/双页模型已完成：后端提供 `ltr`/`rtl`/`vertical` 阅读方向、`single`/`double`/`long_strip` 排版模式和稳定页索引；序列上限为 2,048 页、128,000,000 总像素、512 MiB 总解码字节，暂不接入多文件书架导入。GitHub Actions run [31351541210](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31351541210) 的前端、Rust 105 项测试、TXT 性能证据和 Windows 编译/峰值 RSS 采样全部通过。
+- 下一步在不突破上述配额的前提下实现多图片选择、缩略图/缓存和可恢复图片阅读位置；PDF 继续独立评估，不转成普通文本章节。
 - PDF：独立评估渲染、搜索、目录和页码定位模型，不转成普通文本章节。
 - 漫画/图片：独立建模缓存、缩放、双页和阅读方向；不复用文本章节字段。
 
