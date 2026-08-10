@@ -105,6 +105,12 @@ pub struct BookDetail {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DuplicateBookGroup {
+    pub key: String,
+    pub books: Vec<BookSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ImageSequencePageSummary {
     pub sequence_id: String,
     pub page_index: i64,
@@ -433,6 +439,65 @@ impl Database {
         let mut statement = connection.prepare(&sql)?;
         let rows = statement.query_map(params![group, query], book_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn find_duplicate_books(&self) -> Result<Vec<DuplicateBookGroup>, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let group_keys = {
+            let mut statement = connection.prepare(
+                "SELECT LOWER(TRIM(b.title)), LOWER(TRIM(COALESCE(b.author, ''))), b.format
+                 FROM books b
+                 GROUP BY LOWER(TRIM(b.title)), LOWER(TRIM(COALESCE(b.author, ''))), b.format
+                 HAVING COUNT(*) > 1
+                 ORDER BY COUNT(*) DESC, LOWER(TRIM(b.title)), b.format
+                 LIMIT 128",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        let mut groups = Vec::new();
+        for (normalized_title, normalized_author, book_format) in group_keys {
+            let mut statement = connection.prepare(
+                "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
+                        b.shelf_group, b.tags_json, b.custom_order, COUNT(c.id),
+                        b.current_chapter, b.progress, b.updated_at,
+                        (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
+                        COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                                  WHERE p.sequence_id = b.id AND p.state = 'missing'), 0),
+                        COALESCE((SELECT COUNT(*) FROM image_sequence_pages p
+                                  WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
+                 FROM books b
+                 LEFT JOIN chapters c ON c.book_id = b.id
+                 WHERE LOWER(TRIM(b.title)) = ?1
+                   AND LOWER(TRIM(COALESCE(b.author, ''))) = ?2
+                   AND b.format = ?3
+                 GROUP BY b.id
+                 ORDER BY b.updated_at DESC, b.id
+                 LIMIT 256",
+            )?;
+            let books = statement
+                .query_map(
+                    params![normalized_title, normalized_author, book_format],
+                    book_from_row,
+                )?
+                .collect::<Result<Vec<_>, _>>()?;
+            if books.len() < 2 {
+                continue;
+            }
+            groups.push(DuplicateBookGroup {
+                key: format!("{normalized_title}\u{1f}{normalized_author}\u{1f}{book_format}"),
+                books,
+            });
+        }
+
+        Ok(groups)
     }
 
     pub fn import_book(
@@ -3534,6 +3599,81 @@ mod tests {
             .get_book_summary("book-alpha")
             .expect("book should remain readable");
         assert!(unchanged.shelf_group.is_empty());
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn finds_duplicate_books_without_mutating_library() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-duplicate-books-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, author, path, format)
+                     VALUES (?1, ?2, ?3, ?4, 'txt')",
+                    params![
+                        "duplicate-a",
+                        "同一本书",
+                        "作者",
+                        "a.txt"
+                    ],
+                )
+                .expect("first duplicate should insert");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, author, path, format)
+                     VALUES (?1, ?2, ?3, ?4, 'txt')",
+                    params![
+                        "duplicate-b",
+                        " 同一本书 ",
+                        "作者",
+                        "b.txt"
+                    ],
+                )
+                .expect("second duplicate should insert");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, author, path, format)
+                     VALUES (?1, ?2, ?3, ?4, 'epub')",
+                    params![
+                        "different-format",
+                        "同一本书",
+                        "作者",
+                        "book.epub"
+                    ],
+                )
+                .expect("different format should insert");
+        }
+
+        let groups = database
+            .find_duplicate_books()
+            .expect("duplicate groups should load");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].books.len(), 2);
+        assert!(groups[0]
+            .books
+            .iter()
+            .any(|book| book.id == "duplicate-a"));
+        assert!(groups[0]
+            .books
+            .iter()
+            .any(|book| book.id == "duplicate-b"));
+        assert_eq!(
+            database
+                .get_book_summary("duplicate-a")
+                .expect("book should remain readable")
+                .title,
+            "同一本书"
+        );
 
         drop(database);
         let _ = fs::remove_dir_all(directory);
