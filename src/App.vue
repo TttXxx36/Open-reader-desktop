@@ -2207,7 +2207,7 @@ async function digestBytes(bytes: Uint8Array) {
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) return fallbackHashBytes(bytes);
   try {
-    const digest = await subtle.digest("SHA-256", bytes);
+    const digest = await subtle.digest("SHA-256", bytes.buffer as ArrayBuffer);
     return Array.from(new Uint8Array(digest))
       .map((byte) => byte.toString(16).padStart(2, "0"))
       .join("");
