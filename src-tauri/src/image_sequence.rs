@@ -1,3 +1,8 @@
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use thiserror::Error;
 
 pub const MAX_IMAGE_RELATIVE_PATH_BYTES: usize = 4 * 1024;
@@ -96,6 +101,28 @@ pub fn validate_image_root_path(value: &str) -> Result<String, ImagePathError> {
     Ok(normalized.to_string())
 }
 
+/// Resolves a persisted page path below the approved image root.
+///
+/// The relative path is normalized again at the filesystem boundary so callers
+/// cannot accidentally bypass the database validation contract.
+pub fn resolve_image_page_path(
+    root_path: &str,
+    relative_path: &str,
+) -> Result<PathBuf, ImagePathError> {
+    let root = validate_image_root_path(root_path)?;
+    let relative = normalize_relative_image_path(relative_path)?;
+    Ok(PathBuf::from(root).join(relative))
+}
+
+/// Converts a filesystem modification time to a bounded nanosecond timestamp.
+pub fn modified_at_ns(metadata: &fs::Metadata) -> Option<i64> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +186,21 @@ mod tests {
             validate_image_root_path("books"),
             Err(ImagePathError::RootNotAbsolute)
         );
+    }
+
+    #[test]
+    fn resolves_pages_only_under_the_validated_root() {
+        let resolved = resolve_image_page_path("/tmp/books", r"chapter\001.png")
+            .expect("relative page should resolve");
+        assert_eq!(resolved, PathBuf::from("/tmp/books").join("chapter/001.png"));
+        assert!(matches!(
+            resolve_image_page_path("/tmp/books", "../outside.png"),
+            Err(ImagePathError::Traversal)
+        ));
+        assert!(matches!(
+            resolve_image_page_path("/tmp/books", r"C:\outside.png"),
+            Err(ImagePathError::Absolute)
+        ));
     }
 
     #[test]
