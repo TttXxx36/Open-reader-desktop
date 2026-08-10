@@ -435,6 +435,7 @@ pub fn build_image_sequence_preview(
             width,
             height,
             decoded_bytes,
+            ..
         } = page;
         sequence_pages.push(ImageSequencePage {
             index,
