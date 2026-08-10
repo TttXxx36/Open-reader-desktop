@@ -2766,9 +2766,12 @@ fn book_cover_from_row(row: &Row<'_>) -> rusqlite::Result<BookCoverSummary> {
     })
 }
 
-
 fn normalize_merge_text(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn merge_text_digest(value: &str) -> String {
