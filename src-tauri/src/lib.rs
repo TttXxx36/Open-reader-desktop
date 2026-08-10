@@ -10,12 +10,12 @@ use db::{
     SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::{
-    cache_image_sequence_files, parse_book_bytes_with_options, preview_book_bytes,
-    preview_image_bytes, preview_image_sequence_bytes,
+    cache_image_sequence_files_with_cancel, parse_book_bytes_with_options, preview_book_bytes,
+    preview_image_bytes, preview_image_sequence_bytes, read_image_thumbnail_files,
     probe_book_format as probe_book_format_bytes, require_importable_format, BookFormatProbe,
     BookImportPreview, ImageDocumentPreview, ImageReadingDirection, ImageSequenceInput,
-    ImageSequencePreview, ImageSpreadMode, ImageThumbnailCacheSummary, TxtParseOptions,
-    MAX_IMAGE_INPUT_BYTES,
+    ImageSequencePreview, ImageSpreadMode, ImageThumbnailCacheSummary, ImageThumbnailPageBytes,
+    TxtParseOptions, MAX_IMAGE_INPUT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use source::{
@@ -70,7 +70,46 @@ impl SourceCancellationState {
     }
 }
 
+#[derive(Default)]
+struct ImageCacheCancellationState {
+    active: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl ImageCacheCancellationState {
+    fn register(&self, operation_id: &str) -> Result<Arc<AtomicBool>, String> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "图片缓存取消状态不可用".to_string())?;
+        if active.contains_key(operation_id) {
+            return Err("已有同 ID 的图片缓存任务正在运行".to_string());
+        }
+        let token = Arc::new(AtomicBool::new(false));
+        active.insert(operation_id.to_string(), token.clone());
+        Ok(token)
+    }
+
+    fn cancel(&self, operation_id: &str) -> Result<bool, String> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "图片缓存取消状态不可用".to_string())?;
+        if let Some(token) = active.get(operation_id) {
+            token.store(true, Ordering::Relaxed);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn remove(&self, operation_id: &str) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(operation_id);
+        }
+    }
+}
+
 static NEXT_SOURCE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_IMAGE_CACHE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn normalize_source_operation_id(value: Option<String>) -> Result<String, String> {
     let value = value
@@ -98,6 +137,34 @@ async fn wait_for_source_cancellation(token: Arc<AtomicBool>) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+fn normalize_image_cache_operation_id(value: Option<String>) -> Result<String, String> {
+    let value = value
+        .unwrap_or_else(|| {
+            format!(
+                "image-cache-{}",
+                NEXT_IMAGE_CACHE_OPERATION_ID.fetch_add(1, Ordering::Relaxed)
+            )
+        })
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return Err("图片缓存任务 ID 不能为空".to_string());
+    }
+    if value.len() > 128 {
+        return Err("图片缓存任务 ID 不能超过 128 字节".to_string());
+    }
+    Ok(value)
+}
+
+#[tauri::command]
+fn cancel_image_cache(
+    cancellation: tauri::State<'_, ImageCacheCancellationState>,
+    operation_id: String,
+) -> Result<bool, String> {
+    let operation_id = normalize_image_cache_operation_id(Some(operation_id))?;
+    cancellation.cancel(&operation_id)
 }
 
 #[tauri::command]
@@ -208,26 +275,48 @@ fn preview_image_sequence(
 #[tauri::command]
 fn cache_image_sequence(
     app: tauri::AppHandle,
+    cancellation: tauri::State<'_, ImageCacheCancellationState>,
     cache_key: String,
     pages: Vec<ImageSequenceInput>,
     direction: Option<ImageReadingDirection>,
     spread: Option<ImageSpreadMode>,
     force_refresh: Option<bool>,
+    operation_id: Option<String>,
 ) -> Result<ImageThumbnailCacheSummary, String> {
+    let operation_id = normalize_image_cache_operation_id(operation_id)?;
+    let token = cancellation.register(&operation_id)?;
     let cache_root = app
         .path()
         .app_cache_dir()
         .map_err(|error| format!("无法获取应用缓存目录：{error}"))?
         .join("image-sequences");
-    cache_image_sequence_files(
+    let result = cache_image_sequence_files_with_cancel(
         &cache_root,
         &cache_key,
         &pages,
         direction.unwrap_or_default(),
         spread.unwrap_or_default(),
         force_refresh.unwrap_or(false),
+        Some(token.as_ref()),
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string());
+    cancellation.remove(&operation_id);
+    result
+}
+
+#[tauri::command]
+fn read_image_sequence_thumbnails(
+    app: tauri::AppHandle,
+    cache_key: String,
+    page_indices: Vec<usize>,
+) -> Result<Vec<ImageThumbnailPageBytes>, String> {
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("无法获取应用缓存目录：{error}"))?
+        .join("image-sequences");
+    read_image_thumbnail_files(&cache_root, &cache_key, &page_indices)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -1750,6 +1839,7 @@ pub fn run() {
             log_cache_prune(&database, "startup");
             app.manage(database);
             app.manage(SourceCancellationState::default());
+            app.manage(ImageCacheCancellationState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1761,6 +1851,7 @@ pub fn run() {
             preview_image_document,
             preview_image_sequence,
             cache_image_sequence,
+            read_image_sequence_thumbnails,
             get_book_detail,
             get_chapter_content,
             save_progress,
@@ -1798,6 +1889,7 @@ pub fn run() {
             fetch_source_chapter,
             run_source_pipeline,
             cancel_source_operation,
+            cancel_image_cache,
             get_source_cache_status
         ])
         .run(tauri::generate_context!())
