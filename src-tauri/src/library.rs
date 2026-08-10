@@ -456,7 +456,6 @@ pub fn build_image_sequence_preview(
     })
 }
 
-
 fn formats_compatible(extension_kind: BookFormatKind, magic_kind: BookFormatKind) -> bool {
     if extension_kind == BookFormatKind::Unknown || magic_kind == BookFormatKind::Unknown {
         return true;
