@@ -41,11 +41,11 @@ Rust 数据库层已提供：
 
 ## 当前明确限制
 
-1. M9.1 仍通过文本框接收绝对根目录，尚未接入原生目录选择器。
+1. M9.2.3 已接入 Tauri dialog 原生目录选择器；新建序列可以直接填充绝对根目录，已入库序列通过选择新目录进入差异扫描。
 2. 保存时页级修改时间可能为空；首次打开书架会以文件大小和当前修改时间建立快速指纹基线。
 3. 当前状态检测只读取存在性、文件大小和修改时间；尚未对变化页计算 SHA-256，也不会自动把 stale 页恢复为 ready。
-4. 'missing'、'stale'、'needs_relink' 已可自动判定并显示，但重新关联差异预览和事务化换根目录尚未完成。
-5. 目前恢复的是安全缩略图缓存和页级元数据，不复制原始图片，也不保证目录移动后自动找到新位置。
+4. 'missing'、'stale'、'needs_relink' 已可自动判定并显示；M9.2.3 已完成相对路径/文件名+大小候选、差异预览和事务化换根目录，仍未做 SHA-256 内容确认。
+5. 重新关联只更新 SQLite 中的根目录和页相对路径，不复制原始图片；未匹配页保留为 missing，旧根目录记录不删除，但目前还没有单独的回滚按钮。
 
 ## M9.2：文件变更检测与重新关联（第一切片已完成，后续工作仍在本阶段）
 
@@ -59,13 +59,14 @@ Rust 数据库层已提供：
 
 提交 [a14795a45f6e0127e4a791fc47a716f48a87d3ff](https://github.com/TttXxx36/Open-reader-desktop/commit/a14795a45f6e0127e4a791fc47a716f48a87d3ff) 对应 CI run [31368081755](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31368081755) 已通过前端 typecheck/build/UI 契约、Rust fmt/check/tests、TXT 性能证据和 Windows 编译/峰值 RSS 采样。
 
-### 9.2.3 重新关联工作流（下一步）
+### 9.2.3 已完成首切片：原生目录选择与差异预览
 
-- 原生目录选择器选择新根目录；
-- 先按相对路径匹配，再按摘要/尺寸候选匹配；
-- 产生预览差异：匹配、缺失、新增、内容变化、顺序变化；
-- 用户确认后事务化更新 library_roots 和页记录，保留当前页可见性；
-- 重新关联失败时保留旧路径和旧缓存，不破坏可回滚状态。
+- Tauri dialog 插件提供 Windows 原生目录选择；扫描跳过符号链接，只收集 PNG/JPEG/GIF/WebP；
+- 先按相对路径匹配，再按“文件名 + 文件大小”寻找移动候选；候选上限 4096 个文件、总大小 512 MiB；
+- 差异预览展示 matched、changed、missing、added 和 reordered，并列出前 8 页候选；
+- 用户确认后由 Rust 事务化更新 library_roots、books.path、image_sequences 和页相对路径；未匹配页保留为 missing，待复核页保留为 stale；
+- 重新关联期间文件消失、大小变化或预览过期会直接失败，旧根目录、页路径和缩略图记录不会被改动；
+- 提交 [3f20acd68ac4890d24d2992fc7fcf766729cafa2](https://github.com/TttXxx36/Open-reader-desktop/commit/3f20acd68ac4890d24d2992fc7fcf766729cafa2) 对应 CI run [31370651374](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31370651374) 已通过前端、Rust fmt/check/tests、TXT 性能证据和 Windows 编译/峰值 RSS 采样。
 
 ### 9.2.4 阅读器与书架反馈（待完善）
 
