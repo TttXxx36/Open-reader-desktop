@@ -629,13 +629,8 @@ impl Database {
                 file_size: page.file_size,
             })
             .collect::<Vec<_>>();
-        preview_relink(
-            book_id,
-            &detail.sequence.root_path,
-            new_root_path,
-            &pages,
-        )
-        .map_err(DbError::InvalidImageSequence)
+        preview_relink(book_id, &detail.sequence.root_path, new_root_path, &pages)
+            .map_err(DbError::InvalidImageSequence)
     }
 
     pub fn apply_image_sequence_relink(
@@ -663,9 +658,9 @@ impl Database {
             .collect::<HashMap<_, _>>();
         let mut updates = HashMap::new();
         for assignment in assignments {
-            let page = pages_by_index.get(&assignment.page_index).ok_or_else(|| {
-                DbError::InvalidImageSequence("重新关联包含未知页码".to_string())
-            })?;
+            let page = pages_by_index
+                .get(&assignment.page_index)
+                .ok_or_else(|| DbError::InvalidImageSequence("重新关联包含未知页码".to_string()))?;
             if page.relative_path != assignment.old_relative_path {
                 return Err(DbError::InvalidImageSequence(
                     "重新关联预览已过期，请重新扫描".to_string(),
@@ -704,7 +699,12 @@ impl Database {
             if updates
                 .insert(
                     assignment.page_index,
-                    (new_relative_path, observed_size, observed_modified_at_ns, state),
+                    (
+                        new_relative_path,
+                        observed_size,
+                        observed_modified_at_ns,
+                        state,
+                    ),
                 )
                 .is_some()
             {
