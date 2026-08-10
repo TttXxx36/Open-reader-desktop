@@ -9,7 +9,8 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookDetail, BookListOptions, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
+    BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMetadataBatchWrite,
+    BookMetadataWrite, BookSummary,
     ChapterContent, Database, DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary,
     ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
     SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
@@ -248,6 +249,26 @@ fn cancel_source_operation(
 ) -> Result<bool, String> {
     let operation_id = normalize_source_operation_id(Some(operation_id))?;
     cancellation.cancel(&operation_id)
+}
+
+#[tauri::command]
+fn get_book_cover(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+) -> Result<Option<BookCoverSummary>, String> {
+    database
+        .get_book_cover(&book_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_book_cover(
+    database: tauri::State<'_, Database>,
+    write: BookCoverWrite,
+) -> Result<BookCoverSummary, String> {
+    database
+        .save_book_cover(write)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2051,6 +2072,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_books,
+            get_book_cover,
+            save_book_cover,
             find_duplicate_books,
             list_books_with_options,
             update_book_metadata,
