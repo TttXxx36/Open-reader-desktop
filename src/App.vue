@@ -3034,6 +3034,18 @@ async function openPersistedImageSequenceBook(bookId: string) {
   const loaded = await invoke<ImageSequenceRecordDetail>("refresh_image_sequence_state", { bookId });
   const sequence = loaded.sequence;
   const pageStateCounts = imageSequencePageStateCounts(loaded.pages);
+  const bookIndex = books.value.findIndex((book) => book.id === sequence.book_id);
+  if (bookIndex >= 0) {
+    books.value[bookIndex] = {
+      ...books.value[bookIndex],
+      current_chapter: sequence.current_page,
+      progress: sequence.progress,
+      updated_at: sequence.updated_at,
+      image_sequence_state: sequence.state,
+      image_sequence_missing_pages: pageStateCounts.missing,
+      image_sequence_stale_pages: pageStateCounts.stale,
+    };
+  }
   const direction: ImageReadingDirection =
     sequence.direction === "rtl" || sequence.direction === "vertical"
       ? sequence.direction
