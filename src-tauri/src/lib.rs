@@ -10,11 +10,12 @@ use db::{
     SourceSnapshotSummary, SourceSummary, SourceWrite,
 };
 use library::{
-    parse_book_bytes_with_options, preview_book_bytes, preview_image_bytes,
-    preview_image_sequence_bytes, probe_book_format as probe_book_format_bytes,
-    require_importable_format, BookFormatProbe, BookImportPreview, ImageDocumentPreview,
-    ImageReadingDirection, ImageSequenceInput, ImageSequencePreview, ImageSpreadMode,
-    TxtParseOptions, MAX_IMAGE_INPUT_BYTES,
+    cache_image_sequence_files, parse_book_bytes_with_options, preview_book_bytes,
+    preview_image_bytes, preview_image_sequence_bytes,
+    probe_book_format as probe_book_format_bytes, require_importable_format, BookFormatProbe,
+    BookImportPreview, ImageDocumentPreview, ImageReadingDirection, ImageSequenceInput,
+    ImageSequencePreview, ImageSpreadMode, ImageThumbnailCacheSummary, TxtParseOptions,
+    MAX_IMAGE_INPUT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use source::{
@@ -200,6 +201,31 @@ fn preview_image_sequence(
         pages,
         direction.unwrap_or_default(),
         spread.unwrap_or_default(),
+    )
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn cache_image_sequence(
+    app: tauri::AppHandle,
+    cache_key: String,
+    pages: Vec<ImageSequenceInput>,
+    direction: Option<ImageReadingDirection>,
+    spread: Option<ImageSpreadMode>,
+    force_refresh: Option<bool>,
+) -> Result<ImageThumbnailCacheSummary, String> {
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("无法获取应用缓存目录：{error}"))?
+        .join("image-sequences");
+    cache_image_sequence_files(
+        &cache_root,
+        &cache_key,
+        &pages,
+        direction.unwrap_or_default(),
+        spread.unwrap_or_default(),
+        force_refresh.unwrap_or(false),
     )
     .map_err(|error| error.to_string())
 }
@@ -1734,6 +1760,7 @@ pub fn run() {
             probe_book_format,
             preview_image_document,
             preview_image_sequence,
+            cache_image_sequence,
             get_book_detail,
             get_chapter_content,
             save_progress,
