@@ -316,6 +316,16 @@ fn refresh_image_sequence_state(
 }
 
 #[tauri::command]
+fn verify_image_sequence_digests(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+) -> Result<ImageSequenceDetail, String> {
+    database
+        .verify_image_sequence_digests(&book_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn preview_image_sequence_relink(
     database: tauri::State<'_, Database>,
     book_id: String,
