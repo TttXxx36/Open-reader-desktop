@@ -76,12 +76,13 @@ Rust 数据库层已提供：
 - 数据库更新仍是单事务，读取错误、单页/总量超限或路径越界不会写入半成品状态；前端仅在存在 stale 页时显示“复核变化页”按钮，并在完成后刷新当前页和相邻缩略图；
 - 提交 [1eeeaf02702c83648273890662587cc034df9321](https://github.com/TttXxx36/Open-reader-desktop/commit/1eeeaf02702c83648273890662587cc034df9321) 对应 CI run [31375034783](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31375034783) 已通过前端 typecheck/build/UI 契约、Rust fmt/check/tests、TXT 性能证据和 Windows 编译/峰值 RSS 采样。
 
-### 9.2.4 阅读器与书架反馈（待完善）
+### 9.2.4 阅读器与书架反馈（已完成首轮）
 
-- 书架卡片显示可用、部分失效、目录缺失状态；
-- 阅读器遇到缺页时显示可操作提示，不让缓存缩略图掩盖原文件不可用；
-- 状态恢复后自动刷新当前页和相邻页缓存；
-- 进度回写只允许有效页范围，目录变更后进行页码夹紧和提示。
+- `BookSummary` 现在带有图片序列状态、缺页数和待复核页数；首页继续阅读、最近阅读和书架卡片显示“图片正常 / 待复核 / 缺页 / 目录需重新关联”状态；
+- 打开已入库图片序列时会先执行快速状态检测，并把最新状态同步回书架内存；书架展示不依赖“缓存文件存在”来判断原始图片可用；
+- 阅读器当前页缺失时隐藏可能过期的缩略图，显示“重新关联目录”操作；stale 页显示原文件变化提示和“复核变化页”操作；
+- SHA-256 复核完成后重新加载当前页及相邻页缩略图；进度回写仍受有效页范围和状态提示约束；
+- 提交 [5f5b69121c6824df529b53cbed849edfc1a3ff7f](https://github.com/TttXxx36/Open-reader-desktop/commit/5f5b69121c6824df529b53cbed849edfc1a3ff7f) 对应 CI run [31377102734](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31377102734) 已通过前端、Rust fmt/check/tests、TXT 性能证据和 Windows 编译/峰值 RSS 采样。
 
 ### 9.2.5 验收与性能
 
