@@ -99,6 +99,44 @@ interface ImageReadingLocation {
   spread: ImageSpreadMode;
 }
 
+interface ImageSequenceRecordPage {
+  sequence_id: string;
+  page_index: number;
+  relative_path: string;
+  file_size: number;
+  modified_at_ns: number | null;
+  content_digest: string | null;
+  digest_version: number;
+  mime: string;
+  width: number;
+  height: number;
+  state: string;
+}
+
+interface ImageSequenceRecordSummary {
+  book_id: string;
+  title: string;
+  author: string | null;
+  root_id: string;
+  root_path: string;
+  cache_key: string;
+  direction: string;
+  spread: string;
+  page_count: number;
+  total_pixels: number;
+  total_decoded_bytes: number;
+  current_page: number;
+  zoom: number;
+  state: string;
+  progress: number;
+  updated_at: string;
+}
+
+interface ImageSequenceRecordDetail {
+  sequence: ImageSequenceRecordSummary;
+  pages: ImageSequenceRecordPage[];
+}
+
 interface ImageThumbnailCacheEntry {
   cache_key: string;
   page_index: number;
@@ -574,6 +612,10 @@ const imageSequenceUrls = ref<string[]>([]);
 const imageSequenceDirection = ref<ImageReadingDirection>("ltr");
 const imageSequenceSpread = ref<ImageSpreadMode>("single");
 const imageSequenceLocation = ref<ImageReadingLocation | null>(null);
+const imageSequenceBookId = ref<string | null>(null);
+const imageSequenceBookTitle = ref("");
+const imageSequenceRootPath = ref("");
+const imageSequencePageDigests = ref<string[]>([]);
 const imageThumbnailCache = ref<ImageThumbnailCacheSummary | null>(null);
 const imageCacheBusy = ref(false);
 const imageCacheOperationId = ref<string | null>(null);
@@ -2125,6 +2167,10 @@ function resetBookImportPreview() {
   imageSequenceDirection.value = "ltr";
   imageSequenceSpread.value = "single";
   imageSequenceLocation.value = null;
+  imageSequenceBookId.value = null;
+  imageSequenceBookTitle.value = "";
+  imageSequenceRootPath.value = "";
+  imageSequencePageDigests.value = [];
   imageThumbnailCache.value = null;
   bookImportFileName.value = "";
   bookImportBytes.value = [];
@@ -2395,6 +2441,34 @@ function persistImageSequenceLocation() {
   } catch {
     // localStorage 不可用时保持当前会话位置，不阻断预览。
   }
+  void savePersistedImageSequenceProgress();
+}
+
+async function savePersistedImageSequenceProgress() {
+  const bookId = imageSequenceBookId.value;
+  const location = imageSequenceLocation.value;
+  if (!bookId || !location || !imageSequencePreview.value) return;
+
+  try {
+    const saved = await invoke<ImageSequenceRecordSummary>("save_image_sequence_progress", {
+      bookId,
+      currentPage: location.page_index,
+      zoom: location.zoom,
+      direction: location.direction,
+      spread: location.spread,
+    });
+    const bookIndex = books.value.findIndex((book) => book.id === saved.book_id);
+    if (bookIndex >= 0) {
+      books.value[bookIndex] = {
+        ...books.value[bookIndex],
+        current_chapter: saved.current_page,
+        progress: saved.progress,
+        updated_at: saved.updated_at,
+      };
+    }
+  } catch (error) {
+    errorMessage.value = "图片阅读进度保存失败：" + String(error);
+  }
 }
 
 function selectImageSequencePage(index: number) {
@@ -2488,7 +2562,7 @@ async function importImageSequence(files: File[]) {
     for (const file of files) {
       const raw = new Uint8Array(await file.arrayBuffer());
       pages.push({
-        file_name: file.name,
+        file_name: file.webkitRelativePath || file.name,
         bytes: Array.from(raw),
       });
       pageDigests.push(await digestBytes(raw));
@@ -2500,6 +2574,10 @@ async function importImageSequence(files: File[]) {
     });
     const cacheKey = await buildImageSequenceCacheKey(pageDigests, preview);
     imageSequenceInputs = pages;
+    imageSequencePageDigests.value = pageDigests;
+    imageSequenceBookTitle.value =
+      imageSequenceBookTitle.value.trim() ||
+      (files[0]?.name || "图片序列") + " 等 " + files.length + " 页";
     try {
       await cacheImageSequenceInputs(
         cacheKey,
@@ -2540,6 +2618,83 @@ async function importImageSequence(files: File[]) {
     status.value = "图片序列预览失败";
   } finally {
     isImporting.value = false;
+  }
+}
+
+async function saveImageSequenceToLibrary() {
+  const preview = imageSequencePreview.value;
+  const location = imageSequenceLocation.value;
+  const rootPath = imageSequenceRootPath.value.trim();
+  if (!preview || !location || !imageSequenceInputs.length) {
+    errorMessage.value = "请先选择并验证图片序列";
+    return;
+  }
+  if (!rootPath) {
+    errorMessage.value = "请填写图片根目录绝对路径";
+    return;
+  }
+  if (imageSequencePageDigests.value.length !== preview.pages.length) {
+    errorMessage.value = "图片摘要尚未完成，请重新导入图片序列";
+    return;
+  }
+  if (imageCacheBusy.value) {
+    errorMessage.value = "请等待缩略图缓存任务结束";
+    return;
+  }
+
+  const title = imageSequenceBookTitle.value.trim() || "未命名图片序列";
+  status.value = "正在保存图片序列到书架…";
+  errorMessage.value = "";
+  try {
+    const saved = await invoke<ImageSequenceRecordSummary>("save_image_sequence", {
+      write: {
+        book_id: null,
+        title,
+        author: null,
+        root_path: rootPath,
+        cache_key: location.cache_key,
+        direction: preview.direction,
+        spread: preview.spread,
+        page_count: preview.page_count,
+        total_pixels: preview.total_pixels,
+        total_decoded_bytes: preview.total_decoded_bytes,
+        current_page: location.page_index,
+        zoom: location.zoom,
+        pages: preview.pages.map((page, index) => ({
+          page_index: page.index,
+          relative_path: page.file_name,
+          file_size: imageSequenceInputs[index]?.bytes.length ?? 0,
+          modified_at_ns: null,
+          content_digest: imageSequencePageDigests.value[index] || null,
+          digest_version: 1,
+          mime: page.mime,
+          width: page.width,
+          height: page.height,
+        })),
+      },
+    });
+    imageSequenceBookId.value = saved.book_id;
+    imageSequenceBookTitle.value = saved.title;
+    imageSequenceRootPath.value = saved.root_path;
+    imageSequenceLocation.value = {
+      ...location,
+      page_index: saved.current_page,
+      zoom: saved.zoom,
+      direction: saved.direction === "rtl" || saved.direction === "vertical"
+        ? saved.direction
+        : "ltr",
+      spread: saved.spread === "double" || saved.spread === "long_strip"
+        ? saved.spread
+        : "single",
+    };
+    imageSequenceDirection.value = imageSequenceLocation.value.direction;
+    imageSequenceSpread.value = imageSequenceLocation.value.spread;
+    persistImageSequenceLocation();
+    await loadBooks();
+    status.value = "图片序列已保存到书架，之后可从书架恢复阅读";
+  } catch (error) {
+    errorMessage.value = "保存图片序列失败：" + String(error);
+    status.value = "图片序列保存失败";
   }
 }
 
@@ -2656,9 +2811,68 @@ async function importFile(event: Event) {
   }
 }
 
+async function openPersistedImageSequenceBook(bookId: string) {
+  const loaded = await invoke<ImageSequenceRecordDetail>("get_image_sequence", { bookId });
+  const sequence = loaded.sequence;
+  const direction: ImageReadingDirection =
+    sequence.direction === "rtl" || sequence.direction === "vertical"
+      ? sequence.direction
+      : "ltr";
+  const spread: ImageSpreadMode =
+    sequence.spread === "double" || sequence.spread === "long_strip"
+      ? sequence.spread
+      : "single";
+
+  resetBookImportPreview();
+  imageSequenceBookId.value = sequence.book_id;
+  imageSequenceBookTitle.value = sequence.title;
+  imageSequenceRootPath.value = sequence.root_path;
+  imageSequenceDirection.value = direction;
+  imageSequenceSpread.value = spread;
+  imageSequencePreview.value = {
+    direction,
+    spread,
+    page_count: sequence.page_count,
+    total_pixels: sequence.total_pixels,
+    total_decoded_bytes: sequence.total_decoded_bytes,
+    pages: loaded.pages.map((page) => ({
+      index: page.page_index,
+      file_name: page.relative_path,
+      mime: page.mime,
+      width: page.width,
+      height: page.height,
+      decoded_bytes: page.file_size,
+    })),
+  };
+  imageSequenceLocation.value = {
+    cache_key: sequence.cache_key,
+    page_index: sequence.current_page,
+    zoom: Math.min(Math.max(sequence.zoom, 0.5), 3),
+    direction,
+    spread,
+  };
+  bookImportFileName.value = sequence.title;
+  imageSequenceUrls.value = [];
+  imageSequencePageDigests.value = loaded.pages.map((page) => page.content_digest || "");
+  detail.value = null;
+  chapter.value = null;
+  view.value = "library";
+  errorMessage.value = "";
+  status.value = sequence.state === "ready"
+    ? "已从书架恢复图片序列，可继续阅读"
+    : "图片序列已恢复，但文件状态为 " + sequence.state + "，后续需要重新关联目录";
+  await loadImageSequenceThumbnails(
+    imageSequenceAdjacentPageIndices(sequence.current_page, sequence.page_count),
+  );
+}
+
 async function openBook(bookId: string) {
   try {
     const loaded = await invoke<BookDetail>("get_book_detail", { bookId });
+    if (loaded.book.content_kind === "image_sequence") {
+      await openPersistedImageSequenceBook(bookId);
+      return;
+    }
     detail.value = loaded;
     view.value = "reader";
 
@@ -2952,6 +3166,24 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         </div>
         <div class="book-import-preview-controls image-sequence-controls">
           <label class="book-import-preview-field">
+            <span>书架标题</span>
+            <input
+              v-model="imageSequenceBookTitle"
+              :disabled="Boolean(imageSequenceBookId)"
+              type="text"
+              placeholder="例如：我的漫画"
+            />
+          </label>
+          <label class="book-import-preview-field">
+            <span>图片根目录（绝对路径）</span>
+            <input
+              v-model="imageSequenceRootPath"
+              :disabled="Boolean(imageSequenceBookId)"
+              type="text"
+              placeholder="例如：C:/Books/MyComic"
+            />
+          </label>
+          <label class="book-import-preview-field">
             <span>阅读方向</span>
             <select v-model="imageSequenceDirection" @change="updateImageSequenceLayout">
               <option value="ltr">从左到右</option>
@@ -3015,9 +3247,26 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           </figure>
         </div>
         <div class="book-import-preview-actions">
-          <span>位置和缩略图会按内容摘要键保存在本机；当前仍是只读预览，当前页及相邻页会优先从磁盘缓存恢复。</span>
+          <span v-if="imageSequenceBookId">已恢复书架记录；当前目录仍按保存的绝对路径展示，文件变化检测与重新关联将在下一阶段加入。</span>
+          <span v-else>填写图片根目录绝对路径后保存到书架；位置和缩略图会按内容摘要键保存在本机。</span>
+          <button
+            v-if="!imageSequenceBookId"
+            class="text-button"
+            type="button"
+            :disabled="imageCacheBusy || isImporting || !imageSequenceRootPath.trim()"
+            @click="saveImageSequenceToLibrary"
+          >
+            保存到书架
+          </button>
           <button v-if="imageCacheBusy" class="text-button" type="button" @click="cancelImageCache">取消缓存</button>
-          <button v-else-if="imageSequencePreview" class="text-button" type="button" @click="retryImageSequenceCache">重试缓存</button>
+          <button
+            v-else-if="imageSequenceInputs.length"
+            class="text-button"
+            type="button"
+            @click="retryImageSequenceCache"
+          >
+            重试缓存
+          </button>
           <button class="text-button" type="button" @click="cancelBookImportPreview">关闭预览</button>
         </div>
       </section>
