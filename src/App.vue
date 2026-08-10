@@ -98,6 +98,23 @@ interface ImageReadingLocation {
   spread: ImageSpreadMode;
 }
 
+interface ImageThumbnailCacheEntry {
+  cache_key: string;
+  page_index: number;
+  byte_len: number;
+  cache_hit: boolean;
+}
+
+interface ImageThumbnailCacheSummary {
+  cache_key: string;
+  page_count: number;
+  cache_hits: number;
+  cache_writes: number;
+  evicted_files: number;
+  cache_bytes: number;
+  entries: ImageThumbnailCacheEntry[];
+}
+
 interface BookFormatProbe {
   format: string;
   support: BookFormatSupport;
@@ -549,6 +566,7 @@ const imageSequenceUrls = ref<string[]>([]);
 const imageSequenceDirection = ref<ImageReadingDirection>("ltr");
 const imageSequenceSpread = ref<ImageSpreadMode>("single");
 const imageSequenceLocation = ref<ImageReadingLocation | null>(null);
+const imageThumbnailCache = ref<ImageThumbnailCacheSummary | null>(null);
 const bookImportFileName = ref("");
 const bookImportBytes = ref<number[]>([]);
 const txtParseOptions = ref<TxtParseOptions>({
@@ -2090,6 +2108,7 @@ function resetBookImportPreview() {
   imageSequenceDirection.value = "ltr";
   imageSequenceSpread.value = "single";
   imageSequenceLocation.value = null;
+  imageThumbnailCache.value = null;
   bookImportFileName.value = "";
   bookImportBytes.value = [];
   txtParseOptions.value = {
@@ -2363,6 +2382,18 @@ async function importImageSequence(files: File[]) {
       spread: imageSequenceSpread.value,
     });
     const cacheKey = await buildImageSequenceCacheKey(pageDigests, preview);
+    try {
+      imageThumbnailCache.value = await invoke<ImageThumbnailCacheSummary>("cache_image_sequence", {
+        cacheKey,
+        pages,
+        direction: preview.direction,
+        spread: preview.spread,
+        forceRefresh: false,
+      });
+    } catch (error) {
+      imageThumbnailCache.value = null;
+      errorMessage.value = "缩略图缓存未写入：" + String(error);
+    }
     imageSequencePreview.value = preview;
     imageSequenceLocation.value = loadImageSequenceLocation(cacheKey, preview) ?? {
       cache_key: cacheKey,
@@ -2761,6 +2792,9 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <span>解码内存：{{ formatBytes(imageSequencePreview.total_decoded_bytes) }}</span>
           <span>已显示缩略图：{{ Math.min(imageSequencePreview.page_count, MAX_IMAGE_THUMBNAILS) }}</span>
           <span v-if="imageSequenceLocation">缓存键：{{ imageSequenceLocation.cache_key.slice(0, 16) }}…</span>
+          <span v-if="imageThumbnailCache">
+            磁盘缓存：命中 {{ imageThumbnailCache.cache_hits }} 页、写入 {{ imageThumbnailCache.cache_writes }} 页 · {{ formatBytes(imageThumbnailCache.cache_bytes) }}
+          </span>
         </div>
         <div class="book-import-preview-controls image-sequence-controls">
           <label class="book-import-preview-field">
@@ -2827,7 +2861,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           </figure>
         </div>
         <div class="book-import-preview-actions">
-          <span>位置会按内容摘要缓存键保存在本机；当前仍是只读预览，不写入书架，持久化文件缓存将在下一阶段接入。</span>
+          <span>位置和缩略图会按内容摘要键保存在本机；当前仍是只读预览，不写入书架，取消/重试将在后续小阶段完善。</span>
           <button class="text-button" type="button" @click="cancelBookImportPreview">关闭预览</button>
         </div>
       </section>
