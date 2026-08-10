@@ -671,7 +671,7 @@ impl Database {
                     "重新关联预览已过期，请重新扫描".to_string(),
                 ));
             }
-            let Some(new_relative_path) = assignment.new_relative_path else {
+            let Some(new_relative_path) = assignment.new_relative_path.clone() else {
                 continue;
             };
             let new_relative_path = normalize_relative_image_path(&new_relative_path)
@@ -720,7 +720,7 @@ impl Database {
         }
 
         let root_display_name = new_root_path
-            .rsplit(['/', '\\\\'])
+            .rsplit(['/', '\\'])
             .find(|value| !value.is_empty())
             .unwrap_or(new_root_path.as_str());
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
