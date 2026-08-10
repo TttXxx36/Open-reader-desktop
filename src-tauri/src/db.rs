@@ -14,7 +14,7 @@ use crate::{
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std{
+use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
