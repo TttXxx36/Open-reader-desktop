@@ -530,9 +530,7 @@ impl Database {
     pub fn get_book_cover(&self, book_id: &str) -> Result<Option<BookCoverSummary>, DbError> {
         let book_id = book_id.trim();
         if book_id.is_empty() {
-            return Err(DbError::InvalidBookMetadata(
-                "书籍 ID 不能为空".to_string(),
-            ));
+            return Err(DbError::InvalidBookMetadata("书籍 ID 不能为空".to_string()));
         }
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         connection
@@ -551,18 +549,18 @@ impl Database {
     pub fn save_book_cover(&self, write: BookCoverWrite) -> Result<BookCoverSummary, DbError> {
         let book_id = write.book_id.trim();
         if book_id.is_empty() {
-            return Err(DbError::InvalidBookMetadata(
-                "书籍 ID 不能为空".to_string(),
-            ));
+            return Err(DbError::InvalidBookMetadata("书籍 ID 不能为空".to_string()));
         }
 
         let source = normalize_cover_source(write.source_kind, &write.source_value)
             .map_err(|error| DbError::InvalidBookMetadata(format!("封面来源无效：{error}")))?;
-        let fingerprint = write.source_fingerprint.unwrap_or_default().trim().to_string();
+        let fingerprint = write
+            .source_fingerprint
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if fingerprint.len() > 512 || fingerprint.chars().any(|character| character.is_control()) {
-            return Err(DbError::InvalidBookMetadata(
-                "封面校验信息无效".to_string(),
-            ));
+            return Err(DbError::InvalidBookMetadata("封面校验信息无效".to_string()));
         }
         let cache_key = cover_cache_key(&source, Some(&fingerprint))
             .map_err(|error| DbError::InvalidBookMetadata(format!("封面缓存键无效：{error}")))?;
