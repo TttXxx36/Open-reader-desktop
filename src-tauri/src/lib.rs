@@ -1,4 +1,5 @@
 mod cover;
+mod cover_cache;
 mod db;
 mod image_relink;
 mod image_sequence;
