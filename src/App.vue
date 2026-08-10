@@ -616,6 +616,10 @@ const imageSequenceBookId = ref<string | null>(null);
 const imageSequenceBookTitle = ref("");
 const imageSequenceRootPath = ref("");
 const imageSequencePageDigests = ref<string[]>([]);
+const imageSequenceRecordState = ref("");
+const imageSequenceReadyPages = ref(0);
+const imageSequenceMissingPages = ref(0);
+const imageSequenceStalePages = ref(0);
 const imageThumbnailCache = ref<ImageThumbnailCacheSummary | null>(null);
 const imageCacheBusy = ref(false);
 const imageCacheOperationId = ref<string | null>(null);
@@ -2171,6 +2175,10 @@ function resetBookImportPreview() {
   imageSequenceBookTitle.value = "";
   imageSequenceRootPath.value = "";
   imageSequencePageDigests.value = [];
+  imageSequenceRecordState.value = "";
+  imageSequenceReadyPages.value = 0;
+  imageSequenceMissingPages.value = 0;
+  imageSequenceStalePages.value = 0;
   imageThumbnailCache.value = null;
   bookImportFileName.value = "";
   bookImportBytes.value = [];
@@ -2516,6 +2524,26 @@ function imageSpreadLabel(spread: ImageSpreadMode) {
   return spread === "double" ? "双页" : spread === "long_strip" ? "长图" : "单页";
 }
 
+function imageSequenceStateLabel(state: string) {
+  if (state === "needs_relink") return "目录需要重新关联";
+  if (state === "missing") return "存在缺失页";
+  if (state === "stale") return "检测到文件变化";
+  if (state === "ready") return "文件状态正常";
+  return "尚未检测";
+}
+
+function imageSequencePageStateCounts(pages: ImageSequenceRecordPage[]) {
+  return pages.reduce(
+    (counts, page) => {
+      if (page.state === "missing") counts.missing += 1;
+      else if (page.state === "stale") counts.stale += 1;
+      else counts.ready += 1;
+      return counts;
+    },
+    { ready: 0, missing: 0, stale: 0 },
+  );
+}
+
 function updateImageSequenceLayout() {
   if (!imageSequencePreview.value) return;
   imageSequencePreview.value = {
@@ -2676,6 +2704,10 @@ async function saveImageSequenceToLibrary() {
     imageSequenceBookId.value = saved.book_id;
     imageSequenceBookTitle.value = saved.title;
     imageSequenceRootPath.value = saved.root_path;
+    imageSequenceRecordState.value = saved.state;
+    imageSequenceReadyPages.value = preview.page_count;
+    imageSequenceMissingPages.value = 0;
+    imageSequenceStalePages.value = 0;
     imageSequenceLocation.value = {
       ...location,
       page_index: saved.current_page,
@@ -2812,8 +2844,9 @@ async function importFile(event: Event) {
 }
 
 async function openPersistedImageSequenceBook(bookId: string) {
-  const loaded = await invoke<ImageSequenceRecordDetail>("get_image_sequence", { bookId });
+  const loaded = await invoke<ImageSequenceRecordDetail>("refresh_image_sequence_state", { bookId });
   const sequence = loaded.sequence;
+  const pageStateCounts = imageSequencePageStateCounts(loaded.pages);
   const direction: ImageReadingDirection =
     sequence.direction === "rtl" || sequence.direction === "vertical"
       ? sequence.direction
@@ -2827,6 +2860,10 @@ async function openPersistedImageSequenceBook(bookId: string) {
   imageSequenceBookId.value = sequence.book_id;
   imageSequenceBookTitle.value = sequence.title;
   imageSequenceRootPath.value = sequence.root_path;
+  imageSequenceRecordState.value = sequence.state;
+  imageSequenceReadyPages.value = pageStateCounts.ready;
+  imageSequenceMissingPages.value = pageStateCounts.missing;
+  imageSequenceStalePages.value = pageStateCounts.stale;
   imageSequenceDirection.value = direction;
   imageSequenceSpread.value = spread;
   imageSequencePreview.value = {
@@ -3156,6 +3193,9 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <span>总像素：{{ imageSequencePreview.total_pixels.toLocaleString() }}</span>
           <span>解码内存：{{ formatBytes(imageSequencePreview.total_decoded_bytes) }}</span>
           <span>已显示缩略图：{{ Math.min(imageSequencePreview.page_count, MAX_IMAGE_THUMBNAILS) }}</span>
+          <span v-if="imageSequenceBookId">
+            原文件：{{ imageSequenceStateLabel(imageSequenceRecordState) }} · 可用 {{ imageSequenceReadyPages }} 页 · 变化 {{ imageSequenceStalePages }} 页 · 缺失 {{ imageSequenceMissingPages }} 页
+          </span>
           <span v-if="imageSequenceLocation">缓存键：{{ imageSequenceLocation.cache_key.slice(0, 16) }}…</span>
           <span v-if="imageThumbnailCache">
             磁盘缓存：命中 {{ imageThumbnailCache.cache_hits }} 页、写入 {{ imageThumbnailCache.cache_writes }} 页 · {{ formatBytes(imageThumbnailCache.cache_bytes) }}
@@ -3247,7 +3287,9 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           </figure>
         </div>
         <div class="book-import-preview-actions">
-          <span v-if="imageSequenceBookId">已恢复书架记录；当前目录仍按保存的绝对路径展示，文件变化检测与重新关联将在下一阶段加入。</span>
+          <span v-if="imageSequenceBookId">
+            已恢复书架记录：{{ imageSequenceStateLabel(imageSequenceRecordState) }}；当前目录仍按保存的绝对路径展示，重新关联将在下一阶段加入。
+          </span>
           <span v-else>填写图片根目录绝对路径后保存到书架；位置和缩略图会按内容摘要键保存在本机。</span>
           <button
             v-if="!imageSequenceBookId"
