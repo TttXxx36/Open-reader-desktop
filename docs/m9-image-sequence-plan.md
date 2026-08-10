@@ -106,6 +106,17 @@ M9.3 首切片已完成，并由 main CI run [31385269180](https://github.com/Tt
 
 本切片只覆盖可自动化验证的查询与单本编辑基础；真实 Windows 安装版/便携版中的中文路径、UNC 路径、目录重新关联取消交互和断目录恢复仍属于独立手工验收项，不能用 CI 代替。
 
+### M9.3 批量元数据首切片
+
+批量书架治理的首个可验收切片已完成，最终提交 [a15683ede69e4f408dc3b217d7f8bd09be572722](https://github.com/TttXxx36/Open-reader-desktop/commit/a15683ede69e4f408dc3b217d7f8bd09be572722) 对应 main CI run [31388184266](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388184266)：
+
+- Rust 数据库层新增 `BookMetadataBatchWrite` 和事务化批量更新；书籍 ID 去重并限制单次最多 256 本，分组/标签沿用单本编辑的长度、数量和去重校验；
+- 批量更新支持只改分组或只改标签，空分组/空标签可主动清空；任意书籍不存在或写入失败都会回滚整批事务；
+- Tauri 新增 `update_books_metadata` 命令；前端书架支持多选、当前筛选结果全选/取消全选、批量分组和标签编辑，并在刷新列表后保留可见选择；
+- 前端 typecheck/build、UI 契约、Rust fmt/check/tests 和 Windows 编译/峰值内存采样均已通过。
+
+基于该提交的 Windows Release run [31388689695](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695) 已生成安装版、便携版和 SHA-256 清单，artifact [9063016672](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695#artifacts)，artifact 摘要为 `sha256:be69fe9375574afa7e4db529039fae0699e2a3497200e6408d38ebadd2d11232`；installer smoke run [31389443472](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31389443472) 已通过产物校验、便携版启动、NSIS/MSI 安装卸载和数据保留自动化检查。真实 Windows 手工升级、WebView2、中文/UNC 路径和目录恢复交互仍需用户环境补验。
+
 ## 后续顺序
 
-M9.2 的自动化切片已完成；Windows release run [31381532400](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400) 已在 `main` 生成安装版、便携版和 `release-sha256.txt`，artifact [9060259690](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31381532400#artifacts) 摘要为 `sha256:8b614c668724378694081954d5a2b201a65d8404ea1646760fc83a5fe864e2b8`。M9.3 首切片（分组、标签、筛选、排序和单本编辑）已由上述 main CI 验证；真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、取消交互、断目录后的状态恢复）仍待用户在目标环境完成并保存记录。之后继续 M9.3 的批量操作、封面缓存策略和重复书合并，再按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
+M9.2 的自动化切片已完成；最新 Windows release run [31388689695](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695) 已在 `main` 生成包含 M9.3 批量元数据首切片的安装版、便携版和 `release-sha256.txt`，artifact [9063016672](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695#artifacts) 摘要为 `sha256:be69fe9375574afa7e4db529039fae0699e2a3497200e6408d38ebadd2d11232`；installer smoke run [31389443472](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31389443472) 已通过自动化安装/卸载和启动检查。M9.3 已完成查询/单本编辑与批量分组/标签首切片；真实 Windows 手工验收（安装包/便携版、中文与 UNC 路径、升级、取消交互、断目录后的状态恢复）仍待用户在目标环境完成并保存记录。之后继续 M9.3 的封面缓存策略和重复书合并，再按路线图进入 M10 备份恢复。任何需要原生目录选择器或 Windows 手工 UI 验收的工作，都先补充对应 CI 产物和验收记录。
