@@ -1,4 +1,5 @@
 use crate::{
+    image_relink::{preview_relink, ImageRelinkAssignment, ImageRelinkPreview, RelinkPage},
     image_sequence::{
         modified_at_ns, normalize_relative_image_path, resolve_image_page_path,
         validate_image_root_path,
@@ -9,6 +10,7 @@ use crate::{
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -610,6 +612,205 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(ImageSequenceDetail { sequence, pages })
+    }
+
+    pub fn preview_image_sequence_relink(
+        &self,
+        book_id: &str,
+        new_root_path: &str,
+    ) -> Result<ImageRelinkPreview, DbError> {
+        let detail = self.get_image_sequence(book_id)?;
+        let pages = detail
+            .pages
+            .iter()
+            .map(|page| RelinkPage {
+                page_index: page.page_index,
+                relative_path: page.relative_path.clone(),
+                file_size: page.file_size,
+            })
+            .collect::<Vec<_>>();
+        preview_relink(
+            book_id,
+            &detail.sequence.root_path,
+            new_root_path,
+            &pages,
+        )
+        .map_err(DbError::InvalidImageSequence)
+    }
+
+    pub fn apply_image_sequence_relink(
+        &self,
+        book_id: &str,
+        new_root_path: &str,
+        assignments: Vec<ImageRelinkAssignment>,
+    ) -> Result<ImageSequenceDetail, DbError> {
+        let detail = self.get_image_sequence(book_id)?;
+        let new_root_path = validate_image_root_path(new_root_path)
+            .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
+        if !fs::metadata(&new_root_path)
+            .map(|metadata| metadata.is_dir())
+            .unwrap_or(false)
+        {
+            return Err(DbError::InvalidImageSequence(
+                "新图片根目录不存在或不是目录".to_string(),
+            ));
+        }
+
+        let pages_by_index = detail
+            .pages
+            .iter()
+            .map(|page| (page.page_index, page))
+            .collect::<HashMap<_, _>>();
+        let mut updates = HashMap::new();
+        for assignment in assignments {
+            let page = pages_by_index.get(&assignment.page_index).ok_or_else(|| {
+                DbError::InvalidImageSequence("重新关联包含未知页码".to_string())
+            })?;
+            if page.relative_path != assignment.old_relative_path {
+                return Err(DbError::InvalidImageSequence(
+                    "重新关联预览已过期，请重新扫描".to_string(),
+                ));
+            }
+            let Some(new_relative_path) = assignment.new_relative_path else {
+                continue;
+            };
+            let new_relative_path = normalize_relative_image_path(&new_relative_path)
+                .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
+            let new_path = resolve_image_page_path(&new_root_path, &new_relative_path)
+                .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
+            let metadata = fs::metadata(new_path)
+                .ok()
+                .filter(|metadata| metadata.is_file())
+                .ok_or_else(|| {
+                    DbError::InvalidImageSequence(
+                        "重新关联期间有图片已消失，请重新扫描".to_string(),
+                    )
+                })?;
+            let observed_size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
+            if observed_size != assignment.file_size {
+                return Err(DbError::InvalidImageSequence(
+                    "重新关联期间图片大小发生变化，请重新扫描".to_string(),
+                ));
+            }
+            let observed_modified_at_ns = modified_at_ns(&metadata);
+            let state = if assignment.match_kind == "relative"
+                && observed_size == page.file_size
+                && page.modified_at_ns == observed_modified_at_ns
+            {
+                "ready"
+            } else {
+                "stale"
+            };
+            if updates
+                .insert(
+                    assignment.page_index,
+                    (new_relative_path, observed_size, observed_modified_at_ns, state),
+                )
+                .is_some()
+            {
+                return Err(DbError::InvalidImageSequence(
+                    "重新关联包含重复页码".to_string(),
+                ));
+            }
+        }
+        if updates.is_empty() {
+            return Err(DbError::InvalidImageSequence(
+                "没有可重新关联的图片".to_string(),
+            ));
+        }
+
+        let root_display_name = new_root_path
+            .rsplit(['/', '\\\\'])
+            .find(|value| !value.is_empty())
+            .unwrap_or(new_root_path.as_str());
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        let root_id: Option<String> = transaction
+            .query_row(
+                "SELECT id FROM library_roots WHERE root_path = ?1",
+                params![new_root_path.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let root_id = root_id.unwrap_or_else(|| generated_id("library-root"));
+        transaction.execute(
+            "INSERT INTO library_roots
+                (id, display_name, root_path, state, last_verified_at)
+             VALUES (?1, ?2, ?3, 'available', CURRENT_TIMESTAMP)
+             ON CONFLICT(root_path) DO UPDATE SET
+                display_name = excluded.display_name,
+                state = 'available',
+                updated_at = CURRENT_TIMESTAMP,
+                last_verified_at = CURRENT_TIMESTAMP",
+            params![root_id.as_str(), root_display_name, new_root_path.as_str()],
+        )?;
+        let root_id: String = transaction.query_row(
+            "SELECT id FROM library_roots WHERE root_path = ?1",
+            params![new_root_path.as_str()],
+            |row| row.get(0),
+        )?;
+
+        let mut missing_pages = 0_i64;
+        let mut stale_pages = 0_i64;
+        for page in &detail.pages {
+            if let Some((relative_path, file_size, modified_at_ns, state)) =
+                updates.get(&page.page_index)
+            {
+                if *state == "stale" {
+                    stale_pages += 1;
+                }
+                transaction.execute(
+                    "UPDATE image_sequence_pages
+                     SET relative_path = ?1, file_size = ?2, modified_at_ns = ?3, state = ?4
+                     WHERE sequence_id = ?5 AND page_index = ?6",
+                    params![
+                        relative_path,
+                        file_size,
+                        modified_at_ns,
+                        state,
+                        book_id,
+                        page.page_index,
+                    ],
+                )?;
+            } else {
+                missing_pages += 1;
+                transaction.execute(
+                    "UPDATE image_sequence_pages
+                     SET state = 'missing'
+                     WHERE sequence_id = ?1 AND page_index = ?2",
+                    params![book_id, page.page_index],
+                )?;
+            }
+        }
+        let sequence_state = if missing_pages > 0 {
+            "missing"
+        } else if stale_pages > 0 {
+            "stale"
+        } else {
+            "ready"
+        };
+        transaction.execute(
+            "UPDATE library_roots
+             SET state = 'available', updated_at = CURRENT_TIMESTAMP,
+                 last_verified_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            params![root_id.as_str()],
+        )?;
+        transaction.execute(
+            "UPDATE books
+             SET path = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![new_root_path.as_str(), book_id],
+        )?;
+        transaction.execute(
+            "UPDATE image_sequences
+             SET root_id = ?1, state = ?2, updated_at = CURRENT_TIMESTAMP
+             WHERE book_id = ?3",
+            params![root_id.as_str(), sequence_state, book_id],
+        )?;
+        transaction.commit()?;
+        drop(connection);
+        self.get_image_sequence(book_id)
     }
 
     pub fn refresh_image_sequence_state(
