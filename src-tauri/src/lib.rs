@@ -1945,6 +1945,7 @@ pub fn run() {
             get_image_sequence,
             save_image_sequence,
             refresh_image_sequence_state,
+            verify_image_sequence_digests,
             preview_image_sequence_relink,
             apply_image_sequence_relink,
             save_image_sequence_progress,
