@@ -1258,6 +1258,34 @@ async function previewDuplicateMerge(group: DuplicateBookGroup, canonicalBookId:
   }
 }
 
+async function revalidateDuplicateMerge() {
+  const current = duplicatePreview.value;
+  if (!current || duplicatePreviewBusy.value) return;
+  duplicatePreviewBusy.value = true;
+  errorMessage.value = "";
+  try {
+    duplicatePreview.value = await invoke<BookMergePreview>("revalidate_book_merge_preview", {
+      request: {
+        preview: {
+          book_ids: current.books.map((book) => book.id),
+          canonical_book_id: current.canonical_book_id,
+        },
+        preview_id: current.preview_id,
+        created_at: current.created_at,
+        expires_at: current.expires_at,
+        input_fingerprint: current.input_fingerprint,
+      },
+    });
+    status.value = "重复书合并预览已重新验证，尚未修改任何数据";
+  } catch (error) {
+    duplicatePreview.value = null;
+    errorMessage.value = "重新验证合并预览失败：" + String(error);
+    status.value = "合并预览已失效，请重新生成";
+  } finally {
+    duplicatePreviewBusy.value = false;
+  }
+}
+
 function clearDuplicatePreview() {
   duplicatePreview.value = null;
 }
@@ -3729,6 +3757,14 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
               <span class="eyebrow">MERGE PREVIEW</span>
               <h3>只读合并预览</h3>
             </div>
+            <button
+              class="text-button"
+              type="button"
+              :disabled="duplicatePreviewBusy"
+              @click="revalidateDuplicateMerge"
+            >
+              {{ duplicatePreviewBusy ? "验证中…" : "重新验证" }}
+            </button>
             <button class="text-button" type="button" @click="clearDuplicatePreview">关闭</button>
           </div>
           <p class="duplicate-preview-note">
