@@ -137,7 +137,8 @@ M9.3 的查询、单本编辑、批量元数据和重复候选只读预览已经
 - 重复书合并要求用户显式选择保留项，先生成带输入指纹和过期时间的预览；任何章节、进度、分组/标签、封面或图片序列冲突默认阻止提交；
 - 后续迁移将保留原始书籍和章节，通过归档状态、别名和操作快照实现事务及 7 天撤销；在模型和纯读取预览通过前，不执行删除或自动覆盖；
 - 9.3.1-a 已完成首个纯函数切片：`src-tauri/src/cover.rs` 负责本地/远程封面来源规范化和版本化缓存键，提交 [91bc285d654568b942fbcc59e779c6efb43ea79d](https://github.com/TttXxx36/Open-reader-desktop/commit/91bc285d654568b942fbcc59e779c6efb43ea79d) 对应 CI run [31394712988](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31394712988) 已通过；仍未创建迁移或执行网络/合并写入；
-- 9.3.1-b/c/d/e 分别对应封面缓存首切片、合并预览、事务合并/撤销和真实 Windows 验收，完成一阶段才进入下一阶段。
+- 9.3.1-b 已完成缓存文件层首切片：`src-tauri/src/cover_cache.rs` 提供 8 MiB 单文件、256 MiB 总量、有界读取、临时文件清理、原子安装和最旧项清理，提交 [31126216e1372fae54c3c5ac3507be0e8c7b0e5d](https://github.com/TttXxx36/Open-reader-desktop/commit/31126216e1372fae54c3c5ac3507be0e8c7b0e5d) 对应 CI run [31396383467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31396383467) 已通过；数据库迁移、封面状态查询和书架占位图仍待接入；
+- 9.3.1-c/d/e 分别对应重复合并预览、事务合并/撤销和真实 Windows 验收，完成一阶段才进入下一阶段。
 
 ## 后续顺序
 
