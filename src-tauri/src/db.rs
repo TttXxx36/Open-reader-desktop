@@ -480,10 +480,7 @@ impl Database {
         self.get_book_summary(&book_id)
     }
 
-    pub fn update_book_metadata(
-        &self,
-        write: BookMetadataWrite,
-    ) -> Result<BookSummary, DbError> {
+    pub fn update_book_metadata(&self, write: BookMetadataWrite) -> Result<BookSummary, DbError> {
         let shelf_group = write.shelf_group.trim();
         if shelf_group.len() > 128 {
             return Err(DbError::InvalidBookMetadata(
@@ -3313,26 +3310,14 @@ mod tests {
                 .execute(
                     "INSERT INTO books (id, title, author, path, format)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        "book-alpha",
-                        "阿尔法",
-                        "作者甲",
-                        "alpha.txt",
-                        "txt"
-                    ],
+                    params!["book-alpha", "阿尔法", "作者甲", "alpha.txt", "txt"],
                 )
                 .expect("alpha book should insert");
             connection
                 .execute(
                     "INSERT INTO books (id, title, author, path, format)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        "book-beta",
-                        "贝塔",
-                        "作者乙",
-                        "beta.txt",
-                        "txt"
-                    ],
+                    params!["book-beta", "贝塔", "作者乙", "beta.txt", "txt"],
                 )
                 .expect("beta book should insert");
         }
@@ -3348,10 +3333,7 @@ mod tests {
             .expect("alpha metadata should save");
         assert_eq!(alpha.shelf_group, "收藏");
         assert_eq!(alpha.tags, vec!["奇幻".to_string(), "已读".to_string()]);
-        assert_eq!(
-            alpha.cover_path.as_deref(),
-            Some("C:/covers/alpha.png")
-        );
+        assert_eq!(alpha.cover_path.as_deref(), Some("C:/covers/alpha.png"));
 
         database
             .update_book_metadata(BookMetadataWrite {
@@ -3383,7 +3365,10 @@ mod tests {
             })
             .expect("sorted books should list");
         assert_eq!(
-            sorted.iter().map(|book| book.id.as_str()).collect::<Vec<_>>(),
+            sorted
+                .iter()
+                .map(|book| book.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["book-beta", "book-alpha"]
         );
 
@@ -3399,5 +3384,4 @@ mod tests {
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
-
 }
