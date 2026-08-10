@@ -6,8 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::HashMap,
-    io::{Cursor, Read, Seek},
-    path::Path,
+    fs::{self, OpenOptions},
+    io::{Cursor, Read, Seek, Write},
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
 use zip::ZipArchive;
@@ -496,6 +498,302 @@ pub fn build_image_sequence_preview(
         total_pixels,
         total_decoded_bytes,
         pages: sequence_pages,
+    })
+}
+
+
+pub const MAX_IMAGE_THUMBNAIL_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_IMAGE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_IMAGE_THUMBNAIL_DIMENSION: u32 = 1_600;
+const IMAGE_CACHE_KEY_PREFIX: &str = "imgseq-v1-";
+const PNG_SIGNATURE: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageThumbnailCacheEntry {
+    pub cache_key: String,
+    pub page_index: usize,
+    pub byte_len: u64,
+    pub cache_hit: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageThumbnailCacheSummary {
+    pub cache_key: String,
+    pub page_count: usize,
+    pub cache_hits: usize,
+    pub cache_writes: usize,
+    pub evicted_files: usize,
+    pub cache_bytes: u64,
+    pub entries: Vec<ImageThumbnailCacheEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedImageFile {
+    path: PathBuf,
+    size: u64,
+    modified: SystemTime,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ImageCachePruneResult {
+    remaining_bytes: u64,
+    evicted_files: usize,
+}
+
+fn is_safe_image_cache_key(cache_key: &str) -> bool {
+    let Some(suffix) = cache_key.strip_prefix(IMAGE_CACHE_KEY_PREFIX) else {
+        return false;
+    };
+    (8..=64).contains(&suffix.len())
+        && suffix.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'
+            )
+        })
+}
+
+fn cached_thumbnail_size(path: &Path) -> Result<Option<u64>, ImportError> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(ImportError::Io(error)),
+    };
+    let size = metadata.len();
+    if size == 0 || size > MAX_IMAGE_THUMBNAIL_BYTES {
+        return Ok(None);
+    }
+
+    let mut file = fs::File::open(path)?;
+    let mut signature = [0_u8; PNG_SIGNATURE.len()];
+    if file.read_exact(&mut signature).is_err() || signature != PNG_SIGNATURE {
+        return Ok(None);
+    }
+
+    Ok(Some(size))
+}
+
+fn encode_image_thumbnail(file_name: &str, bytes: &[u8]) -> Result<Vec<u8>, ImportError> {
+    preview_image_bytes(file_name, bytes)?;
+
+    let mut reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| ImportError::InvalidImage(format!("无法识别图片格式：{error}")))?;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_IMAGE_DECODED_BYTES);
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
+        .map_err(|error| ImportError::InvalidImage(format!("图片缩略图解码失败：{error}")))?;
+    let thumbnail = decoded.thumbnail(
+        MAX_IMAGE_THUMBNAIL_DIMENSION,
+        MAX_IMAGE_THUMBNAIL_DIMENSION,
+    );
+
+    let mut output = Cursor::new(Vec::new());
+    thumbnail
+        .write_to(&mut output, image::ImageFormat::Png)
+        .map_err(|error| ImportError::InvalidImage(format!("图片缩略图编码失败：{error}")))?;
+    let encoded = output.into_inner();
+    if encoded.len() as u64 > MAX_IMAGE_THUMBNAIL_BYTES {
+        return Err(ImportError::InvalidImage(format!(
+            "{file_name}: 缩略图超过 {} MiB 上限",
+            MAX_IMAGE_THUMBNAIL_BYTES / (1024 * 1024)
+        )));
+    }
+    Ok(encoded)
+}
+
+fn write_thumbnail_atomically(path: &Path, bytes: &[u8]) -> Result<(), ImportError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| ImportError::InvalidImage("缩略图缓存路径无父目录".to_string()))?;
+    fs::create_dir_all(parent)?;
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| ImportError::Io(std::io::Error::other(error)))?
+        .as_nanos();
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("thumbnail"),
+        std::process::id(),
+        nonce
+    ));
+
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+
+        // Cache keys are content-derived. A normal write installs into an absent target
+        // atomically; invalidation removes a corrupt target before this function is called.
+        fs::rename(&temp_path, path)?;
+        Ok::<(), std::io::Error>(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result.map_err(ImportError::Io)
+}
+
+fn prune_image_thumbnail_cache(
+    root: &Path,
+    max_bytes: u64,
+) -> Result<ImageCachePruneResult, ImportError> {
+    if !root.exists() {
+        return Ok(ImageCachePruneResult::default());
+    }
+
+    let mut files = Vec::new();
+    for cache_dir in fs::read_dir(root)? {
+        let cache_dir = cache_dir?;
+        if !cache_dir.file_type()?.is_dir() {
+            continue;
+        }
+        for file in fs::read_dir(cache_dir.path())? {
+            let file = file?;
+            if !file.file_type()?.is_file() {
+                continue;
+            }
+            let metadata = file.metadata()?;
+            files.push(CachedImageFile {
+                path: file.path(),
+                size: metadata.len(),
+                modified: metadata.modified().unwrap_or(UNIX_EPOCH),
+            });
+        }
+    }
+
+    let mut total_bytes = files
+        .iter()
+        .fold(0_u64, |total, file| total.saturating_add(file.size));
+    if total_bytes > max_bytes {
+        files.sort_by(|left, right| {
+            left.modified
+                .cmp(&right.modified)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        let mut evicted_files = 0;
+        for file in files {
+            if total_bytes <= max_bytes {
+                break;
+            }
+            if fs::remove_file(&file.path).is_ok() {
+                total_bytes = total_bytes.saturating_sub(file.size);
+                evicted_files += 1;
+            }
+        }
+        for cache_dir in fs::read_dir(root)? {
+            let cache_dir = cache_dir?;
+            if cache_dir.file_type()?.is_dir()
+                && fs::read_dir(cache_dir.path())?.next().is_none()
+            {
+                let _ = fs::remove_dir(cache_dir.path());
+            }
+        }
+        return Ok(ImageCachePruneResult {
+            remaining_bytes: total_bytes,
+            evicted_files,
+        });
+    }
+
+    Ok(ImageCachePruneResult {
+        remaining_bytes: total_bytes,
+        evicted_files: 0,
+    })
+}
+
+pub fn cache_image_sequence_files(
+    root: &Path,
+    cache_key: &str,
+    inputs: &[ImageSequenceInput],
+    direction: ImageReadingDirection,
+    spread: ImageSpreadMode,
+    force_refresh: bool,
+) -> Result<ImageThumbnailCacheSummary, ImportError> {
+    if !is_safe_image_cache_key(cache_key) {
+        return Err(ImportError::InvalidImage(
+            "图片缓存键格式无效".to_string(),
+        ));
+    }
+    if inputs.is_empty() {
+        return Err(ImportError::InvalidImage("图片序列不能为空".to_string()));
+    }
+    if inputs.len() > MAX_IMAGE_SEQUENCE_PAGES {
+        return Err(ImportError::InvalidImage(format!(
+            "图片序列页数超过 {} 页上限",
+            MAX_IMAGE_SEQUENCE_PAGES
+        )));
+    }
+
+    let mut input_bytes = 0_usize;
+    let mut previews = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        input_bytes = input_bytes
+            .checked_add(input.bytes.len())
+            .ok_or_else(|| ImportError::InvalidImage("图片序列输入大小溢出".to_string()))?;
+        if input_bytes > MAX_IMAGE_SEQUENCE_INPUT_BYTES {
+            return Err(ImportError::InvalidImage(format!(
+                "图片序列原始输入超过 {} MiB 上限",
+                MAX_IMAGE_SEQUENCE_INPUT_BYTES / (1024 * 1024)
+            )));
+        }
+        previews.push(preview_image_bytes(&input.file_name, &input.bytes)?);
+    }
+    build_image_sequence_preview(previews, direction, spread)?;
+
+    let cache_dir = root.join(cache_key);
+    fs::create_dir_all(&cache_dir)?;
+    let mut entries = Vec::with_capacity(inputs.len());
+    let mut cache_hits = 0;
+    let mut cache_writes = 0;
+
+    for (page_index, input) in inputs.iter().enumerate() {
+        let path = cache_dir.join(format!("page-{page_index:04}.png"));
+        if !force_refresh {
+            if let Some(byte_len) = cached_thumbnail_size(&path)? {
+                cache_hits += 1;
+                entries.push(ImageThumbnailCacheEntry {
+                    cache_key: cache_key.to_string(),
+                    page_index,
+                    byte_len,
+                    cache_hit: true,
+                });
+                continue;
+            }
+        }
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+        }
+        let encoded = encode_image_thumbnail(&input.file_name, &input.bytes)?;
+        let byte_len = encoded.len() as u64;
+        write_thumbnail_atomically(&path, &encoded)?;
+        cache_writes += 1;
+        entries.push(ImageThumbnailCacheEntry {
+            cache_key: cache_key.to_string(),
+            page_index,
+            byte_len,
+            cache_hit: false,
+        });
+    }
+
+    let prune = prune_image_thumbnail_cache(root, MAX_IMAGE_CACHE_BYTES)?;
+    Ok(ImageThumbnailCacheSummary {
+        cache_key: cache_key.to_string(),
+        page_count: inputs.len(),
+        cache_hits,
+        cache_writes,
+        evicted_files: prune.evicted_files,
+        cache_bytes: prune.remaining_bytes,
+        entries,
     })
 }
 
@@ -2684,6 +2982,116 @@ mod tests {
         assert_eq!(sequence.spread, ImageSpreadMode::Double);
         assert_eq!(sequence.pages[0].file_name, "001.png");
         assert_eq!(sequence.pages[1].index, 1);
+    }
+
+
+    fn temporary_image_cache_root() -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "open-reader-image-cache-{}-{nonce}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("temporary cache root should be created");
+        root
+    }
+
+    #[test]
+    fn writes_and_reuses_persistent_image_thumbnail_cache() {
+        let root = temporary_image_cache_root();
+        let key = "imgseq-v1-01234567";
+        let inputs = vec![ImageSequenceInput {
+            file_name: "001.png".to_string(),
+            bytes: tiny_png_fixture(),
+        }];
+
+        let first = cache_image_sequence_files(
+            &root,
+            key,
+            &inputs,
+            ImageReadingDirection::Ltr,
+            ImageSpreadMode::Single,
+            false,
+        )
+        .expect("first cache write should succeed");
+        assert_eq!(first.cache_writes, 1);
+        assert_eq!(first.cache_hits, 0);
+        assert!(root.join(key).join("page-0000.png").is_file());
+
+        let second = cache_image_sequence_files(
+            &root,
+            key,
+            &inputs,
+            ImageReadingDirection::Ltr,
+            ImageSpreadMode::Single,
+            false,
+        )
+        .expect("second cache read should succeed");
+        assert_eq!(second.cache_writes, 0);
+        assert_eq!(second.cache_hits, 1);
+        assert!(second.cache_bytes > 0);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rebuilds_invalidated_thumbnail_cache_entry() {
+        let root = temporary_image_cache_root();
+        let key = "imgseq-v1-89abcdef";
+        let inputs = vec![ImageSequenceInput {
+            file_name: "001.png".to_string(),
+            bytes: tiny_png_fixture(),
+        }];
+        cache_image_sequence_files(
+            &root,
+            key,
+            &inputs,
+            ImageReadingDirection::Ltr,
+            ImageSpreadMode::Single,
+            false,
+        )
+        .expect("initial cache write should succeed");
+        let cache_path = root.join(key).join("page-0000.png");
+        fs::write(&cache_path, b"corrupt").expect("corrupt entry should be writable");
+
+        let repaired = cache_image_sequence_files(
+            &root,
+            key,
+            &inputs,
+            ImageReadingDirection::Ltr,
+            ImageSpreadMode::Single,
+            false,
+        )
+        .expect("invalid cache entry should be rebuilt");
+        assert_eq!(repaired.cache_hits, 0);
+        assert_eq!(repaired.cache_writes, 1);
+        assert_eq!(
+            fs::read(&cache_path)
+                .expect("repaired cache should be readable")
+                .get(..PNG_SIGNATURE.len()),
+            Some(&PNG_SIGNATURE)
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prunes_image_thumbnail_cache_by_oldest_file_first() {
+        let root = temporary_image_cache_root();
+        let cache_dir = root.join("imgseq-v1-01234567");
+        fs::create_dir_all(&cache_dir).expect("cache directory should be created");
+        fs::write(cache_dir.join("page-0000.png"), [1_u8; 8]).expect("first file");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        fs::write(cache_dir.join("page-0001.png"), [2_u8; 8]).expect("second file");
+
+        let result = prune_image_thumbnail_cache(&root, 8).expect("pruning should succeed");
+        assert!(result.evicted_files >= 1);
+        assert!(result.remaining_bytes <= 8);
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
