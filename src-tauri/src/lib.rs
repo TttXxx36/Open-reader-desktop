@@ -304,6 +304,16 @@ fn save_image_sequence(
 }
 
 #[tauri::command]
+fn refresh_image_sequence_state(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+) -> Result<ImageSequenceDetail, String> {
+    database
+        .refresh_image_sequence_state(&book_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn save_image_sequence_progress(
     database: tauri::State<'_, Database>,
     book_id: String,
@@ -1898,6 +1908,7 @@ pub fn run() {
             list_image_sequences,
             get_image_sequence,
             save_image_sequence,
+            refresh_image_sequence_state,
             save_image_sequence_progress,
             cache_image_sequence,
             read_image_sequence_thumbnails,
