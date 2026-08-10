@@ -544,9 +544,7 @@ impl Database {
             }
         }
         if book_ids.is_empty() {
-            return Err(DbError::InvalidBookMetadata(
-                "至少选择一本书".to_string(),
-            ));
+            return Err(DbError::InvalidBookMetadata("至少选择一本书".to_string()));
         }
         if book_ids.len() > 256 {
             return Err(DbError::InvalidBookMetadata(
