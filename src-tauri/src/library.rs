@@ -500,8 +500,6 @@ pub fn build_image_sequence_preview(
         pages: sequence_pages,
     })
 }
-
-
 pub const MAX_IMAGE_THUMBNAIL_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_IMAGE_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_IMAGE_THUMBNAIL_DIMENSION: u32 = 1_600;
@@ -585,10 +583,7 @@ fn encode_image_thumbnail(file_name: &str, bytes: &[u8]) -> Result<Vec<u8>, Impo
     let decoded = reader
         .decode()
         .map_err(|error| ImportError::InvalidImage(format!("图片缩略图解码失败：{error}")))?;
-    let thumbnail = decoded.thumbnail(
-        MAX_IMAGE_THUMBNAIL_DIMENSION,
-        MAX_IMAGE_THUMBNAIL_DIMENSION,
-    );
+    let thumbnail = decoded.thumbnail(MAX_IMAGE_THUMBNAIL_DIMENSION, MAX_IMAGE_THUMBNAIL_DIMENSION);
 
     let mut output = Cursor::new(Vec::new());
     thumbnail
@@ -693,9 +688,7 @@ fn prune_image_thumbnail_cache(
         }
         for cache_dir in fs::read_dir(root)? {
             let cache_dir = cache_dir?;
-            if cache_dir.file_type()?.is_dir()
-                && fs::read_dir(cache_dir.path())?.next().is_none()
-            {
+            if cache_dir.file_type()?.is_dir() && fs::read_dir(cache_dir.path())?.next().is_none() {
                 let _ = fs::remove_dir(cache_dir.path());
             }
         }
@@ -720,9 +713,7 @@ pub fn cache_image_sequence_files(
     force_refresh: bool,
 ) -> Result<ImageThumbnailCacheSummary, ImportError> {
     if !is_safe_image_cache_key(cache_key) {
-        return Err(ImportError::InvalidImage(
-            "图片缓存键格式无效".to_string(),
-        ));
+        return Err(ImportError::InvalidImage("图片缓存键格式无效".to_string()));
     }
     if inputs.is_empty() {
         return Err(ImportError::InvalidImage("图片序列不能为空".to_string()));
@@ -2983,8 +2974,6 @@ mod tests {
         assert_eq!(sequence.pages[0].file_name, "001.png");
         assert_eq!(sequence.pages[1].index, 1);
     }
-
-
     fn temporary_image_cache_root() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
