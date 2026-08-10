@@ -954,8 +954,8 @@ impl Database {
                 )));
             }
 
-            let (digest, hashed_bytes) = sha256_file(&path, MAX_DIGEST_FILE_BYTES)
-                .map_err(DbError::InvalidImageSequence)?;
+            let (digest, hashed_bytes) =
+                sha256_file(&path, MAX_DIGEST_FILE_BYTES).map_err(DbError::InvalidImageSequence)?;
             total_digest_bytes = total_digest_bytes
                 .checked_add(hashed_bytes)
                 .ok_or_else(|| {
