@@ -10,7 +10,7 @@ mod xpath_poc;
 
 use db::{
     BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMergePreview,
-    BookMergePreviewRequest, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
+    BookMergePreviewRevalidateRequest, BookMergePreviewRequest, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
     ChapterContent, Database, DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary,
     ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
     SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
@@ -292,6 +292,16 @@ fn preview_book_merge(
 ) -> Result<BookMergePreview, String> {
     database
         .preview_book_merge(request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn revalidate_book_merge_preview(
+    database: tauri::State<'_, Database>,
+    request: BookMergePreviewRevalidateRequest,
+) -> Result<BookMergePreview, String> {
+    database
+        .revalidate_book_merge_preview(request)
         .map_err(|error| error.to_string())
 }
 
@@ -2086,6 +2096,7 @@ pub fn run() {
             save_book_cover,
             find_duplicate_books,
             preview_book_merge,
+            revalidate_book_merge_preview,
             list_books_with_options,
             update_book_metadata,
             update_books_metadata,
