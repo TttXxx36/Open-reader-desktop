@@ -2,13 +2,13 @@ use crate::image_sequence::{
     modified_at_ns, normalize_relative_image_path, validate_image_root_path,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
 };
-use sha2::{Digest, Sha256};
 
 const MAX_RELINK_FILES: usize = 4096;
 const MAX_RELINK_BYTES: u64 = 512 * 1024 * 1024;
