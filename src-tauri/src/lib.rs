@@ -112,7 +112,47 @@ impl ImageCacheCancellationState {
     }
 }
 
+#[derive(Default)]
+struct ImageRelinkCancellationState {
+    active: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl ImageRelinkCancellationState {
+    fn register(&self, operation_id: &str) -> Result<Arc<AtomicBool>, String> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "重新关联取消状态不可用".to_string())?;
+        if active.contains_key(operation_id) {
+            return Err("已有同 ID 的重新关联任务正在运行".to_string());
+        }
+        let token = Arc::new(AtomicBool::new(false));
+        active.insert(operation_id.to_string(), token.clone());
+        Ok(token)
+    }
+
+    fn cancel(&self, operation_id: &str) -> Result<bool, String> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "重新关联取消状态不可用".to_string())?;
+        if let Some(token) = active.get(operation_id) {
+            token.store(true, Ordering::Relaxed);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    fn remove(&self, operation_id: &str) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(operation_id);
+        }
+    }
+}
+
 static NEXT_SOURCE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_IMAGE_CACHE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_IMAGE_RELINK_OPERATION_ID: AtomicU64 = AtomicU64::new(1);static NEXT_SOURCE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_IMAGE_CACHE_OPERATION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn normalize_source_operation_id(value: Option<String>) -> Result<String, String> {
@@ -141,6 +181,34 @@ async fn wait_for_source_cancellation(token: Arc<AtomicBool>) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+fn normalize_image_relink_operation_id(value: Option<String>) -> Result<String, String> {
+    let value = value
+        .unwrap_or_else(|| {
+            format!(
+                "image-relink-{}",
+                NEXT_IMAGE_RELINK_OPERATION_ID.fetch_add(1, Ordering::Relaxed)
+            )
+        })
+        .trim()
+        .to_string();
+    if value.is_empty() {
+        return Err("重新关联任务 ID 不能为空".to_string());
+    }
+    if value.len() > 128 {
+        return Err("重新关联任务 ID 不能超过 128 字节".to_string());
+    }
+    Ok(value)
+}
+
+#[tauri::command]
+fn cancel_image_sequence_relink(
+    cancellation: tauri::State<'_, ImageRelinkCancellationState>,
+    operation_id: String,
+) -> Result<bool, String> {
+    let operation_id = normalize_image_relink_operation_id(Some(operation_id))?;
+    cancellation.cancel(&operation_id)
 }
 
 fn normalize_image_cache_operation_id(value: Option<String>) -> Result<String, String> {
@@ -328,12 +396,18 @@ fn verify_image_sequence_digests(
 #[tauri::command]
 fn preview_image_sequence_relink(
     database: tauri::State<'_, Database>,
+    cancellation: tauri::State<'_, ImageRelinkCancellationState>,
     book_id: String,
     new_root_path: String,
+    operation_id: Option<String>,
 ) -> Result<ImageRelinkPreview, String> {
-    database
-        .preview_image_sequence_relink(&book_id, &new_root_path)
-        .map_err(|error| error.to_string())
+    let operation_id = normalize_image_relink_operation_id(operation_id)?;
+    let token = cancellation.register(&operation_id)?;
+    let result = database
+        .preview_image_sequence_relink_with_cancel(&book_id, &new_root_path, Some(token.as_ref()))
+        .map_err(|error| error.to_string());
+    cancellation.remove(&operation_id);
+    result
 }
 
 #[tauri::command]
@@ -1931,6 +2005,7 @@ pub fn run() {
             app.manage(database);
             app.manage(SourceCancellationState::default());
             app.manage(ImageCacheCancellationState::default());
+            app.manage(ImageRelinkCancellationState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1989,6 +2064,7 @@ pub fn run() {
             run_source_pipeline,
             cancel_source_operation,
             cancel_image_cache,
+            cancel_image_sequence_relink,
             get_source_cache_status
         ])
         .run(tauri::generate_context!())
