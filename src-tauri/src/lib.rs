@@ -11,11 +11,11 @@ use db::{
 };
 use library::{
     cache_image_sequence_files_with_cancel, parse_book_bytes_with_options, preview_book_bytes,
-    preview_image_bytes, preview_image_sequence_bytes, read_image_thumbnail_files,
-    probe_book_format as probe_book_format_bytes, require_importable_format, BookFormatProbe,
-    BookImportPreview, ImageDocumentPreview, ImageReadingDirection, ImageSequenceInput,
-    ImageSequencePreview, ImageSpreadMode, ImageThumbnailCacheSummary, ImageThumbnailPageBytes,
-    TxtParseOptions, MAX_IMAGE_INPUT_BYTES,
+    preview_image_bytes, preview_image_sequence_bytes,
+    probe_book_format as probe_book_format_bytes, read_image_thumbnail_files,
+    require_importable_format, BookFormatProbe, BookImportPreview, ImageDocumentPreview,
+    ImageReadingDirection, ImageSequenceInput, ImageSequencePreview, ImageSpreadMode,
+    ImageThumbnailCacheSummary, ImageThumbnailPageBytes, TxtParseOptions, MAX_IMAGE_INPUT_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use source::{
