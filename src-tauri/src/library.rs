@@ -901,7 +901,10 @@ pub fn read_image_thumbnail_files(
         if page_index >= MAX_IMAGE_SEQUENCE_PAGES {
             return Err(ImportError::InvalidImage("图片页码超出上限".to_string()));
         }
-        if result.iter().any(|page: &ImageThumbnailPageBytes| page.page_index == page_index) {
+        if result
+            .iter()
+            .any(|page: &ImageThumbnailPageBytes| page.page_index == page_index)
+        {
             continue;
         }
         let path = cache_dir.join(format!("page-{page_index:04}.png"));
@@ -3223,7 +3226,10 @@ mod tests {
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0].page_index, 0);
         assert_eq!(pages[0].mime, "image/png");
-        assert_eq!(pages[0].bytes.get(..PNG_SIGNATURE.len()), Some(PNG_SIGNATURE.as_slice()));
+        assert_eq!(
+            pages[0].bytes.get(..PNG_SIGNATURE.len()),
+            Some(PNG_SIGNATURE.as_slice())
+        );
 
         let _ = fs::remove_dir_all(root);
     }
