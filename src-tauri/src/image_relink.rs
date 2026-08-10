@@ -8,12 +8,14 @@ use std::{
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 const MAX_RELINK_FILES: usize = 4096;
 const MAX_RELINK_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_DIGEST_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_DIGEST_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_RELINK_DURATION_MS: u128 = 15_000;
 
 pub fn sha256_file(path: &Path, max_bytes: u64) -> Result<(String, u64), String> {
     let mut file = File::open(path).map_err(|error| format!("读取图片失败：{error}"))?;
@@ -226,13 +228,26 @@ fn scan_image_root(root_path: &str) -> Result<Vec<CandidateFile>, String> {
         return Err("图片根目录不存在或不是目录".to_string());
     }
 
+    let started_at = Instant::now();
     let mut directories = vec![root.clone()];
     let mut candidates = Vec::new();
     let mut total_bytes = 0_u64;
     while let Some(directory) = directories.pop() {
+        if started_at.elapsed().as_millis() > MAX_RELINK_DURATION_MS {
+            return Err(format!(
+                "新目录扫描超过 {} 秒时间上限",
+                MAX_RELINK_DURATION_MS / 1_000
+            ));
+        }
         let entries =
             fs::read_dir(&directory).map_err(|error| format!("读取图片目录失败：{error}"))?;
         for entry in entries {
+            if started_at.elapsed().as_millis() > MAX_RELINK_DURATION_MS {
+                return Err(format!(
+                    "新目录扫描超过 {} 秒时间上限",
+                    MAX_RELINK_DURATION_MS / 1_000
+                ));
+            }
             let entry = entry.map_err(|error| format!("读取图片目录项失败：{error}"))?;
             let file_type = entry
                 .file_type()
