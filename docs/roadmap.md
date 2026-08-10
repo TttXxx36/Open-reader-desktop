@@ -81,7 +81,7 @@
 - EPUB：完善目录、章节标题、字体、图片、链接和基础 CSS 白名单，继续禁止脚本、事件属性、危险 URL 和无限资源。
 - TXT：编码探测、章节规则配置、全角空格/缩进、替换词和大文件流式解析。
 - M8.5.1 已完成只读格式探测：`BookFormatProbe`/`probe_book_format` 覆盖 TXT、EPUB、MOBI/AZW/AZW3、PDF 与常见图片签名；run [31334929174](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31334929174) 通过 100 个 Rust 测试和 Windows 测试编译/采样。M8.5.2 增加有界 PDF 版本、图片尺寸/MIME、MOBI 记录偏移/头长度元数据探测，run [31335820920](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31335820920) 通过 100 个 Rust 测试和 Windows 编译/采样；M8.5.3 将 `require_importable_format` 接入导入与预览，已知签名冲突明确拒绝，MOBI/AZW/AZW3 明确保持只读且不绕过 DRM，run [31336890258](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31336890258) 通过前端、Rust fmt/check、100 个 Rust 测试、性能证据和 Windows 编译/采样；MOBI/AZW 后续仍须审查许可证、解析器维护性、内存上限和 DRM 拒绝策略，并评估 PDF/图片独立阅读模型。
-- M8.5.4a 已将格式探测接入本地文件导入前置流程，run [31337644268](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31337644268) 的前端、Rust checks 和 Windows sampler 全部通过；M8.5.4b 的 PDF/图片独立阅读模型契约已记录在 [m8-reader-model.md](m8-reader-model.md)，暂不引入解析器，先完成许可证、渲染路径和资源配额评估。
+- M8.5.4a 已将格式探测接入本地文件导入前置流程，run [31337644268](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31337644268) 的前端、Rust checks 和 Windows sampler 全部通过；M8.5.4b 的 PDF/图片独立阅读模型契约已记录在 [m8-reader-model.md](m8-reader-model.md)，暂不引入解析器，先完成许可证、渲染路径和资源配额评估。 M8.5.5 的依赖评估已形成 [m8.5.5-dependency-evaluation.md](m8.5.5-dependency-evaluation.md)：图片优先、PDF 继续探测；下一步进入图片最小闭环 M8.5.5a。
 - PDF：单独评估 PDF 渲染/搜索/目录模型；不把 PDF 当作普通文本章节。
 - 漫画/图片：缓存、缩放、双页和阅读方向独立建模，不混入文本阅读器。
 - 所有格式都需旧数据库迁移、损坏文件错误恢复和 64 MB 默认导入上限测试。
