@@ -1,4 +1,5 @@
 mod db;
+mod image_sequence;
 mod library;
 mod source;
 mod source_import;
