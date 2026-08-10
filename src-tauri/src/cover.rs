@@ -179,8 +179,9 @@ mod tests {
 
     #[test]
     fn normalizes_windows_and_unc_paths_without_touching_filesystem() {
-        let windows = normalize_cover_source(CoverSourceKind::LocalPath, r"C:\\Books\\.\\cover.png")
-            .expect("windows path should normalize");
+        let windows =
+            normalize_cover_source(CoverSourceKind::LocalPath, r"C:\\Books\\.\\cover.png")
+                .expect("windows path should normalize");
         assert_eq!(windows.value, "C:/Books/cover.png");
 
         let unc = normalize_cover_source(CoverSourceKind::LocalPath, r"\\server\\share\\cover.png")
@@ -232,10 +233,10 @@ mod tests {
             kind: CoverSourceKind::LocalPath,
             value: "C:/Books/cover.png".to_string(),
         };
-        let first = cover_cache_key(&source, Some("size=123;mtime=456"))
-            .expect("cache key should build");
-        let second = cover_cache_key(&source, Some("size=123;mtime=456"))
-            .expect("cache key should repeat");
+        let first =
+            cover_cache_key(&source, Some("size=123;mtime=456")).expect("cache key should build");
+        let second =
+            cover_cache_key(&source, Some("size=123;mtime=456")).expect("cache key should repeat");
         let changed = cover_cache_key(&source, Some("size=124;mtime=456"))
             .expect("changed validator should build");
         assert_eq!(first, second);
