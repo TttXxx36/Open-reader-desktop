@@ -330,6 +330,7 @@ pub fn preview_image_bytes(
 const MAX_IMAGE_SEQUENCE_PAGES: usize = 2_048;
 const MAX_IMAGE_SEQUENCE_PIXELS: u64 = 128_000_000;
 const MAX_IMAGE_SEQUENCE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_IMAGE_SEQUENCE_INPUT_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -377,6 +378,47 @@ pub struct ImageSequencePreview {
     pub total_pixels: u64,
     pub total_decoded_bytes: u64,
     pub pages: Vec<ImageSequencePage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageSequenceInput {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Decodes a bounded set of local image files and then builds the serializable sequence model.
+/// Each page passes the single-image decoder gate before sequence totals are evaluated.
+pub fn preview_image_sequence_bytes(
+    inputs: Vec<ImageSequenceInput>,
+    direction: ImageReadingDirection,
+    spread: ImageSpreadMode,
+) -> Result<ImageSequencePreview, ImportError> {
+    if inputs.is_empty() {
+        return Err(ImportError::InvalidImage("图片序列不能为空".to_string()));
+    }
+    if inputs.len() > MAX_IMAGE_SEQUENCE_PAGES {
+        return Err(ImportError::InvalidImage(format!(
+            "图片序列页数超过 {} 页上限",
+            MAX_IMAGE_SEQUENCE_PAGES
+        )));
+    }
+
+    let mut input_bytes = 0_usize;
+    let mut previews = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        input_bytes = input_bytes
+            .checked_add(input.bytes.len())
+            .ok_or_else(|| ImportError::InvalidImage("图片序列输入大小溢出".to_string()))?;
+        if input_bytes > MAX_IMAGE_SEQUENCE_INPUT_BYTES {
+            return Err(ImportError::InvalidImage(format!(
+                "图片序列原始输入超过 {} MiB 上限",
+                MAX_IMAGE_SEQUENCE_INPUT_BYTES / (1024 * 1024)
+            )));
+        }
+        previews.push(preview_image_bytes(&input.file_name, &input.bytes)?);
+    }
+
+    build_image_sequence_preview(previews, direction, spread)
 }
 
 /// Builds the serializable page/sequence contract after each page has passed the decoder gate.
@@ -2616,6 +2658,32 @@ mod tests {
             color_type: "L8".to_string(),
             decoded_bytes: u64::from(width) * u64::from(height),
         }
+    }
+
+    #[test]
+    fn previews_bounded_image_sequence_from_local_inputs() {
+        let fixture = tiny_png_fixture();
+        let sequence = preview_image_sequence_bytes(
+            vec![
+                ImageSequenceInput {
+                    file_name: "001.png".to_string(),
+                    bytes: fixture.clone(),
+                },
+                ImageSequenceInput {
+                    file_name: "002.png".to_string(),
+                    bytes: fixture,
+                },
+            ],
+            ImageReadingDirection::Rtl,
+            ImageSpreadMode::Double,
+        )
+        .expect("local image inputs should decode");
+
+        assert_eq!(sequence.page_count, 2);
+        assert_eq!(sequence.direction, ImageReadingDirection::Rtl);
+        assert_eq!(sequence.spread, ImageSpreadMode::Double);
+        assert_eq!(sequence.pages[0].file_name, "001.png");
+        assert_eq!(sequence.pages[1].index, 1);
     }
 
     #[test]
