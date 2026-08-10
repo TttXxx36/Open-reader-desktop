@@ -64,6 +64,32 @@ interface ImageDocumentPreview {
   decoded_bytes: number;
 }
 
+type ImageReadingDirection = "ltr" | "rtl" | "vertical";
+type ImageSpreadMode = "single" | "double" | "long_strip";
+
+interface ImageSequencePage {
+  index: number;
+  file_name: string;
+  mime: string;
+  width: number;
+  height: number;
+  decoded_bytes: number;
+}
+
+interface ImageSequencePreview {
+  direction: ImageReadingDirection;
+  spread: ImageSpreadMode;
+  page_count: number;
+  total_pixels: number;
+  total_decoded_bytes: number;
+  pages: ImageSequencePage[];
+}
+
+interface ImageSequenceInput {
+  file_name: string;
+  bytes: number[];
+}
+
 interface BookFormatProbe {
   format: string;
   support: BookFormatSupport;
@@ -455,6 +481,9 @@ interface MultiSourceSearchResult {
   enabled_sources: number;
 }
 
+const MAX_IMAGE_FILE_BYTES = 64 * 1024 * 1024;
+const MAX_IMAGE_SEQUENCE_INPUT_BYTES = 256 * 1024 * 1024;
+const MAX_IMAGE_THUMBNAILS = 24;
 const SETTINGS_KEY = "open-reader.settings";
 const SETTINGS_VERSION = 2;
 const NEXT_PAGE_POLICY_KEY = "open-reader.next-page-policy";
@@ -506,6 +535,10 @@ const isImporting = ref(false);
 const bookImportPreview = ref<BookImportPreview | null>(null);
 const imagePreview = ref<ImageDocumentPreview | null>(null);
 const imagePreviewUrl = ref("");
+const imageSequencePreview = ref<ImageSequencePreview | null>(null);
+const imageSequenceUrls = ref<string[]>([]);
+const imageSequenceDirection = ref<ImageReadingDirection>("ltr");
+const imageSequenceSpread = ref<ImageSpreadMode>("single");
 const bookImportFileName = ref("");
 const bookImportBytes = ref<number[]>([]);
 const txtParseOptions = ref<TxtParseOptions>({
@@ -2037,10 +2070,15 @@ function openFilePicker() {
 function resetBookImportPreview() {
   bookImportPreview.value = null;
   imagePreview.value = null;
+  imageSequencePreview.value = null;
   if (imagePreviewUrl.value) {
     URL.revokeObjectURL(imagePreviewUrl.value);
     imagePreviewUrl.value = "";
   }
+  imageSequenceUrls.value.forEach((url) => URL.revokeObjectURL(url));
+  imageSequenceUrls.value = [];
+  imageSequenceDirection.value = "ltr";
+  imageSequenceSpread.value = "single";
   bookImportFileName.value = "";
   bookImportBytes.value = [];
   txtParseOptions.value = {
@@ -2145,12 +2183,89 @@ function cancelBookImportPreview() {
   status.value = "已取消文件预览";
 }
 
+function imageDirectionLabel(direction: ImageReadingDirection) {
+  return direction === "rtl" ? "从右到左" : direction === "vertical" ? "纵向长图" : "从左到右";
+}
+
+function imageSpreadLabel(spread: ImageSpreadMode) {
+  return spread === "double" ? "双页" : spread === "long_strip" ? "长图" : "单页";
+}
+
+function updateImageSequenceLayout() {
+  if (!imageSequencePreview.value) return;
+  imageSequencePreview.value = {
+    ...imageSequencePreview.value,
+    direction: imageSequenceDirection.value,
+    spread: imageSequenceSpread.value,
+  };
+  status.value = `图片序列已切换为${imageDirectionLabel(imageSequenceDirection.value)} · ${imageSpreadLabel(imageSequenceSpread.value)}`;
+}
+
+async function importImageSequence(files: File[]) {
+  if (files.length > 2048) {
+    errorMessage.value = "图片序列最多支持 2048 页";
+    status.value = "图片序列过大";
+    return;
+  }
+  const totalBytes = files.reduce((total, file) => total + file.size, 0);
+  if (files.some((file) => file.size > MAX_IMAGE_FILE_BYTES)) {
+    errorMessage.value = "单张图片不能超过 64 MB";
+    status.value = "图片序列包含超限文件";
+    return;
+  }
+  if (totalBytes > MAX_IMAGE_SEQUENCE_INPUT_BYTES) {
+    errorMessage.value = "图片序列原始输入不能超过 256 MB";
+    status.value = "图片序列过大";
+    return;
+  }
+
+  resetBookImportPreview();
+  isImporting.value = true;
+  errorMessage.value = "";
+  status.value = `正在验证 ${files.length} 张图片…`;
+  try {
+    const pages: ImageSequenceInput[] = [];
+    for (const file of files) {
+      pages.push({
+        file_name: file.name,
+        bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+      });
+    }
+    const preview = await invoke<ImageSequencePreview>("preview_image_sequence", {
+      pages,
+      direction: imageSequenceDirection.value,
+      spread: imageSequenceSpread.value,
+    });
+    imageSequencePreview.value = preview;
+    imageSequenceUrls.value = files
+      .slice(0, MAX_IMAGE_THUMBNAILS)
+      .map((file) => URL.createObjectURL(file));
+    bookImportFileName.value = `${files.length} 个图片文件`;
+    status.value = `图片序列已通过受限解码，可预览 ${files.length} 页`;
+  } catch (error) {
+    errorMessage.value = String(error);
+    status.value = "图片序列预览失败";
+  } finally {
+    isImporting.value = false;
+  }
+}
+
 async function importFile(event: Event) {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
+  const files = Array.from(input.files ?? []);
+  if (!files.length) return;
 
-  if (file.size > 64 * 1024 * 1024) {
+  if (files.length > 1) {
+    try {
+      await importImageSequence(files);
+    } finally {
+      input.value = "";
+    }
+    return;
+  }
+
+  const file = files[0];
+  if (file.size > MAX_IMAGE_FILE_BYTES) {
     errorMessage.value = "文件超过 64 MB 限制";
     input.value = "";
     return;
@@ -2367,6 +2482,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         ref="fileInput"
         class="file-input"
         type="file"
+        multiple
         accept=".txt,.epub,.png,.jpg,.jpeg,.gif,.webp,text/plain,application/epub+zip,image/png,image/jpeg,image/gif,image/webp"
         @change="importFile"
       />
@@ -2489,7 +2605,59 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <img v-if="imagePreviewUrl" :src="imagePreviewUrl" :alt="imagePreview.file_name" />
         </div>
         <div class="book-import-preview-actions">
-          <span>当前为单页、只读预览，不写入书架；图片序列与双页模式将在下一步接入。</span>
+          <span>当前为单页、只读预览，不写入书架。</span>
+          <button class="text-button" type="button" @click="cancelBookImportPreview">关闭预览</button>
+        </div>
+      </section>
+
+      <section v-if="imageSequencePreview" class="image-sequence-preview" aria-live="polite">
+        <div class="book-import-preview-heading">
+          <div>
+            <span class="eyebrow">IMAGE SEQUENCE PREVIEW</span>
+            <h2>图片序列预览</h2>
+          </div>
+          <span class="book-import-preview-count">{{ imageSequencePreview.page_count }} 页</span>
+        </div>
+        <div class="book-import-preview-meta">
+          <span>文件：{{ bookImportFileName }}</span>
+          <span>总像素：{{ imageSequencePreview.total_pixels.toLocaleString() }}</span>
+          <span>解码内存：{{ formatBytes(imageSequencePreview.total_decoded_bytes) }}</span>
+          <span>已显示缩略图：{{ Math.min(imageSequencePreview.page_count, MAX_IMAGE_THUMBNAILS) }}</span>
+        </div>
+        <div class="book-import-preview-controls image-sequence-controls">
+          <label class="book-import-preview-field">
+            <span>阅读方向</span>
+            <select v-model="imageSequenceDirection" @change="updateImageSequenceLayout">
+              <option value="ltr">从左到右</option>
+              <option value="rtl">从右到左</option>
+              <option value="vertical">纵向长图</option>
+            </select>
+          </label>
+          <label class="book-import-preview-field">
+            <span>排版模式</span>
+            <select v-model="imageSequenceSpread" @change="updateImageSequenceLayout">
+              <option value="single">单页</option>
+              <option value="double">双页</option>
+              <option value="long_strip">长图</option>
+            </select>
+          </label>
+        </div>
+        <div class="image-sequence-grid">
+          <figure
+            v-for="page in imageSequencePreview.pages.slice(0, MAX_IMAGE_THUMBNAILS)"
+            :key="page.index"
+            class="image-sequence-thumb"
+          >
+            <img
+              v-if="imageSequenceUrls[page.index]"
+              :src="imageSequenceUrls[page.index]"
+              :alt="page.file_name"
+            />
+            <figcaption>#{{ page.index + 1 }} · {{ page.file_name }}</figcaption>
+          </figure>
+        </div>
+        <div class="book-import-preview-actions">
+          <span>已完成批量安全解码；当前仍是只读预览，不写入书架，缓存和阅读位置将在下一小阶段接入。</span>
           <button class="text-button" type="button" @click="cancelBookImportPreview">关闭预览</button>
         </div>
       </section>
@@ -3643,6 +3811,51 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   object-fit: contain;
 }
 
+.image-sequence-preview {
+  margin-top: 22px;
+  padding: 20px;
+  border: 1px solid rgba(134, 223, 194, 0.28);
+  border-radius: 16px;
+  background: rgba(17, 44, 48, 0.72);
+}
+
+.image-sequence-controls {
+  grid-template-columns: repeat(2, minmax(170px, 1fr));
+}
+
+.image-sequence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.image-sequence-thumb {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid rgba(134, 223, 194, 0.2);
+  border-radius: 10px;
+  background: rgba(12, 17, 27, 0.58);
+}
+
+.image-sequence-thumb img {
+  display: block;
+  width: 100%;
+  height: 150px;
+  object-fit: contain;
+  background: rgba(12, 17, 27, 0.72);
+}
+
+.image-sequence-thumb figcaption {
+  overflow: hidden;
+  padding: 8px;
+  color: #aebbd0;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .book-import-preview {
   margin-top: 22px;
   padding: 20px;
@@ -3773,8 +3986,13 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 }
 
 @media (max-width: 720px) {
-  .book-import-preview-controls {
+  .book-import-preview-controls,
+  .image-sequence-controls {
     grid-template-columns: 1fr;
+  }
+
+  .image-sequence-thumb img {
+    height: 120px;
   }
 }
 
