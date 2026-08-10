@@ -7,6 +7,10 @@ interface BookSummary {
   author: string | null;
   format: string;
   content_kind: string;
+  cover_path: string | null;
+  shelf_group: string;
+  tags: string[];
+  custom_order: number;
   chapter_count: number;
   current_chapter: number;
   progress: number;
@@ -151,6 +155,9 @@ function continueWith(book: BookSummary | null) {
           <span class="recent-book-copy">
             <strong>{{ book.title }}</strong>
             <small>{{ formatProgress(book.progress) }} · {{ book.chapter_count }} 章</small>
+            <small v-if="book.shelf_group || book.tags.length" class="recent-book-metadata">
+              {{ book.shelf_group || "未分组" }}<span v-if="book.tags.length"> · {{ book.tags.slice(0, 2).join(" · ") }}</span>
+            </small>
             <small
               v-if="imageHealthLabel(book)"
               class="recent-book-health"
@@ -250,6 +257,13 @@ function continueWith(book: BookSummary | null) {
 }
 
 .book-health,
+.recent-book-metadata {
+  overflow: hidden;
+  color: #9fb1c8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .recent-book-health {
   display: inline-flex;
   align-items: center;
