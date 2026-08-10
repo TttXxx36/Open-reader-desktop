@@ -53,7 +53,8 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - M8.5.5a 图片单页最小闭环已完成：以 `image 0.25.9` 的受限 feature 解码 PNG/JPEG/GIF/WebP，执行 64 MiB 输入、20,000 边长、32,000,000 像素和 128 MiB 单页解码缓冲配额；Tauri 只返回安全元数据，前端显示单页预览，不写入书架。GitHub Actions run [31350842759](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31350842759) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
 - M8.5.5b 图片序列/双页模型已完成：后端提供 `ltr`/`rtl`/`vertical` 阅读方向、`single`/`double`/`long_strip` 排版模式和稳定页索引；序列上限为 2,048 页、128,000,000 总像素、512 MiB 总解码字节，暂不接入多文件书架导入。GitHub Actions run [31351541210](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31351541210) 的前端、Rust 105 项测试、TXT 性能证据和 Windows 编译/峰值 RSS 采样全部通过。
 - M8.5.5c 多图片安全预览已完成：后端逐页调用受限解码后再构建序列，额外限制原始输入总量 256 MiB；前端支持多选图片、最多 24 个临时缩略图、方向切换、单页/双页/长图选择和只读预览，不写入书架。GitHub Actions run [31352828101](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31352828101) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
-- 下一步在不突破上述配额的前提下实现持久化缩略图缓存、取消/重试和可恢复图片阅读位置；PDF 继续独立评估，不转成普通文本章节。
+- M8.5.5d1 已完成：前端为每个图片页生成内容摘要，组合为不含绝对路径的序列缓存键，并在本机恢复页码、缩放、方向和排版；当前只保存位置元数据，不写入书架或磁盘缩略图。GitHub Actions run [31353873233](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31353873233) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
+- 下一步在不突破上述配额的前提下实现持久化缩略图文件缓存、取消/重试和缓存失效夹具；PDF 继续独立评估，不转成普通文本章节。
 - PDF：独立评估渲染、搜索、目录和页码定位模型，不转成普通文本章节。
 - 漫画/图片：独立建模缓存、缩放、双页和阅读方向；不复用文本章节字段。
 
