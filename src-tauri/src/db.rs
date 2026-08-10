@@ -21,6 +21,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use thiserror::Error;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Error)]
 pub enum DbError {
@@ -137,6 +138,92 @@ pub struct DuplicateBookGroup {
     pub key: String,
     pub books: Vec<BookSummary>,
 }
+
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BookMergePreviewRequest {
+    pub book_ids: Vec<String>,
+    pub canonical_book_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookMergeBookPreview {
+    pub id: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub format: String,
+    pub content_kind: String,
+    pub chapter_count: i64,
+    pub progress: f64,
+    pub current_chapter: i64,
+    pub shelf_group: String,
+    pub tags: Vec<String>,
+    pub cover_state: Option<String>,
+    pub image_sequence_state: Option<String>,
+    pub image_sequence_root_id: Option<String>,
+    pub image_sequence_page_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookMergeChapterCandidate {
+    pub source_book_id: String,
+    pub chapter_id: String,
+    pub title: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookMergeProgressCandidate {
+    pub book_id: String,
+    pub progress: f64,
+    pub current_chapter: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookMergeCoverCandidate {
+    pub book_id: String,
+    pub state: Option<String>,
+    pub source_kind: Option<String>,
+    pub cache_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookMergePreview {
+    pub preview_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub input_fingerprint: String,
+    pub canonical_book_id: String,
+    pub archived_book_ids: Vec<String>,
+    pub books: Vec<BookMergeBookPreview>,
+    pub append_candidates: Vec<BookMergeChapterCandidate>,
+    pub chapter_conflicts: Vec<BookMergeChapterCandidate>,
+    pub identical_chapter_count: i64,
+    pub progress_candidates: Vec<BookMergeProgressCandidate>,
+    pub suggested_shelf_group: String,
+    pub suggested_tags: Vec<String>,
+    pub cover_candidates: Vec<BookMergeCoverCandidate>,
+    pub image_sequence_blocked: bool,
+    pub conflicts: Vec<String>,
+    pub blocked_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct MergeChapterSnapshot {
+    id: String,
+    title: String,
+    digest: String,
+}
+
+#[derive(Debug, Clone)]
+struct MergeBookSnapshot {
+    book: BookMergeBookPreview,
+    updated_at: String,
+    cover_source_kind: Option<String>,
+    cover_cache_key: Option<String>,
+    chapters: Vec<MergeChapterSnapshot>,
+}
+
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageSequencePageSummary {
@@ -528,6 +615,276 @@ impl Database {
         }
 
         Ok(groups)
+    }
+
+
+    pub fn preview_book_merge(
+        &self,
+        request: BookMergePreviewRequest,
+    ) -> Result<BookMergePreview, DbError> {
+        let canonical_book_id = request.canonical_book_id.trim().to_string();
+        if canonical_book_id.is_empty() {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览必须指定保留书籍".to_string(),
+            ));
+        }
+
+        let mut book_ids = Vec::with_capacity(request.book_ids.len());
+        let mut seen = HashSet::new();
+        for raw_book_id in request.book_ids {
+            let book_id = raw_book_id.trim().to_string();
+            if book_id.is_empty() {
+                return Err(DbError::InvalidBookMetadata(
+                    "合并预览不能包含空书籍 ID".to_string(),
+                ));
+            }
+            if !seen.insert(book_id.clone()) {
+                return Err(DbError::InvalidBookMetadata(
+                    "合并预览不能包含重复书籍 ID".to_string(),
+                ));
+            }
+            book_ids.push(book_id);
+        }
+        if !(2..=8).contains(&book_ids.len()) {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览一次只接受 2 到 8 本书".to_string(),
+            ));
+        }
+        if !seen.contains(&canonical_book_id) {
+            return Err(DbError::InvalidBookMetadata(
+                "保留书籍必须属于当前预览候选".to_string(),
+            ));
+        }
+
+        book_ids.sort();
+        let mut ordered_ids = vec![canonical_book_id.clone()];
+        ordered_ids.extend(
+            book_ids
+                .into_iter()
+                .filter(|book_id| book_id != &canonical_book_id),
+        );
+
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let mut snapshots = Vec::with_capacity(ordered_ids.len());
+        for book_id in ordered_ids {
+            let mut snapshot = connection
+                .query_row(
+                    "SELECT b.id, b.title, b.author, b.format, b.content_kind,
+                            b.progress, b.current_chapter, b.shelf_group, b.tags_json,
+                            (SELECT COUNT(*) FROM chapters c WHERE c.book_id = b.id),
+                            (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
+                            (SELECT c.source_kind FROM book_covers c WHERE c.book_id = b.id),
+                            (SELECT c.cache_key FROM book_covers c WHERE c.book_id = b.id),
+                            (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
+                            (SELECT s.root_id FROM image_sequences s WHERE s.book_id = b.id),
+                            (SELECT s.page_count FROM image_sequences s WHERE s.book_id = b.id),
+                            b.updated_at
+                     FROM books b
+                     WHERE b.id = ?1",
+                    params![book_id],
+                    |row| {
+                        let tags_json: String = row.get(8)?;
+                        Ok(MergeBookSnapshot {
+                            book: BookMergeBookPreview {
+                                id: row.get(0)?,
+                                title: row.get(1)?,
+                                author: row.get(2)?,
+                                format: row.get(3)?,
+                                content_kind: row.get(4)?,
+                                progress: row.get(5)?,
+                                current_chapter: row.get(6)?,
+                                shelf_group: row.get(7)?,
+                                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                                chapter_count: row.get(9)?,
+                                cover_state: row.get(10)?,
+                                image_sequence_state: row.get(13)?,
+                                image_sequence_root_id: row.get(14)?,
+                                image_sequence_page_count: row.get(15)?,
+                            },
+                            cover_source_kind: row.get(11)?,
+                            cover_cache_key: row.get(12)?,
+                            updated_at: row.get(16)?,
+                            chapters: Vec::new(),
+                        })
+                    },
+                )
+                .optional()?
+                .ok_or(DbError::NotFound)?;
+
+            let mut statement = connection.prepare(
+                "SELECT id, title, content
+                 FROM chapters
+                 WHERE book_id = ?1
+                 ORDER BY chapter_index, id",
+            )?;
+            snapshot.chapters = statement
+                .query_map(params![snapshot.book.id.clone()], |row| {
+                    let id: String = row.get(0)?;
+                    let title: String = row.get(1)?;
+                    let content: String = row.get(2)?;
+                    Ok(MergeChapterSnapshot {
+                        id,
+                        title,
+                        digest: merge_text_digest(&content),
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            snapshots.push(snapshot);
+        }
+
+        let canonical = snapshots
+            .first()
+            .expect("validated merge candidates should not be empty");
+        let canonical_title = normalize_merge_text(&canonical.book.title);
+        let canonical_author = normalize_merge_text(canonical.book.author.as_deref().unwrap_or(""));
+        let canonical_format = normalize_merge_text(&canonical.book.format);
+        if snapshots.iter().any(|snapshot| {
+            normalize_merge_text(&snapshot.book.title) != canonical_title
+                || normalize_merge_text(snapshot.book.author.as_deref().unwrap_or(""))
+                    != canonical_author
+                || normalize_merge_text(&snapshot.book.format) != canonical_format
+        }) {
+            return Err(DbError::InvalidBookMetadata(
+                "合并预览要求标题、作者和格式一致".to_string(),
+            ));
+        }
+
+        let mut canonical_chapters = HashMap::new();
+        for chapter in &canonical.chapters {
+            let key = normalize_merge_text(&chapter.title);
+            if let Some(existing_digest) = canonical_chapters.get(&key) {
+                if existing_digest != &chapter.digest {
+                    // 保留冲突信息，避免把重复标题当作可安全合并。
+                    canonical_chapters.insert(key, String::new());
+                }
+            } else {
+                canonical_chapters.insert(key, chapter.digest.clone());
+            }
+        }
+
+        let mut append_candidates = Vec::new();
+        let mut chapter_conflicts = Vec::new();
+        let mut identical_chapter_count = 0_i64;
+        for snapshot in snapshots.iter().skip(1) {
+            for chapter in &snapshot.chapters {
+                let key = normalize_merge_text(&chapter.title);
+                match canonical_chapters.get(&key) {
+                    Some(digest) if !digest.is_empty() && digest == &chapter.digest => {
+                        identical_chapter_count += 1;
+                    }
+                    Some(_) => chapter_conflicts.push(BookMergeChapterCandidate {
+                        source_book_id: snapshot.book.id.clone(),
+                        chapter_id: chapter.id.clone(),
+                        title: chapter.title.clone(),
+                        reason: "same_title_content_conflict".to_string(),
+                    }),
+                    None => append_candidates.push(BookMergeChapterCandidate {
+                        source_book_id: snapshot.book.id.clone(),
+                        chapter_id: chapter.id.clone(),
+                        title: chapter.title.clone(),
+                        reason: "new_title".to_string(),
+                    }),
+                }
+            }
+        }
+
+        let mut suggested_shelf_group = canonical.book.shelf_group.clone();
+        if suggested_shelf_group.trim().is_empty() {
+            suggested_shelf_group = snapshots
+                .iter()
+                .find_map(|snapshot| {
+                    let group = snapshot.book.shelf_group.trim();
+                    (!group.is_empty()).then(|| group.to_string())
+                })
+                .unwrap_or_default();
+        }
+        let mut suggested_tags = Vec::new();
+        for snapshot in &snapshots {
+            for tag in &snapshot.book.tags {
+                let tag = tag.trim();
+                if !tag.is_empty() && !suggested_tags.iter().any(|item| item == tag) {
+                    suggested_tags.push(tag.to_string());
+                }
+            }
+        }
+        suggested_tags.sort();
+
+        let progress_candidates = snapshots
+            .iter()
+            .map(|snapshot| BookMergeProgressCandidate {
+                book_id: snapshot.book.id.clone(),
+                progress: snapshot.book.progress,
+                current_chapter: snapshot.book.current_chapter,
+            })
+            .collect::<Vec<_>>();
+        let cover_candidates = snapshots
+            .iter()
+            .map(|snapshot| BookMergeCoverCandidate {
+                book_id: snapshot.book.id.clone(),
+                state: snapshot.book.cover_state.clone(),
+                source_kind: snapshot.cover_source_kind.clone(),
+                cache_key: snapshot.cover_cache_key.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let mut conflicts = Vec::new();
+        let mut blocked_reasons = Vec::new();
+        if !chapter_conflicts.is_empty() {
+            conflicts.push(format!(
+                "{} 个章节标题相同但正文不同",
+                chapter_conflicts.len()
+            ));
+            blocked_reasons.push("存在章节正文冲突，默认不允许合并".to_string());
+        }
+        let image_snapshots = snapshots
+            .iter()
+            .filter(|snapshot| snapshot.book.content_kind == "image_sequence");
+        let image_roots = image_snapshots
+            .filter_map(|snapshot| snapshot.book.image_sequence_root_id.as_deref())
+            .collect::<HashSet<_>>();
+        let image_sequence_blocked = snapshots
+            .iter()
+            .any(|snapshot| snapshot.book.content_kind == "image_sequence");
+        if image_sequence_blocked {
+            conflicts.push("包含图片序列书籍".to_string());
+            blocked_reasons.push("图片序列默认阻止合并，需明确只保留某一序列".to_string());
+        }
+        if image_roots.len() > 1 {
+            conflicts.push("图片序列根目录不同".to_string());
+        }
+        if snapshots.iter().any(|snapshot| {
+            snapshot.book.image_sequence_state.as_deref().is_some_and(|state| state != "ready")
+        }) {
+            conflicts.push("存在图片序列缺页或待复核状态".to_string());
+        }
+
+        let created_at = unix_timestamp();
+        let input_fingerprint = merge_preview_fingerprint(&snapshots);
+        let archived_book_ids = snapshots
+            .iter()
+            .skip(1)
+            .map(|snapshot| snapshot.book.id.clone())
+            .collect::<Vec<_>>();
+
+        Ok(BookMergePreview {
+            preview_id: generated_id("merge-preview"),
+            created_at,
+            expires_at: created_at.saturating_add(5 * 60),
+            input_fingerprint,
+            canonical_book_id,
+            archived_book_ids,
+            books: snapshots.iter().map(|snapshot| snapshot.book.clone()).collect(),
+            append_candidates,
+            chapter_conflicts,
+            identical_chapter_count,
+            progress_candidates,
+            suggested_shelf_group,
+            suggested_tags,
+            cover_candidates,
+            image_sequence_blocked,
+            conflicts,
+            blocked_reasons,
+        })
     }
 
     pub fn get_book_cover(&self, book_id: &str) -> Result<Option<BookCoverSummary>, DbError> {
@@ -2405,6 +2762,75 @@ fn book_cover_from_row(row: &Row<'_>) -> rusqlite::Result<BookCoverSummary> {
     })
 }
 
+
+fn normalize_merge_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+fn merge_text_digest(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn merge_preview_fingerprint(snapshots: &[MergeBookSnapshot]) -> String {
+    let mut hasher = Sha256::new();
+    for snapshot in snapshots {
+        merge_hash_part(&mut hasher, &snapshot.book.id);
+        merge_hash_part(&mut hasher, &snapshot.book.title);
+        merge_hash_part(
+            &mut hasher,
+            snapshot.book.author.as_deref().unwrap_or(""),
+        );
+        merge_hash_part(&mut hasher, &snapshot.book.format);
+        merge_hash_part(&mut hasher, &snapshot.book.content_kind);
+        merge_hash_part(&mut hasher, &snapshot.book.shelf_group);
+        merge_hash_part(&mut hasher, &snapshot.book.tags.join("\u{1f}"));
+        merge_hash_part(&mut hasher, &format!("{:.6}", snapshot.book.progress));
+        merge_hash_part(&mut hasher, &snapshot.book.current_chapter.to_string());
+        merge_hash_part(&mut hasher, snapshot.book.cover_state.as_deref().unwrap_or(""));
+        merge_hash_part(&mut hasher, snapshot.cover_source_kind.as_deref().unwrap_or(""));
+        merge_hash_part(&mut hasher, snapshot.cover_cache_key.as_deref().unwrap_or(""));
+        merge_hash_part(
+            &mut hasher,
+            snapshot.book.image_sequence_state.as_deref().unwrap_or(""),
+        );
+        merge_hash_part(
+            &mut hasher,
+            snapshot.book.image_sequence_root_id.as_deref().unwrap_or(""),
+        );
+        merge_hash_part(
+            &mut hasher,
+            &snapshot
+                .book
+                .image_sequence_page_count
+                .map(|count| count.to_string())
+                .unwrap_or_default(),
+        );
+        merge_hash_part(&mut hasher, &snapshot.updated_at);
+        for chapter in &snapshot.chapters {
+            merge_hash_part(&mut hasher, &chapter.id);
+            merge_hash_part(&mut hasher, &chapter.title);
+            merge_hash_part(&mut hasher, &chapter.digest);
+        }
+    }
+    let digest = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("merge-v1-{digest}")
+}
+
+fn merge_hash_part(hasher: &mut Sha256, value: &str) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
 fn book_from_row(row: &Row<'_>) -> rusqlite::Result<BookSummary> {
     let tags_json: String = row.get(8)?;
     Ok(BookSummary {
@@ -3813,6 +4239,94 @@ mod tests {
                 .state,
             "missing"
         );
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+
+    #[test]
+    fn previews_book_merge_without_mutating_library() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-merge-preview-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            for (id, title, progress) in [
+                ("merge-canonical", "合并书", 0.4_f64),
+                ("merge-source", " 合并书 ", 0.8_f64),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO books (id, title, author, path, format, progress)
+                         VALUES (?1, ?2, '作者', ?3, 'txt', ?4)",
+                        params![id, title, format!("{id}.txt"), progress],
+                    )
+                    .expect("merge book should insert");
+            }
+            for (id, book_id, index, title, content) in [
+                ("merge-c1", "merge-canonical", 0_i64, "第一章", "相同正文"),
+                ("merge-s1", "merge-source", 0_i64, "第一章", "相同正文"),
+                ("merge-s2", "merge-source", 1_i64, "第一章", "不同正文"),
+                ("merge-s3", "merge-source", 2_i64, "第二章", "新增正文"),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO chapters
+                         (id, book_id, chapter_index, title, content, content_format)
+                         VALUES (?1, ?2, ?3, ?4, ?5, 'text')",
+                        params![id, book_id, index, title, content],
+                    )
+                    .expect("merge chapter should insert");
+            }
+        }
+
+        let preview = database
+            .preview_book_merge(BookMergePreviewRequest {
+                book_ids: vec!["merge-source".to_string(), "merge-canonical".to_string()],
+                canonical_book_id: "merge-canonical".to_string(),
+            })
+            .expect("merge preview should load");
+        assert_eq!(preview.canonical_book_id, "merge-canonical");
+        assert_eq!(preview.archived_book_ids, vec!["merge-source".to_string()]);
+        assert_eq!(preview.books.len(), 2);
+        assert_eq!(preview.identical_chapter_count, 1);
+        assert_eq!(preview.append_candidates.len(), 1);
+        assert_eq!(preview.chapter_conflicts.len(), 1);
+        assert!(preview
+            .blocked_reasons
+            .iter()
+            .any(|reason| reason.contains("章节正文冲突")));
+        assert_eq!(preview.expires_at - preview.created_at, 5 * 60);
+        assert!(preview.input_fingerprint.starts_with("merge-v1-"));
+        assert!(preview.preview_id.starts_with("merge-preview-"));
+        assert_eq!(
+            database
+                .get_book_summary("merge-canonical")
+                .expect("canonical should remain readable")
+                .progress,
+            0.4
+        );
+        assert!(database
+            .preview_book_merge(BookMergePreviewRequest {
+                book_ids: vec!["merge-canonical".to_string()],
+                canonical_book_id: "merge-canonical".to_string(),
+            })
+            .is_err());
+        assert!(database
+            .preview_book_merge(BookMergePreviewRequest {
+                book_ids: vec![
+                    "merge-canonical".to_string(),
+                    "missing-book".to_string(),
+                ],
+                canonical_book_id: "merge-canonical".to_string(),
+            })
+            .is_err());
 
         drop(database);
         let _ = fs::remove_dir_all(directory);
