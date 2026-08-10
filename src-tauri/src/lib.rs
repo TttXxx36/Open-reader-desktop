@@ -6,6 +6,7 @@ mod source;
 mod source_import;
 mod xpath_poc;
 
+use image_relink::{ImageRelinkAssignment, ImageRelinkPreview};
 use db::{
     BookDetail, BookSummary, ChapterContent, Database, ImageSequenceDetail, ImageSequenceSummary,
     ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
