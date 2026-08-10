@@ -76,16 +76,17 @@
 
 ### M8 — 阅读内容与本地格式 v2
 
-详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界与 M8.2 TXT 解析可配置化均已完成；M8.3 已完成安全链接索引、块锚点、跨章节片段跳转、有限 CSS 白名单和损坏 EPUB 恢复边界。M8.4 首个 TXT 行累积切片已完成，移除每章行字符串缓存并通过约 1 MiB/512 章夹具；随后完成单次字符扫描的 CRLF/CR 与全角空格归一化，并在无替换规则路径上改为逐行处理、有效 UTF-8 借用解码，CI run [31330389289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31330389289) 通过，Rust 95 tests；新增 1/16/64 MiB 尺寸矩阵和每档 20 秒时间上限，run [31330961076](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31330961076) 通过；默认无替换规则路径已完成 UTF-16LE/BE 与 GB18030 的 64 KiB 有状态分块解码，run [31332336289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31332336289) 通过；run [31334298865](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31334298865) 通过真实的 1/16/64 MiB 基线，Linux Rust 99 tests，artifact 9043889018，Ubuntu 记录 37/560/2241 ms 与 13,369,344/63,385,600/239,243,264 bytes 峰值 RSS；同一 run 的 Windows 测试编译与峰值 RSS 采样测试也通过，替换规则已采用 64 KiB 有界滚动缓冲并覆盖跨块匹配。M8.4 收口，M8.5 其他格式评估已完成图片单页、多图片安全预览和序列模型；M8.5.5d1 已完成内容摘要缓存键和本机位置恢复，下一步进入持久化缩略图文件缓存/取消重试/缓存失效切片，并继续保持 PDF 只读探测。
+详细执行清单见 [M8 内容格式 v2 计划](m8-content-format-plan.md)。M8.1 EPUB/TXT 导入边界与 M8.2 TXT 解析可配置化均已完成；M8.3 已完成安全链接索引、块锚点、跨章节片段跳转、有限 CSS 白名单和损坏 EPUB 恢复边界。M8.4 首个 TXT 行累积切片已完成，移除每章行字符串缓存并通过约 1 MiB/512 章夹具；随后完成单次字符扫描的 CRLF/CR 与全角空格归一化，并在无替换规则路径上改为逐行处理、有效 UTF-8 借用解码，CI run [31330389289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31330389289) 通过，Rust 95 tests；新增 1/16/64 MiB 尺寸矩阵和每档 20 秒时间上限，run [31330961076](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31330961076) 通过；默认无替换规则路径已完成 UTF-16LE/BE 与 GB18030 的 64 KiB 有状态分块解码，run [31332336289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31332336289) 通过；run [31334298865](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31334298865) 通过真实的 1/16/64 MiB 基线，Linux Rust 99 tests，artifact 9043889018，Ubuntu 记录 37/560/2241 ms 与 13,369,344/63,385,600/239,243,264 bytes 峰值 RSS；同一 run 的 Windows 测试编译与峰值 RSS 采样测试也通过，替换规则已采用 64 KiB 有界滚动缓冲并覆盖跨块匹配。M8.4 收口，M8.5 其他格式评估已完成图片单页、多图片安全预览和序列模型；M8.5.5d1 已完成内容摘要缓存键和本机位置恢复，M8.5.5e1-e3 已完成持久化 PNG 缩略图缓存、原子安装和容量/LRU 清理，下一步进入取消重试/页序恢复/崩溃恢复切片，并继续保持 PDF 只读探测。
 
 - EPUB：完善目录、章节标题、字体、图片、链接和基础 CSS 白名单，继续禁止脚本、事件属性、危险 URL 和无限资源。
 - TXT：编码探测、章节规则配置、全角空格/缩进、替换词和大文件流式解析。
 - M8.5.1 已完成只读格式探测：`BookFormatProbe`/`probe_book_format` 覆盖 TXT、EPUB、MOBI/AZW/AZW3、PDF 与常见图片签名；run [31334929174](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31334929174) 通过 100 个 Rust 测试和 Windows 测试编译/采样。M8.5.2 增加有界 PDF 版本、图片尺寸/MIME、MOBI 记录偏移/头长度元数据探测，run [31335820920](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31335820920) 通过 100 个 Rust 测试和 Windows 编译/采样；M8.5.3 将 `require_importable_format` 接入导入与预览，已知签名冲突明确拒绝，MOBI/AZW/AZW3 明确保持只读且不绕过 DRM，run [31336890258](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31336890258) 通过前端、Rust fmt/check、100 个 Rust 测试、性能证据和 Windows 编译/采样；MOBI/AZW 后续仍须审查许可证、解析器维护性、内存上限和 DRM 拒绝策略，并评估 PDF/图片独立阅读模型。
 - M8.5.4a 已将格式探测接入本地文件导入前置流程，run [31337644268](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31337644268) 的前端、Rust checks 和 Windows sampler 全部通过；M8.5.4b 的 PDF/图片独立阅读模型契约已记录在 [m8-reader-model.md](m8-reader-model.md)。M8.5.5 依赖评估已记录在 [m8.5.5-dependency-evaluation.md](m8.5.5-dependency-evaluation.md)：图片采用受限 `image 0.25.9` 解码链，PDF 继续探测。
 - M8.5.5a 已完成 PNG/JPEG/GIF/WebP 单页受限预览，run [31350842759](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31350842759) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过；M8.5.5b 已完成图片序列方向/双页/长图模型和 2,048 页、128,000,000 像素、512 MiB 解码字节配额，run [31351541210](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31351541210) 的前端、Rust 105 项测试、TXT 性能证据和 Windows 编译/峰值 RSS 采样全部通过；M8.5.5c 已完成多图片批量逐页解码、256 MiB 原始输入总量闸门、最多 24 个临时缩略图、方向/排版控制和只读预览，run [31352828101](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31352828101) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
-- M8.5.5d1 已完成：前端为每个图片页生成内容摘要，组合为不含绝对路径的序列缓存键，并在本机恢复页码、缩放、方向和排版；当前只保存位置元数据，不写入书架或磁盘缩略图。run [31353873233](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31353873233) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。图片序列暂不写入书架或 SQLite。
+- M8.5.5d1 已完成：前端为每个图片页生成内容摘要，组合为不含绝对路径的序列缓存键，并在本机恢复页码、缩放、方向和排版；当前只保存位置元数据，不写入书架或磁盘缩略图。run [31353873233](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31353873233) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。
+- M8.5.5e1-e3 已完成：Rust 在 Tauri 应用缓存目录下按内容摘要键写入 PNG 缩略图，单页最多 8 MiB、总缓存最多 512 MiB；临时文件 sync_all 后 rename 安装，损坏条目自动重建，超额按最早修改时间清理；前端显示命中/写入/占用摘要。run [31357348416](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31357348416) 的前端、Rust、Windows 编译/峰值 RSS 采样全部通过。图片序列暂不写入书架或 SQLite。
 - PDF：单独评估 PDF 渲染/搜索/目录模型；不把 PDF 当作普通文本章节。
-- 漫画/图片：M8.5.5d1 已完成内容摘要键和本机位置恢复；继续独立实现持久化缩略图文件缓存、取消/重试、缓存失效、缩放、双页/长图和崩溃恢复，不混入文本阅读器。
+- 漫画/图片：M8.5.5d1 已完成内容摘要键和本机位置恢复，M8.5.5e1-e3 已完成持久化缩略图文件缓存、原子安装和容量/LRU 清理；继续独立实现取消/重试、页序恢复、缩放、双页/长图和崩溃恢复，不混入文本阅读器。
 - 所有格式都需旧数据库迁移、损坏文件错误恢复和 64 MB 默认导入上限测试。
 ### M9 — 书架、元数据与阅读历史
 
@@ -133,7 +134,7 @@
 6. M7.3 XPath 静态识别、离线解析 PoC、首轮语法夹具与指标预览（已完成，70 个 Rust 测试，CI run 31307700513 通过）；继续禁止真实网络执行。
 7. M6.5 Windows Release 与 installer smoke 自动化验收已完成（run 31308312340、31308654635）；待真实 Windows 环境补验升级/WebView2/离线错误/回滚及 UI 可用性。
 8. M7.5 单源重试、搜索/书籍/章节失败历史、本地保留与统计、跨请求关联 ID、本地失败报告、有限原因分类、旧库升级、报告 schema_version 兼容、source_metrics 请求/缓存统计、规则执行首个实现和字段级/skipped 收尾均已完成（SQLite 0010/0011/0012，CI run [31322235077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31322235077)，76 个 Rust 测试）；转入 M8 内容格式 v2，授权合成边界夹具继续作为横向质量线。
-9. M8.5.5a/b/c/d1 已完成；下一步进入持久化缩略图文件缓存、取消/重试和缓存失效切片，然后按依赖顺序推进 M9、M10、M11、M12，并在每阶段完成一次路线图复盘。
+9. M8.5.5a/b/c/d1/e1-e3 已完成；下一步进入取消/重试、页序调整、相邻页恢复和崩溃恢复切片，然后按依赖顺序推进 M9、M10、M11、M12，并在每阶段完成一次路线图复盘。
 
 ## 里程碑完成定义
 
