@@ -1,5 +1,8 @@
 use crate::{
-    image_relink::{preview_relink, ImageRelinkAssignment, ImageRelinkPreview, RelinkPage},
+    image_relink::{
+        preview_relink, sha256_file, ImageRelinkAssignment, ImageRelinkPreview, RelinkPage,
+        MAX_DIGEST_FILE_BYTES, MAX_DIGEST_TOTAL_BYTES,
+    },
     image_sequence::{
         modified_at_ns, normalize_relative_image_path, resolve_image_page_path,
         validate_image_root_path,
@@ -881,6 +884,129 @@ impl Database {
                  last_verified_at = CURRENT_TIMESTAMP
              WHERE id = ?2",
             params![root_state, detail.sequence.root_id.as_str()],
+        )?;
+        transaction.execute(
+            "UPDATE image_sequences
+             SET state = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE book_id = ?2",
+            params![sequence_state, book_id],
+        )?;
+        for (page_index, state, observed_modified_at_ns) in page_updates {
+            transaction.execute(
+                "UPDATE image_sequence_pages
+                 SET state = ?1,
+                     modified_at_ns = COALESCE(?2, modified_at_ns)
+                 WHERE sequence_id = ?3 AND page_index = ?4",
+                params![state, observed_modified_at_ns, book_id, page_index],
+            )?;
+        }
+        transaction.commit()?;
+        drop(connection);
+        self.get_image_sequence(book_id)
+    }
+
+    pub fn verify_image_sequence_digests(
+        &self,
+        book_id: &str,
+    ) -> Result<ImageSequenceDetail, DbError> {
+        let detail = self.refresh_image_sequence_state(book_id)?;
+        if detail.sequence.state == "needs_relink" {
+            return Ok(detail);
+        }
+
+        let stale_pages = detail
+            .pages
+            .iter()
+            .filter(|page| page.state == "stale")
+            .collect::<Vec<_>>();
+        if stale_pages.is_empty() {
+            return Ok(detail);
+        }
+
+        let mut total_digest_bytes = 0_u64;
+        let mut page_updates = Vec::with_capacity(stale_pages.len());
+        for page in stale_pages {
+            let path = resolve_image_page_path(&detail.sequence.root_path, &page.relative_path)
+                .map_err(|error| DbError::InvalidImageSequence(error.to_string()))?;
+            let Some(metadata) = fs::metadata(&path)
+                .ok()
+                .filter(|metadata| metadata.is_file())
+            else {
+                page_updates.push((page.page_index, "missing".to_string(), None));
+                continue;
+            };
+
+            if page.content_digest.is_none() {
+                page_updates.push((page.page_index, "stale".to_string(), None));
+                continue;
+            }
+
+            if metadata.len() > MAX_DIGEST_FILE_BYTES {
+                return Err(DbError::InvalidImageSequence(format!(
+                    "单页图片超过 {} MB SHA-256 复核上限",
+                    MAX_DIGEST_FILE_BYTES / (1024 * 1024)
+                )));
+            }
+            if total_digest_bytes.saturating_add(metadata.len()) > MAX_DIGEST_TOTAL_BYTES {
+                return Err(DbError::InvalidImageSequence(format!(
+                    "本次 SHA-256 复核总量超过 {} MB 上限",
+                    MAX_DIGEST_TOTAL_BYTES / (1024 * 1024)
+                )));
+            }
+
+            let (digest, hashed_bytes) = sha256_file(&path, MAX_DIGEST_FILE_BYTES)
+                .map_err(DbError::InvalidImageSequence)?;
+            total_digest_bytes = total_digest_bytes
+                .checked_add(hashed_bytes)
+                .ok_or_else(|| {
+                    DbError::InvalidImageSequence("图片复核总大小超出安全范围".to_string())
+                })?;
+            if total_digest_bytes > MAX_DIGEST_TOTAL_BYTES {
+                return Err(DbError::InvalidImageSequence(format!(
+                    "本次 SHA-256 复核总量超过 {} MB 上限",
+                    MAX_DIGEST_TOTAL_BYTES / (1024 * 1024)
+                )));
+            }
+
+            let expected_digest = page
+                .content_digest
+                .as_deref()
+                .unwrap_or_default()
+                .strip_prefix("sha256:")
+                .unwrap_or_else(|| page.content_digest.as_deref().unwrap_or_default());
+            let state = if expected_digest.eq_ignore_ascii_case(&digest) {
+                "ready"
+            } else {
+                "stale"
+            };
+            let observed_modified_at_ns = (state == "ready").then(|| modified_at_ns(&metadata));
+            page_updates.push((page.page_index, state.to_string(), observed_modified_at_ns));
+        }
+
+        let mut states = detail
+            .pages
+            .iter()
+            .map(|page| (page.page_index, page.state.as_str()))
+            .collect::<HashMap<_, _>>();
+        for (page_index, state, _) in &page_updates {
+            states.insert(*page_index, state.as_str());
+        }
+        let sequence_state = if states.values().any(|state| *state == "missing") {
+            "missing"
+        } else if states.values().any(|state| *state == "stale") {
+            "stale"
+        } else {
+            "ready"
+        };
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "UPDATE library_roots
+             SET state = 'available', updated_at = CURRENT_TIMESTAMP,
+                 last_verified_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            params![detail.sequence.root_id.as_str()],
         )?;
         transaction.execute(
             "UPDATE image_sequences
