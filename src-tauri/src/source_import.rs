@@ -669,10 +669,18 @@ fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Resul
 
     if let Some(item) = first_value(object, item_keys) {
         if let Some(selector) = optional_text(Some(item)) {
-            output.insert(
-                "item".to_string(),
-                Value::String(normalize_selector(&selector, &format!("{stage}.item"))?),
-            );
+            match normalize_selector(&selector, &format!("{stage}.item")) {
+                Ok(normalized) => {
+                    output.insert("item".to_string(), Value::String(normalized));
+                }
+                Err(error) if !is_fatal_rule_error(&error) => {
+                    output.insert(
+                        "item_legacy".to_string(),
+                        legacy_rule(Value::String(selector), error),
+                    );
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 

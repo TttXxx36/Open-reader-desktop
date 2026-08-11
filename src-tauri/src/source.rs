@@ -149,6 +149,9 @@ fn default_permission_status() -> String {
 pub struct PageRules {
     #[serde(default)]
     pub item: Option<String>,
+    /// Original item selector retained when it cannot be safely converted.
+    #[serde(default)]
+    pub item_legacy: Option<Value>,
     #[serde(default)]
     pub title: Option<SourceRule>,
     #[serde(default)]
@@ -2516,6 +2519,11 @@ fn validate_page_rules(
             errors.push(format!("{name}.item：{error}"));
         }
     }
+    if rules.item_legacy.is_some() {
+        warnings.push(format!(
+            "{name}.item 已保留原始兼容选择器，当前不会执行该 item 规则"
+        ));
+    }
 
     for (field, rule) in [
         ("title", rules.title.as_ref()),
@@ -3270,8 +3278,12 @@ mod tests {
               "searchUrl": "https://example.test/search?q={{keyword}}"
             }"#,
         );
-        assert!(!result.valid);
-        assert!(result.errors.iter().any(|error| error.contains("音频书源")));
+        assert!(result.valid);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("音频/TTS")));
     }
 
     #[test]
