@@ -1295,11 +1295,8 @@ fn validate_source_import_url(url: &str) -> Result<&str, String> {
 
 async fn fetch_source_import_payload(url: &str) -> Result<String, String> {
     let url = validate_source_import_url(url)?;
-    let engine = SourceEngine::new(
-        MAX_SOURCE_IMPORT_TIMEOUT_SECS,
-        MAX_SOURCE_BUNDLE_BYTES,
-    )
-    .map_err(|error| error.to_string())?;
+    let engine = SourceEngine::new(MAX_SOURCE_IMPORT_TIMEOUT_SECS, MAX_SOURCE_BUNDLE_BYTES)
+        .map_err(|error| error.to_string())?;
     engine
         .fetch_text_document(url)
         .await
@@ -1830,9 +1827,7 @@ fn classify_source_failure(message: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        classify_source_failure, validate_source_bundle_size, MAX_SOURCE_BUNDLE_BYTES,
-    };
+    use super::{classify_source_failure, validate_source_bundle_size, MAX_SOURCE_BUNDLE_BYTES};
 
     #[test]
     fn classifies_finite_source_failure_reasons() {
