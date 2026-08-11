@@ -84,6 +84,8 @@ M7.1d 最新代码提交为 [cd144e4e218cd5294d1037eb8f0f567e1a9750f7](https://g
 
 目标 Windows 手工验收时应重新导入原在线书源：16 MiB 以内应进入预览/确认导入；超过 16 MiB 时应显示明确边界。当前不做“无限制”放开，以避免异常响应导致内存和网络资源失控；如后续确有超大可信书源需求，再增加带管理员提示的可配置上限。
 
+验收模板已更新至本轮发布代码和 16 MiB 书源边界（提交 [2d56dcfac55f9c1a9baf65bb3cbfcc4a9c5ed45c](https://github.com/TttXxx36/Open-reader-desktop/commit/2d56dcfac55f9c1a9baf65bb3cbfcc4a9c5ed45c)，CI [31490123210](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31490123210)）。d2 迁移前评审已形成独立记录 [m9.3.1-d2-migration-review.md](m9.3.1-d2-migration-review.md)，设计冻结但仍等待 P0 目标 Windows 手工验收，不执行真实 `0016` 迁移。
+
 ## 后续执行顺序
 
 1. 完成本次 M7.1d 文档同步并通过 CI。
