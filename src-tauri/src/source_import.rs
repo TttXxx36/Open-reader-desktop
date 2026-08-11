@@ -1437,7 +1437,10 @@ mod tests {
             Some("OpenReaderTest")
         );
         assert!(matches!(
-            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            source
+                .search
+                .as_ref()
+                .and_then(|rules| rules.title.as_ref()),
             Some(SourceRule::Selector(selector)) if selector == "h2 a"
         ));
         assert!(matches!(
