@@ -1620,7 +1620,10 @@ mod tests {
         let source: BookSource =
             serde_json::from_str(&imported[0].config_json).expect("legacy attr source");
         assert!(matches!(
-            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            source
+                .search
+                .as_ref()
+                .and_then(|rules| rules.title.as_ref()),
             Some(SourceRule::Legacy { .. })
         ));
     }
