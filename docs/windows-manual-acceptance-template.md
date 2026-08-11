@@ -2,11 +2,13 @@
 
 > 本文件是 M7.1d/M8/M9 发布后的目标环境验收模板。未填写的项目均视为“未验证”，不能作为功能已完成的证据。
 >
-> 本轮发布代码提交：`60564de2151738f91e9b953ff44ad0e42496fb2b`
+> 本轮发布代码提交：`cd144e4e218cd5294d1037eb8f0f567e1a9750f7`>
 >
-> Windows Release：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475774771>
+> 书源大小边界用例 S-09/S-10 应使用授权、公版或本地受控测试 URL，不要提交私人 Cookie、Authorization 或正文内容。
 >
-> installer smoke：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31476524993>
+> Windows Release：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31487610713>（artifact `9099996289`，SHA-256 `f3d2f69e38de063303ebe0fc0c83f75676bfd7da5719a3f5069c07910a97a17e`）
+>
+> installer smoke：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31488344784>
 
 ## 测试环境
 
@@ -48,6 +50,8 @@
 | S-06 | 批量启停、分组、备注、权重 | 操作后列表和配置一致；部分失败不产生半套结果 |  | 未验证 |
 | S-07 | 同组拖拽排序与跨组拖拽 | 同组顺序保存；跨组操作被拒绝并有提示 |  | 未验证 |
 | S-08 | 书源安全审计 | Cookie/Authorization/脚本等风险项被标注或拒绝 |  | 未验证 |
+| S-09 | 导入 16 MiB 以内的 HTTPS URL 书源 | 先预览，再确认导入；不再出现 2 MiB 限制提示 |  | 未验证 |
+| S-10 | 导入超过 16 MiB 的 HTTPS URL 书源 | 明确提示“书源文件超过 16 MB 限制”，不写入半截配置 |  | 未验证 |
 
 ## P0-3 本地阅读与排版
 
