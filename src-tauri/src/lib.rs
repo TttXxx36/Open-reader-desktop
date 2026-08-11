@@ -989,7 +989,8 @@ fn audit_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceAudit
         .collect())
 }
 
-const MAX_SOURCE_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SOURCE_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SOURCE_IMPORT_TIMEOUT_SECS: u64 = 30;
 const MAX_SOURCE_IMPORT_URL_BYTES: usize = 2 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
@@ -1146,10 +1147,18 @@ fn persist_imported_sources(
     Ok(persist_imported_sources_with_strategy(database, bundle, "update")?.imported)
 }
 
-fn import_source_payload(database: &Database, payload: &str) -> Result<Vec<SourceSummary>, String> {
-    if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
-        return Err("书源文件超过 2 MB 限制".to_string());
+fn validate_source_bundle_size(payload_len: usize) -> Result<(), String> {
+    if payload_len > MAX_SOURCE_BUNDLE_BYTES {
+        return Err(format!(
+            "书源文件超过 {} MB 限制",
+            MAX_SOURCE_BUNDLE_BYTES / (1024 * 1024)
+        ));
     }
+    Ok(())
+}
+
+fn import_source_payload(database: &Database, payload: &str) -> Result<Vec<SourceSummary>, String> {
+    validate_source_bundle_size(payload.len())?;
 
     let bundle = source_import::parse_import_bundle(payload)?;
     persist_imported_sources(database, bundle)
@@ -1267,9 +1276,7 @@ fn preview_source_payload(
     database: &Database,
     payload: &str,
 ) -> Result<source_import::ImportPreview, String> {
-    if payload.len() > MAX_SOURCE_BUNDLE_BYTES {
-        return Err("书源文件超过 2 MB 限制".to_string());
-    }
+    validate_source_bundle_size(payload.len())?;
 
     let preview = source_import::preview_import_bundle(payload)?;
     enrich_source_import_preview(database, preview)
@@ -1288,7 +1295,11 @@ fn validate_source_import_url(url: &str) -> Result<&str, String> {
 
 async fn fetch_source_import_payload(url: &str) -> Result<String, String> {
     let url = validate_source_import_url(url)?;
-    let engine = SourceEngine::default().map_err(|error| error.to_string())?;
+    let engine = SourceEngine::new(
+        MAX_SOURCE_IMPORT_TIMEOUT_SECS,
+        MAX_SOURCE_BUNDLE_BYTES,
+    )
+    .map_err(|error| error.to_string())?;
     engine
         .fetch_text_document(url)
         .await
@@ -1310,9 +1321,7 @@ fn import_sources_selected(
     indices: Vec<usize>,
     conflict_strategy: String,
 ) -> Result<SourceImportResult, String> {
-    if bundle_json.len() > MAX_SOURCE_BUNDLE_BYTES {
-        return Err("书源文件超过 2 MB 限制".to_string());
-    }
+    validate_source_bundle_size(bundle_json.len())?;
 
     let bundle = source_import::parse_selected_entries(&bundle_json, &indices)?;
     persist_imported_sources_with_strategy(&database, bundle, &conflict_strategy)
@@ -1821,7 +1830,9 @@ fn classify_source_failure(message: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::classify_source_failure;
+    use super::{
+        classify_source_failure, validate_source_bundle_size, MAX_SOURCE_BUNDLE_BYTES,
+    };
 
     #[test]
     fn classifies_finite_source_failure_reasons() {
@@ -1845,6 +1856,14 @@ mod tests {
                 "message: {message}"
             );
         }
+    }
+
+    #[test]
+    fn accepts_expanded_source_bundle_limit_and_reports_it() {
+        assert!(validate_source_bundle_size(MAX_SOURCE_BUNDLE_BYTES).is_ok());
+        let error = validate_source_bundle_size(MAX_SOURCE_BUNDLE_BYTES + 1)
+            .expect_err("payload over the expanded limit should be rejected");
+        assert_eq!(error, "书源文件超过 16 MB 限制");
     }
 }
 
