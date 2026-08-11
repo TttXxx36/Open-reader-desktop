@@ -63,7 +63,7 @@
 
 ### M7 — 书源兼容性 v2（当前开发阶段）
 
-详细执行清单见 [M7 书源兼容性 v2 实施计划](m7-source-compatibility-plan.md)。
+详细执行清单见 [M7 书源兼容性 v2 实施计划](m7-source-compatibility-plan.md)。 当前阶段缺口与后续顺序见 [2026-08-11 开发缺口审计](development-gap-audit-2026-08-11.md)。
 
 目标是“导入信息不丢、能力边界可见、执行行为可测试”，而不是立即复制全部 Android 行为。
 
