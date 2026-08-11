@@ -20,6 +20,8 @@ M7.1d 最新代码提交为 [60564de2151738f91e9b953ff44ad0e42496fb2b](https://g
 
 ### P0：真实 Windows 手工验收
 
+执行记录模板见 [Windows 手工验收记录模板](windows-manual-acceptance-template.md)。模板中的空白项均视为“未验证”，不得用 CI 结果替代目标环境人工记录。
+
 以下内容不能由 CI 完全代替，仍需在目标 Windows 环境记录：
 
 - 安装版和便携版原地升级、卸载后的数据保留；
