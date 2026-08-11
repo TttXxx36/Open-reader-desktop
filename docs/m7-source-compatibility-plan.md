@@ -28,7 +28,7 @@
 
 ## M7.1 书源管理基础（已完成 M7.1a + M7.1b + M7.1c）
 
-本轮已完成 SQLite 元数据迁移、旧配置回填、按分组/自定义顺序/权重排序，以及书源列表的分组筛选、发现开关和元数据编辑。M7.1b 补齐多选、批量启停/发现开关/删除、同分组上移下移，以及导入预览的新增/更新/无变化和变更字段提示；M7.1c 又补齐批量分组移动、导入冲突策略、导入前快照、快照恢复和失败时的原子替换。远程 CI 已验证前端构建、UI 契约、Rust 检查和 39 个测试；跨分组拖拽、快照保留策略和 Windows 手工体验仍属于后续收尾。
+本轮已完成 SQLite 元数据迁移、旧配置回填、按分组/自定义顺序/权重排序，以及书源列表的分组筛选、发现开关和元数据编辑。M7.1b 补齐多选、批量启停/发现开关/删除、同分组上移下移，以及导入预览的新增/更新/无变化和变更字段提示；M7.1c 又补齐批量分组移动、导入冲突策略、导入前快照、快照恢复和失败时的原子替换；M7.1d 已补齐同组拖拽排序与批量备注/权重编辑，后端使用预校验后的原子批量写入。最新 CI、Windows Release 和 installer smoke 均通过；快照保留/清理策略和 Windows 手工体验仍属于后续收尾。
 
 ### 数据库
 
@@ -61,19 +61,20 @@
 
 - set_sources_enabled、set_sources_explore_enabled、delete_sources：批量启停、发现开关和删除。
 - reorder_sources：同分组上移/下移并回写 custom_order。
+- update_sources_metadata：预校验批量备注/权重并通过单个 SQLite 事务同步 JSON 与元数据。
 - 导入预览：显示新增/更新/无变化和变更字段；仍由用户确认后才写入。
 - 导入冲突策略：更新已有、跳过已有、全部新建；写入前自动保存当前配置快照。
 - 快照恢复：恢复前校验完整 bundle，使用 replace-all 事务，失败时保留原数据和快照。
 
 后续收尾：
 
-- 跨分组拖拽排序、批量备注/权重编辑和快照清理/保留策略。
+- 快照清理/保留策略，以及真实 Windows 窄窗口下的批量操作和恢复流程手工验收。
 - 真实 Windows 窄窗口下的批量操作、冲突提示和恢复流程手工验收。
 
 ### Vue 界面
 
 - 书源列表增加分组、类型、权重、发现开关和备注摘要。
-- 增加按分组筛选、启用/停用、拖拽或上下移动排序、批量操作。
+- 增加按分组筛选、启用/停用、同组拖拽或上下移动排序、批量启停/分组/备注/权重操作。
 - 编辑器显示“可执行/可导入但不执行/拒绝”能力徽标；保存前显示元数据与规则 diff。
 - 不把认证头、Cookie 或脚本原文展示到诊断日志中。
 
@@ -86,7 +87,7 @@
 - 导入冲突策略、导入前快照、快照列表/恢复和 replace-all 原子事务。
 - 保存后重启仍保持元数据；前端 typecheck/build/UI contract、Rust fmt/check/test 全部通过。
 
-远程证据：[GitHub Actions run 30755061447](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30755061447)（M7.1a）；[GitHub Actions run 30755644977](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30755644977)（M7.1b 首个切片）；[GitHub Actions run 30757528534](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30757528534)（M7.1c，前端与 Rust 39 tests）。
+远程证据：[GitHub Actions run 30755061447](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30755061447)（M7.1a）；[GitHub Actions run 30755644977](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30755644977)（M7.1b 首个切片）；[GitHub Actions run 30757528534](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30757528534)（M7.1c，前端与 Rust 39 tests）。 最新 M7.1d 提交 [60564de2151738f91e9b953ff44ad0e42496fb2b](https://github.com/TttXxx36/Open-reader-desktop/commit/60564de2151738f91e9b953ff44ad0e42496fb2b) 对应 CI run [31475264033](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475264033)、Windows Release [31475774771](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475774771) 和 installer smoke [31476524993](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31476524993) 均通过。
 
 后续验收：
 
