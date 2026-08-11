@@ -607,13 +607,12 @@ fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Resul
     let mut output = Map::new();
 
     if let Some(item) = first_value(object, item_keys) {
-        let selector = item
-            .as_str()
-            .ok_or_else(|| format!("{stage}.item 必须是 CSS 选择器字符串"))?;
-        output.insert(
-            "item".to_string(),
-            Value::String(normalize_selector(selector, &format!("{stage}.item"))?),
-        );
+        if let Some(selector) = optional_text(Some(item)) {
+            output.insert(
+                "item".to_string(),
+                Value::String(normalize_selector(&selector, &format!("{stage}.item"))?),
+            );
+        }
     }
 
     for (target, keys) in [
@@ -636,12 +635,23 @@ fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Resul
         ),
         ("intro", &["intro", "desc", "description", "bookIntro"][..]),
         ("content", &["content", "text", "bookContent"][..]),
+        (
+            "next",
+            &[
+                "next",
+                "nextUrl",
+                "next_url",
+                "nextPage",
+                "next_page",
+                "nextContentUrl",
+            ][..],
+        ),
     ] {
         if let Some(rule) = first_value(object, keys) {
-            output.insert(
-                target.to_string(),
-                normalize_rule(rule, &format!("{stage}.{target}"))?,
-            );
+            let normalized = normalize_rule(rule, &format!("{stage}.{target}"))?;
+            if !normalized.is_null() {
+                output.insert(target.to_string(), normalized);
+            }
         }
     }
 
@@ -650,22 +660,31 @@ fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Resul
 
 fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
     match value {
-        Value::String(raw) => normalize_rule_parts(raw, context, None, None),
+        Value::String(raw) => normalize_rule_parts(raw, context, None, None, None),
         Value::Object(object) => {
             if let Some(chain) = object.get("chain") {
                 let entries = chain
                     .as_array()
                     .ok_or_else(|| format!("{context}.chain 必须是数组"))?;
-                if entries.is_empty() || entries.len() > MAX_RULE_CHAIN_LENGTH {
+                if entries.len() > MAX_RULE_CHAIN_LENGTH {
                     return Err(format!(
-                        "{context}.chain 必须包含 1-{} 个候选",
+                        "{context}.chain 最多支持 {} 个候选",
                         MAX_RULE_CHAIN_LENGTH
                     ));
                 }
                 let normalized = entries
                     .iter()
                     .map(|entry| normalize_rule(entry, context))
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter(|entry| !entry.is_null())
+                    .collect::<Vec<_>>();
+                if normalized.is_empty() {
+                    return Ok(Value::Null);
+                }
+                if normalized.len() == 1 {
+                    return Ok(normalized.into_iter().next().expect("one rule"));
+                }
                 return Ok(json!({ "chain": normalized }));
             }
 
@@ -673,9 +692,14 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
                 first_value(object, &["selector", "rule", "value", "jsonPath", "path"])
                     .and_then(Value::as_str)
                     .ok_or_else(|| format!("{context} 缺少 selector 或 JSONPath"))?;
+            if raw_selector.trim().is_empty() {
+                return Ok(Value::Null);
+            }
             let attr = object.get("attr").and_then(Value::as_str);
             let regex = object.get("regex").and_then(Value::as_str);
-            let normalized = normalize_rule_parts(raw_selector, context, attr, regex)?;
+            let replacement = object.get("replacement").and_then(Value::as_str);
+            let normalized =
+                normalize_rule_parts(raw_selector, context, attr, regex, replacement)?;
             if normalized.is_string() {
                 Ok(json!({ "selector": normalized }))
             } else {
@@ -690,54 +714,104 @@ fn normalize_rule_parts(
     raw_selector: &str,
     context: &str,
     override_attr: Option<&str>,
-    regex: Option<&str>,
+    override_regex: Option<&str>,
+    override_replacement: Option<&str>,
 ) -> Result<Value, String> {
     let parts = split_rule_chain(raw_selector, context)?;
+    if parts.is_empty() {
+        return Ok(Value::Null);
+    }
+
     let mut normalized = Vec::with_capacity(parts.len());
     for part in parts {
-        let (selector, parsed_attr) = parse_legado_rule(part, context)?;
-        let attr = if let Some(raw_attr) = override_attr {
-            let normalized = raw_attr.trim().to_ascii_lowercase();
-            if !matches!(
-                normalized.as_str(),
-                "text" | "content" | "href" | "src" | "title" | "alt" | "data-src"
-            ) {
-                return Err(format!(
-                    "{context} 的属性后缀 @{} 不在安全子集内",
-                    raw_attr.trim()
-                ));
-            }
-            normalize_attr(raw_attr)
-        } else {
-            parsed_attr
-        };
-        if attr.is_none() && regex.is_none() {
-            normalized.push(Value::String(selector));
+        let join_parts = part
+            .split("&&")
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        if join_parts.is_empty() {
             continue;
         }
-        let mut output = Map::new();
-        output.insert("selector".to_string(), Value::String(selector));
-        if let Some(attr) = attr {
-            output.insert("attr".to_string(), Value::String(attr));
+        if join_parts.len() > MAX_RULE_CHAIN_LENGTH {
+            return Err(format!(
+                "{context} 组合规则最多支持 {} 个候选",
+                MAX_RULE_CHAIN_LENGTH
+            ));
         }
-        if let Some(regex) = regex {
-            output.insert("regex".to_string(), Value::String(regex.to_string()));
+
+        let mut joined = Vec::with_capacity(join_parts.len());
+        for join_part in join_parts {
+            let (expression, parsed_regex, parsed_replacement) =
+                split_rule_transform(join_part, context)?;
+            let (selector, parsed_attr) = parse_legado_rule(&expression, context)?;
+            let attr = if let Some(raw_attr) = override_attr {
+                if !is_supported_attr(raw_attr) {
+                    return Err(format!(
+                        "{context} 的属性后缀 @{} 不在安全子集内",
+                        raw_attr.trim()
+                    ));
+                }
+                normalize_attr(raw_attr)
+            } else {
+                parsed_attr
+            };
+            let effective_regex = override_regex
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or(parsed_regex.as_deref());
+            let effective_replacement = override_replacement
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or(parsed_replacement.as_deref());
+            if effective_replacement.is_some() && effective_regex.is_none() {
+                return Err(format!("{context} replacement 不能脱离 regex 使用"));
+            }
+
+            if attr.is_none() && effective_regex.is_none() && effective_replacement.is_none() {
+                joined.push(Value::String(selector));
+                continue;
+            }
+
+            let mut output = Map::new();
+            output.insert("selector".to_string(), Value::String(selector));
+            if let Some(attr) = attr {
+                output.insert("attr".to_string(), Value::String(attr));
+            }
+            if let Some(regex) = effective_regex {
+                output.insert("regex".to_string(), Value::String(regex.to_string()));
+            }
+            if let Some(replacement) = effective_replacement {
+                output.insert(
+                    "replacement".to_string(),
+                    Value::String(replacement.to_string()),
+                );
+            }
+            joined.push(Value::Object(output));
         }
-        normalized.push(Value::Object(output));
+
+        if joined.len() == 1 {
+            normalized.push(joined.remove(0));
+        } else if joined.len() > 1 {
+            normalized.push(json!({ "join": joined }));
+        }
     }
 
     if normalized.len() == 1 {
         Ok(normalized.remove(0))
-    } else {
+    } else if normalized.len() > 1 {
         Ok(json!({ "chain": normalized }))
+    } else {
+        Ok(Value::Null)
     }
 }
 
 fn split_rule_chain<'a>(raw: &'a str, context: &str) -> Result<Vec<&'a str>, String> {
-    let parts = raw.split("||").map(str::trim).collect::<Vec<_>>();
-    if parts.iter().any(|part| part.is_empty()) {
-        return Err(format!("{context} 链式规则包含空候选"));
-    }
+    let expression = raw.split_once("##").map(|(value, _)| value).unwrap_or(raw);
+    let parts = expression
+        .split("||")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
     if parts.len() > MAX_RULE_CHAIN_LENGTH {
         return Err(format!(
             "{context} 链式规则最多支持 {} 个候选",
@@ -747,14 +821,40 @@ fn split_rule_chain<'a>(raw: &'a str, context: &str) -> Result<Vec<&'a str>, Str
     Ok(parts)
 }
 
+fn split_rule_transform(
+    raw: &str,
+    context: &str,
+) -> Result<(String, Option<String>, Option<String>), String> {
+    let mut pieces = raw.splitn(3, "##");
+    let expression = pieces.next().unwrap_or_default().trim().to_string();
+    if expression.is_empty() {
+        return Err(format!("{context} selector 不能为空"));
+    }
+    let regex = pieces
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let replacement = pieces
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if replacement.is_some() && regex.is_none() {
+        return Err(format!("{context} replacement 不能脱离 regex 使用"));
+    }
+    Ok((expression, regex, replacement))
+}
+
 fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>), String> {
-    let first = raw.trim();
-    if first.is_empty() {
+    let raw = raw.trim();
+    let lowered = raw.to_ascii_lowercase();
+    if raw.is_empty() {
         return Err(format!("{context} 不能为空"));
     }
-    let lowered = first.to_ascii_lowercase();
     if lowered.starts_with("//")
         || lowered.starts_with("xpath:")
+        || lowered.starts_with("@xpath")
         || lowered.contains("@js")
         || lowered.contains("@put:")
         || lowered.contains("@get:")
@@ -764,16 +864,21 @@ fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>
         ));
     }
 
+    let first = if raw.starts_with('@') {
+        &raw[1..]
+    } else {
+        raw
+    };
     let (selector, suffix) = match first.rsplit_once('@') {
         Some((selector, suffix)) if !selector.trim().is_empty() => {
             (selector.trim(), Some(suffix.trim()))
         }
-        _ => (first, None),
+        _ => (first.trim(), None),
     };
     let selector = normalize_selector(selector, context)?;
     let attr = suffix.and_then(normalize_attr);
     if let Some(suffix) = suffix {
-        if attr.is_none() && !suffix.eq_ignore_ascii_case("text") {
+        if !is_supported_attr(suffix) {
             return Err(format!("{context} 的属性后缀 @{suffix} 不在安全子集内"));
         }
     }
@@ -813,14 +918,20 @@ fn normalize_selector(value: &str, context: &str) -> Result<String, String> {
     Ok(selector)
 }
 
+fn is_supported_attr(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "text" | "textnodes" | "owntext" | "content" | "html" | "href" | "src" | "title"
+            | "alt" | "data-src"
+    )
+}
+
 fn normalize_attr(value: &str) -> Option<String> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "text" | "content" => None,
-        "href" => Some("href".to_string()),
-        "src" => Some("src".to_string()),
-        "title" => Some("title".to_string()),
-        "alt" => Some("alt".to_string()),
-        "data-src" => Some("data-src".to_string()),
+        "text" | "textnodes" | "owntext" => None,
+        "content" | "html" | "href" | "src" | "title" | "alt" | "data-src" => {
+            Some(value.trim().to_ascii_lowercase())
+        }
         _ => None,
     }
 }
@@ -1183,14 +1294,120 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_rule_attributes() {
-        let payload = json!({
-            "bookSourceName": "Unknown attribute",
+    fn accepts_html_and_rejects_unknown_rule_attributes() {
+        let html_payload = json!({
+            "bookSourceName": "HTML attribute",
             "searchUrl": "https://example.test/search?q={{key}}",
             "ruleSearch": { "bookList": "li", "name": "h2@html" }
         });
-        let error = parse_import_bundle(&payload.to_string()).expect_err("unknown attr");
+        let imported = parse_import_bundle(&html_payload.to_string()).expect("html attr");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("html source");
+        assert!(matches!(
+            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            Some(SourceRule::Detailed { attr: Some(attr), .. }) if attr == "html"
+        ));
+
+        let invalid_payload = json!({
+            "bookSourceName": "Unknown attribute",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "ruleSearch": { "bookList": "li", "name": "h2@onclick" }
+        });
+        let error = parse_import_bundle(&invalid_payload.to_string()).expect_err("unknown attr");
         assert!(error.contains("安全子集"));
+    }
+
+    #[test]
+    fn omits_empty_optional_legado_rules() {
+        let payload = json!({
+            "bookSourceName": "Empty optional rules",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "ruleSearch": {
+                "bookList": "li.book",
+                "name": "h2 a",
+                "intro": "",
+                "author": "||"
+            },
+            "ruleBookInfo": {
+                "name": "",
+                "url": "",
+                "intro": ""
+            },
+            "ruleToc": {
+                "chapterList": "li.chapter",
+                "chapterName": "",
+                "chapterUrl": ""
+            }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("empty rules");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("empty-rule source");
+        assert!(source
+            .search
+            .as_ref()
+            .and_then(|rules| rules.intro.as_ref())
+            .is_none());
+        assert!(source
+            .search
+            .as_ref()
+            .and_then(|rules| rules.author.as_ref())
+            .is_none());
+        assert!(source
+            .book_info
+            .as_ref()
+            .and_then(|rules| rules.title.as_ref())
+            .is_none());
+        assert!(source
+            .toc
+            .as_ref()
+            .and_then(|rules| rules.url.as_ref())
+            .is_none());
+    }
+
+    #[test]
+    fn normalizes_legado_attr_regex_replacement_and_join() {
+        let payload = json!({
+            "bookSourceName": "Legado compatibility fixture",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "ruleSearch": {
+                "bookList": "li.book",
+                "author": "div.-1@text##\\s*丨.+$"
+            },
+            "ruleBookInfo": {
+                "intro": "[name=\"og:novel:update_time\"]@content&&[property=\"og:description\"]@content##(^|[。！？]+[”」）】]?)##$1<br>"
+            }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("Legado transforms");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("canonical source");
+        assert!(matches!(
+            source.search.as_ref().and_then(|rules| rules.author.as_ref()),
+            Some(SourceRule::Detailed {
+                attr: None,
+                regex: Some(regex),
+                replacement: None,
+                ..
+            }) if regex == r"\s*丨.+$"
+        ));
+        match source
+            .book_info
+            .as_ref()
+            .and_then(|rules| rules.intro.as_ref())
+        {
+            Some(SourceRule::Join { join }) => {
+                assert_eq!(join.len(), 2);
+                assert!(join.iter().all(|rule| matches!(
+                    rule,
+                    SourceRule::Detailed {
+                        attr: Some(attr),
+                        regex: Some(_),
+                        replacement: Some(replacement),
+                        ..
+                    } if attr == "content" && replacement == "$1<br>"
+                )));
+            }
+            other => panic!("expected join rule, got {other:?}"),
+        }
     }
 
     #[test]

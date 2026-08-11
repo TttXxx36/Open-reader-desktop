@@ -179,6 +179,8 @@ pub enum SourceRule {
         attr: Option<String>,
         #[serde(default)]
         regex: Option<String>,
+        #[serde(default)]
+        replacement: Option<String>,
     },
     JsonPath {
         #[serde(alias = "jsonPath", alias = "path")]
@@ -187,6 +189,12 @@ pub enum SourceRule {
         attr: Option<String>,
         #[serde(default)]
         regex: Option<String>,
+        #[serde(default)]
+        replacement: Option<String>,
+    },
+    Join {
+        #[serde(default)]
+        join: Vec<SourceRule>,
     },
     Chain {
         #[serde(default)]
@@ -200,21 +208,31 @@ impl SourceRule {
             Self::Selector(value) => value,
             Self::Detailed { selector, .. } => selector,
             Self::JsonPath { json_path, .. } => json_path,
+            Self::Join { join } => join.first().map(Self::selector).unwrap_or_default(),
             Self::Chain { chain } => chain.first().map(Self::selector).unwrap_or_default(),
         }
     }
 
     fn attr(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Chain { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } => None,
             Self::Detailed { attr, .. } | Self::JsonPath { attr, .. } => attr.as_deref(),
         }
     }
 
     fn regex(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Chain { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } => None,
             Self::Detailed { regex, .. } | Self::JsonPath { regex, .. } => regex.as_deref(),
+        }
+    }
+
+    fn replacement(&self) -> Option<&str> {
+        match self {
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } => None,
+            Self::Detailed { replacement, .. } | Self::JsonPath { replacement, .. } => {
+                replacement.as_deref()
+            }
         }
     }
 
@@ -223,6 +241,9 @@ impl SourceRule {
             Self::JsonPath { json_path, .. } => Some(json_path),
             Self::Selector(value) if is_json_rule_path(value) => Some(value),
             Self::Detailed { selector, .. } if is_json_rule_path(selector) => Some(selector),
+            Self::Join { join } if !join.is_empty() && join.iter().all(Self::is_json_path) => {
+                join.first().and_then(Self::json_path)
+            }
             Self::Chain { chain } if !chain.is_empty() && chain.iter().all(Self::is_json_path) => {
                 chain.first().and_then(Self::json_path)
             }
@@ -232,6 +253,7 @@ impl SourceRule {
 
     fn is_json_path(&self) -> bool {
         match self {
+            Self::Join { join } => !join.is_empty() && join.iter().all(Self::is_json_path),
             Self::Chain { chain } => !chain.is_empty() && chain.iter().all(Self::is_json_path),
             _ => self.json_path().is_some(),
         }
@@ -1671,19 +1693,38 @@ fn extract_document_rule(
     let Some(rule) = rule else {
         return Ok(None);
     };
-    if let SourceRule::Chain { chain } = rule {
-        for child in chain {
-            if let Some(value) = extract_document_rule(document, Some(child))? {
-                return Ok(Some(value));
+    match rule {
+        SourceRule::Chain { chain } => {
+            for child in chain {
+                if let Some(value) = extract_document_rule(document, Some(child))? {
+                    return Ok(Some(value));
+                }
+            }
+            Ok(None)
+        }
+        SourceRule::Join { join } => {
+            let mut values = Vec::new();
+            for child in join {
+                if let Some(value) = extract_document_rule(document, Some(child))? {
+                    if !value.trim().is_empty() {
+                        values.push(value);
+                    }
+                }
+            }
+            if values.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(values.join(" ")))
             }
         }
-        return Ok(None);
+        _ => {
+            let selector = parse_selector(rule.selector())?;
+            let Some(element) = document.select(&selector).next() else {
+                return Ok(None);
+            };
+            Ok(Some(extract_selected_element(element, rule)?))
+        }
     }
-    let selector = parse_selector(rule.selector())?;
-    let Some(element) = document.select(&selector).next() else {
-        return Ok(None);
-    };
-    Ok(Some(extract_selected_element(element, rule)?))
 }
 
 fn parse_chapter_list(
@@ -2439,25 +2480,30 @@ fn validate_page_rules(
 }
 
 fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>) {
-    if let SourceRule::Chain { chain } = rule {
-        if chain.is_empty() {
-            errors.push(format!("{name} 链式规则不能为空"));
+    let compound = match rule {
+        SourceRule::Chain { chain } => Some(("链式规则", chain)),
+        SourceRule::Join { join } => Some(("组合规则", join)),
+        _ => None,
+    };
+    if let Some((label, children)) = compound {
+        if children.is_empty() {
+            errors.push(format!("{name} {label}不能为空"));
             return;
         }
-        if chain.len() > MAX_RULE_CHAIN_LENGTH {
+        if children.len() > MAX_RULE_CHAIN_LENGTH {
             errors.push(format!(
-                "{name} 链式规则最多支持 {} 个候选",
+                "{name} {label}最多支持 {} 个候选",
                 MAX_RULE_CHAIN_LENGTH
             ));
         }
-        let json_flags = chain
+        let json_flags = children
             .iter()
             .map(SourceRule::is_json_path)
             .collect::<Vec<_>>();
         if json_flags.iter().any(|flag| *flag) && json_flags.iter().any(|flag| !*flag) {
-            errors.push(format!("{name} 链式规则不能混用 CSS 和 JSONPath"));
+            errors.push(format!("{name} {label}不能混用 CSS 和 JSONPath"));
         }
-        for (index, child) in chain.iter().enumerate() {
+        for (index, child) in children.iter().enumerate() {
             validate_source_rule(&format!("{name}[{index}]"), child, errors);
         }
         return;
@@ -2479,6 +2525,15 @@ fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>)
         if let Err(error) = Regex::new(regex) {
             errors.push(format!("{name} regex：{error}"));
         }
+    }
+    if rule
+        .replacement()
+        .is_some_and(|replacement| replacement.len() > MAX_REPLACE_REPLACEMENT_BYTES)
+    {
+        errors.push(format!(
+            "{name} replacement 不能超过 {} 字节",
+            MAX_REPLACE_REPLACEMENT_BYTES
+        ));
     }
 }
 
@@ -2831,47 +2886,76 @@ fn parse_selector(value: &str) -> Result<Selector, SourceError> {
 }
 
 fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
-    if let SourceRule::Chain { chain } = rule {
-        for child in chain {
-            match extract_from_element(element.clone(), child) {
-                Ok(value) => return Ok(value),
-                Err(SourceError::NoMatch) => continue,
-                Err(error) => return Err(error),
+    match rule {
+        SourceRule::Chain { chain } => {
+            for child in chain {
+                match extract_from_element(element.clone(), child) {
+                    Ok(value) => return Ok(value),
+                    Err(SourceError::NoMatch) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(SourceError::NoMatch)
+        }
+        SourceRule::Join { join } => {
+            let mut values = Vec::new();
+            for child in join {
+                match extract_from_element(element.clone(), child) {
+                    Ok(value) if !value.trim().is_empty() => values.push(value),
+                    Ok(_) | Err(SourceError::NoMatch) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            if values.is_empty() {
+                Err(SourceError::NoMatch)
+            } else {
+                Ok(values.join(" "))
             }
         }
-        return Err(SourceError::NoMatch);
+        _ => {
+            let selector = parse_selector(rule.selector())?;
+            let target = element
+                .select(&selector)
+                .next()
+                .ok_or(SourceError::NoMatch)?;
+            extract_selected_element(target, rule)
+        }
     }
-    let selector = parse_selector(rule.selector())?;
-    let target = element
-        .select(&selector)
-        .next()
-        .ok_or(SourceError::NoMatch)?;
-    extract_selected_element(target, rule)
 }
 
 fn extract_selected_element(
     element: ElementRef<'_>,
     rule: &SourceRule,
 ) -> Result<String, SourceError> {
-    let value = if let Some(attribute) = rule.attr() {
-        element
+    let value = match rule.attr() {
+        Some("html") => element.inner_html(),
+        Some(attribute) => element
             .value()
             .attr(attribute)
             .unwrap_or_default()
-            .to_string()
-    } else {
-        element.text().collect::<Vec<_>>().join(" ")
+            .to_string(),
+        None => element.text().collect::<Vec<_>>().join(" "),
     };
 
-    apply_regex(value.trim(), rule.regex())
+    apply_regex(value.trim(), rule.regex(), rule.replacement())
 }
 
-fn apply_regex(value: &str, pattern: Option<&str>) -> Result<String, SourceError> {
+fn apply_regex(
+    value: &str,
+    pattern: Option<&str>,
+    replacement: Option<&str>,
+) -> Result<String, SourceError> {
     let Some(pattern) = pattern else {
         return Ok(value.to_string());
     };
     let regex =
         Regex::new(pattern).map_err(|error| SourceError::InvalidRegex(error.to_string()))?;
+    if let Some(replacement) = replacement {
+        if !regex.is_match(value) {
+            return Err(SourceError::NoMatch);
+        }
+        return Ok(regex.replace_all(value, replacement).into_owned());
+    }
     let captures = regex.captures(value).ok_or(SourceError::NoMatch)?;
     Ok(captures
         .get(1)
@@ -2894,30 +2978,51 @@ fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceErr
 }
 
 fn extract_json_rule(value: &Value, rule: &SourceRule) -> Result<String, SourceError> {
-    if let SourceRule::Chain { chain } = rule {
-        for child in chain {
-            match extract_json_rule(value, child) {
-                Ok(value) => return Ok(value),
-                Err(SourceError::NoMatch) => continue,
-                Err(error) => return Err(error),
+    match rule {
+        SourceRule::Chain { chain } => {
+            for child in chain {
+                match extract_json_rule(value, child) {
+                    Ok(value) => return Ok(value),
+                    Err(SourceError::NoMatch) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(SourceError::NoMatch)
+        }
+        SourceRule::Join { join } => {
+            let mut values = Vec::new();
+            for child in join {
+                match extract_json_rule(value, child) {
+                    Ok(value) if !value.trim().is_empty() => values.push(value),
+                    Ok(_) | Err(SourceError::NoMatch) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            if values.is_empty() {
+                Err(SourceError::NoMatch)
+            } else {
+                Ok(values.join(" "))
             }
         }
-        return Err(SourceError::NoMatch);
+        _ => {
+            let path = rule.json_path().ok_or_else(|| {
+                SourceError::InvalidConfig(
+                    "JSON 文档中的字段必须使用 JSONPath 规则".to_string(),
+                )
+            })?;
+            let selected = extract_json_nodes(value, path)?
+                .into_iter()
+                .next()
+                .ok_or(SourceError::NoMatch)?;
+            let selected = if let Some(attribute) = rule.attr() {
+                selected.get(attribute).ok_or(SourceError::NoMatch)?
+            } else {
+                selected
+            };
+            let text = json_value_to_text(selected);
+            apply_regex(text.trim(), rule.regex(), rule.replacement())
+        }
     }
-    let path = rule.json_path().ok_or_else(|| {
-        SourceError::InvalidConfig("JSON 文档中的字段必须使用 JSONPath 规则".to_string())
-    })?;
-    let selected = extract_json_nodes(value, path)?
-        .into_iter()
-        .next()
-        .ok_or(SourceError::NoMatch)?;
-    let selected = if let Some(attribute) = rule.attr() {
-        selected.get(attribute).ok_or(SourceError::NoMatch)?
-    } else {
-        selected
-    };
-    let text = json_value_to_text(selected);
-    apply_regex(text.trim(), rule.regex())
 }
 
 fn extract_json_rule_optional(
@@ -4307,4 +4412,47 @@ mod tests {
 
         (format!("http://{address}"), server)
     }
+
+    #[test]
+    fn extracts_join_html_and_replacement_rules() {
+        let document = Html::parse_document(
+            r#"<div class="meta">
+                <meta name="updated" content="更新时间">
+                <meta name="summary" content="简介">
+            </div>
+            <article class="intro"><p>第一段</p><p>第二段</p></article>"#,
+        );
+        let joined = SourceRule::Join {
+            join: vec![
+                SourceRule::Detailed {
+                    selector: r#"meta[name="updated"]"#.to_string(),
+                    attr: Some("content".to_string()),
+                    regex: None,
+                    replacement: None,
+                },
+                SourceRule::Detailed {
+                    selector: r#"meta[name="summary"]"#.to_string(),
+                    attr: Some("content".to_string()),
+                    regex: None,
+                    replacement: None,
+                },
+            ],
+        };
+        assert_eq!(
+            extract_document_rule(&document, Some(&joined)).expect("join should parse"),
+            Some("更新时间 简介".to_string())
+        );
+
+        let html_rule = SourceRule::Detailed {
+            selector: "article.intro".to_string(),
+            attr: Some("html".to_string()),
+            regex: Some("第二段".to_string()),
+            replacement: Some("第二段（已替换）".to_string()),
+        };
+        assert_eq!(
+            extract_document_rule(&document, Some(&html_rule)).expect("html should parse"),
+            Some("<p>第一段</p><p>第二段（已替换）</p>".to_string())
+        );
+    }
+
 }
