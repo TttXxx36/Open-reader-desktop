@@ -5187,6 +5187,20 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   color: #dce7f7;
 }
 
+.source-batch-note {
+  margin: 8px 0 0;
+  color: #8391a6;
+  font-size: 11px;
+}
+
+.source-row[draggable="true"] {
+  cursor: grab;
+}
+
+.source-row[draggable="true"]:active {
+  cursor: grabbing;
+}
+
 .source-batch-group-input,
 .source-batch-metadata-input {
   width: 92px;
