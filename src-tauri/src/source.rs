@@ -221,21 +221,27 @@ impl SourceRule {
 
     fn attr(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => {
+                None
+            }
             Self::Detailed { attr, .. } | Self::JsonPath { attr, .. } => attr.as_deref(),
         }
     }
 
     fn regex(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => {
+                None
+            }
             Self::Detailed { regex, .. } | Self::JsonPath { regex, .. } => regex.as_deref(),
         }
     }
 
     fn replacement(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => {
+                None
+            }
             Self::Detailed { replacement, .. } | Self::JsonPath { replacement, .. } => {
                 replacement.as_deref()
             }
@@ -248,7 +254,10 @@ impl SourceRule {
             Self::Selector(value) if is_json_rule_path(value) => Some(value),
             Self::Detailed { selector, .. } if is_json_rule_path(selector) => Some(selector),
             Self::Join { join } => {
-                let usable = join.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                let usable = join
+                    .iter()
+                    .filter(|rule| !rule.is_legacy())
+                    .collect::<Vec<_>>();
                 if !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path()) {
                     usable.first().and_then(|rule| rule.json_path())
                 } else {
@@ -256,7 +265,10 @@ impl SourceRule {
                 }
             }
             Self::Chain { chain } => {
-                let usable = chain.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                let usable = chain
+                    .iter()
+                    .filter(|rule| !rule.is_legacy())
+                    .collect::<Vec<_>>();
                 if !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path()) {
                     usable.first().and_then(|rule| rule.json_path())
                 } else {
@@ -275,11 +287,17 @@ impl SourceRule {
     fn is_json_path(&self) -> bool {
         match self {
             Self::Join { join } => {
-                let usable = join.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                let usable = join
+                    .iter()
+                    .filter(|rule| !rule.is_legacy())
+                    .collect::<Vec<_>>();
                 !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path())
             }
             Self::Chain { chain } => {
-                let usable = chain.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                let usable = chain
+                    .iter()
+                    .filter(|rule| !rule.is_legacy())
+                    .collect::<Vec<_>>();
                 !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path())
             }
             Self::Legacy { .. } => false,
@@ -4531,5 +4549,4 @@ mod tests {
             Err(SourceError::NoMatch)
         ));
     }
-
 }

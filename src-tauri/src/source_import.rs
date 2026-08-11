@@ -268,19 +268,24 @@ fn collect_unsupported_rules_at(
                 return;
             };
             let is_xpath = is_xpath_expression(raw);
-            let (offline_accepted, offline_syntax, offline_steps, offline_estimated_work, offline_elapsed_us) =
-                if is_xpath {
-                    let offline = xpath_poc::analyze(raw, "<html></html>");
-                    (
-                        offline.accepted,
-                        offline.syntax,
-                        offline.steps,
-                        offline.estimated_work,
-                        offline.elapsed_us,
-                    )
-                } else {
-                    (false, "not_evaluated".to_string(), 0, 0, 1)
-                };
+            let (
+                offline_accepted,
+                offline_syntax,
+                offline_steps,
+                offline_estimated_work,
+                offline_elapsed_us,
+            ) = if is_xpath {
+                let offline = xpath_poc::analyze(raw, "<html></html>");
+                (
+                    offline.accepted,
+                    offline.syntax,
+                    offline.steps,
+                    offline.estimated_work,
+                    offline.elapsed_us,
+                )
+            } else {
+                (false, "not_evaluated".to_string(), 0, 0, 1)
+            };
             findings.push(UnsupportedImportRule {
                 context: path.to_string(),
                 value: truncate_preview_text(raw),
@@ -1077,9 +1082,7 @@ fn normalize_selector(value: &str, context: &str) -> Result<String, String> {
             return Err(format!("{context} selector 不能为空"));
         }
         if segment.starts_with("text.") || segment.contains('!') {
-            return Err(format!(
-                "{context} 使用了仅 Legado 支持的文本/索引选择器"
-            ));
+            return Err(format!("{context} 使用了仅 Legado 支持的文本/索引选择器"));
         }
         normalized_segments.push(segment);
     }
@@ -1098,7 +1101,8 @@ fn strip_legacy_indexes(value: &str) -> String {
         }
         if !changed {
             if let Some((base, suffix)) = output.rsplit_once('.') {
-                if !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit()) {
+                if !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+                {
                     output = base.trim_end().to_string();
                     changed = true;
                 }
@@ -1131,10 +1135,34 @@ fn looks_like_selector_segment(value: &str) -> bool {
         || value.contains(':')
         || matches!(
             value.to_ascii_lowercase().as_str(),
-            "a" | "abbr" | "article" | "aside" | "blockquote" | "button" | "div" | "em"
-                | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "img" | "li" | "main"
-                | "nav" | "p" | "section" | "span" | "strong" | "table" | "tbody" | "td"
-                | "th" | "thead" | "tr" | "ul"
+            "a" | "abbr"
+                | "article"
+                | "aside"
+                | "blockquote"
+                | "button"
+                | "div"
+                | "em"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "img"
+                | "li"
+                | "main"
+                | "nav"
+                | "p"
+                | "section"
+                | "span"
+                | "strong"
+                | "table"
+                | "tbody"
+                | "td"
+                | "th"
+                | "thead"
+                | "tr"
+                | "ul"
         )
 }
 
@@ -1409,7 +1437,10 @@ mod tests {
             Some("OpenReaderTest")
         );
         assert!(matches!(
-            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            source
+                .search
+                .as_ref()
+                .and_then(|rules| rules.title.as_ref()),
             Some(SourceRule::Selector(selector)) if selector == "h2 a"
         ));
         assert!(matches!(
