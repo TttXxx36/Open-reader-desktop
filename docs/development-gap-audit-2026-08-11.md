@@ -67,7 +67,7 @@ M7.1d 最新代码提交为 [60564de2151738f91e9b953ff44ad0e42496fb2b](https://g
 6. **性能基线**：书源批量写入、书架查询、图片复核、TXT/EPUB 大文件和缓存清理均保留可重复阈值。
 7. **隐私与授权**：不保存 Cookie/Authorization/Referer，不执行未知脚本，不上传正文和未授权内容；日志继续脱敏。
 8. **文档一致性**：专项计划、路线图、兼容性矩阵和发布清单必须在每个里程碑后同步更新。
-9. **CI 运行时维护**：当前 Actions 仍出现 Node.js 20 弃用警告；不阻塞本次通过，但需要后续升级 action pin 或运行时配置，并在升级后重新验证 Windows Release。
+9. **CI 运行时维护**：首轮升级已完成：`ci.yml` 和 `release-candidate.yml` 使用 `actions/checkout@v5`、`actions/setup-node@v5`、`actions/upload-artifact@v6`，并关闭 setup-node 自动缓存；主 CI [31481090641](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31481090641)、Windows Release [31481646325](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31481646325) 和 installer smoke [31482405080](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31482405080) 均通过。后续仍需在 Action 大版本变化时复验。
 
 ## 后续执行顺序
 
