@@ -857,6 +857,11 @@ fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>
     if raw.is_empty() {
         return Err(format!("{context} 不能为空"));
     }
+    if raw.contains("{{") || raw.contains("}}") {
+        return Err(format!(
+            "{context} 包含未实现的模板/脚本规则；请改写为单个 CSS 选择器"
+        ));
+    }
     if lowered.starts_with("//")
         || lowered.starts_with("xpath:")
         || lowered.starts_with("@xpath")
@@ -1291,6 +1296,19 @@ mod tests {
         });
         let error = parse_import_bundle(&payload.to_string()).expect_err("unsafe rule");
         assert!(error.contains("不受支持"));
+    }
+
+    #[test]
+    fn rejects_template_rule_with_clear_message() {
+        let payload = json!({
+            "bookSourceName": "Template rule",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "ruleBookInfo": {
+                "intro": "{{@#novel_intro@html}}##展开收起|飞卢小说(.|\\n)*"
+            }
+        });
+        let error = parse_import_bundle(&payload.to_string()).expect_err("template rule");
+        assert!(error.contains("模板/脚本"));
     }
 
     #[test]
