@@ -193,11 +193,9 @@ pub enum SourceRule {
         replacement: Option<String>,
     },
     Join {
-        #[serde(default)]
         join: Vec<SourceRule>,
     },
     Chain {
-        #[serde(default)]
         chain: Vec<SourceRule>,
     },
 }
