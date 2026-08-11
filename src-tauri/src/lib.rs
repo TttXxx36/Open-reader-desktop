@@ -868,6 +868,81 @@ fn set_sources_group(
     database.list_sources().map_err(|error| error.to_string())
 }
 
+fn prepare_source_batch_metadata_write(
+    summary: &SourceSummary,
+    weight: Option<i64>,
+    comment: Option<&str>,
+) -> Result<SourceWrite, String> {
+    let mut value: serde_json::Value = serde_json::from_str(&summary.config_json)
+        .map_err(|error| format!("书源配置解析失败：{error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "书源配置必须是 JSON 对象".to_string())?;
+
+    if let Some(weight) = weight {
+        object.insert("weight".to_string(), serde_json::json!(weight));
+    }
+    if let Some(comment) = comment {
+        object.remove("bookSourceComment");
+        object.remove("book_source_comment");
+        let comment = comment.trim();
+        if comment.is_empty() {
+            object.remove("comment");
+        } else {
+            object.insert(
+                "comment".to_string(),
+                serde_json::Value::String(comment.to_string()),
+            );
+        }
+    }
+
+    let config_json =
+        serde_json::to_string(&value).map_err(|error| format!("书源配置序列化失败：{error}"))?;
+    let validation = source::validate_source_json(&config_json);
+    let source = validation
+        .source
+        .ok_or_else(|| validation.errors.join("；"))?;
+    if !validation.valid {
+        return Err(validation.errors.join("；"));
+    }
+
+    Ok(SourceWrite::from_source(
+        summary.id.clone(),
+        &source,
+        config_json,
+        summary.enabled,
+    ))
+}
+
+#[tauri::command]
+fn update_sources_metadata(
+    database: tauri::State<'_, Database>,
+    source_ids: Vec<String>,
+    weight: Option<i64>,
+    comment: Option<String>,
+) -> Result<Vec<SourceSummary>, String> {
+    validate_source_ids(&database, &source_ids)?;
+    if weight.is_none() && comment.is_none() {
+        return Err("请至少填写批量权重或批量备注".to_string());
+    }
+
+    let summaries = database.list_sources().map_err(|error| error.to_string())?;
+    let writes = source_ids
+        .iter()
+        .map(|source_id| {
+            let summary = summaries
+                .iter()
+                .find(|source| source.id == *source_id)
+                .ok_or_else(|| "书源不存在".to_string())?;
+            prepare_source_batch_metadata_write(summary, weight, comment.as_deref())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    database
+        .apply_sources_atomic(&writes, false)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn delete_source(database: tauri::State<'_, Database>, source_id: String) -> Result<(), String> {
     database
@@ -2125,6 +2200,7 @@ pub fn run() {
             save_source,
             set_source_enabled,
             update_source_metadata,
+            update_sources_metadata,
             set_source_explore_enabled,
             set_sources_enabled,
             set_sources_explore_enabled,
