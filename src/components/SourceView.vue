@@ -70,11 +70,11 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
             <h2>导入预览 · {{ sourceImportLabel }}</h2>
           </div>
           <span class="source-preview-count">
-            {{ sourceImportPreview.valid_count }}/{{ sourceImportPreview.entries.length }} 可导入
+            {{ sourceImportPreview.valid_count }}/{{ sourceImportPreview.entries.length }} 可导入（含兼容保留）
           </span>
         </div>
         <p class="source-import-preview-note">
-          不兼容条目会自动跳过；预览阶段不会保存配置，也不会执行书源脚本。
+          无法解析的结构才会跳过；脚本、XPath、模板和部分 Legado 规则会保留原文，但当前不会执行。
         </p>
         <ul class="source-preview-list">
           <li
@@ -90,7 +90,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
               </small>
               <div v-if="entry.unsupported_rules.length" class="source-preview-unsupported">
                 <span v-for="rule in entry.unsupported_rules" :key="rule.context + rule.value">
-                  不执行 · {{ rule.context }}：{{ rule.value }}（{{ rule.reason }}）
+                  保留但不执行 · {{ rule.context }}：{{ rule.value }}（{{ rule.reason }}）
                   <small>
                     离线结构：{{ rule.offline_accepted ? "受限语法可解析" : "静态解析拒绝" }} ·
                     {{ rule.offline_steps }} 步 · {{ rule.offline_estimated_work }} work ·
@@ -120,7 +120,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
             :disabled="sourceTransferBusy || sourceImportPreview.valid_count === 0"
             @click="confirmSourceImport"
           >
-            {{ sourceTransferBusy ? "导入中…" : "导入通过项" }}
+            {{ sourceTransferBusy ? "导入中…" : "导入可导入项" }}
           </button>
           <button
             class="source-link-button"

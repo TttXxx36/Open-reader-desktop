@@ -53,7 +53,9 @@ pub struct ImportPreview {
 }
 
 /// Parse the native export format, a raw source object, or an array of
-/// Legado-compatible source objects. Only the safe CSS/HTTP subset is mapped.
+/// Legado-compatible source objects. Safe CSS/HTTP rules are mapped directly;
+/// unsupported expressions are preserved as inert legacy rules so import never
+/// silently drops the original source configuration.
 pub fn parse_import_bundle(input: &str) -> Result<Vec<ImportedSource>, String> {
     let entries = extract_import_values(input)?;
     let imported = parse_entries(&entries)?;
@@ -261,17 +263,33 @@ fn collect_unsupported_rules_at(
     }
 
     match value {
-        Value::String(raw) if in_rule_context && is_xpath_expression(raw) => {
-            let offline = xpath_poc::analyze(raw, "<html></html>");
+        Value::String(raw) if in_rule_context => {
+            let Some(reason) = unsupported_rule_reason(raw) else {
+                return;
+            };
+            let is_xpath = is_xpath_expression(raw);
+            let (offline_accepted, offline_syntax, offline_steps, offline_estimated_work, offline_elapsed_us) =
+                if is_xpath {
+                    let offline = xpath_poc::analyze(raw, "<html></html>");
+                    (
+                        offline.accepted,
+                        offline.syntax,
+                        offline.steps,
+                        offline.estimated_work,
+                        offline.elapsed_us,
+                    )
+                } else {
+                    (false, "not_evaluated".to_string(), 0, 0, 1)
+                };
             findings.push(UnsupportedImportRule {
                 context: path.to_string(),
                 value: truncate_preview_text(raw),
-                reason: "XPath 规则仅用于只读兼容性评估，当前不执行".to_string(),
-                offline_accepted: offline.accepted,
-                offline_syntax: offline.syntax,
-                offline_steps: offline.steps,
-                offline_estimated_work: offline.estimated_work,
-                offline_elapsed_us: offline.elapsed_us,
+                reason: reason.to_string(),
+                offline_accepted,
+                offline_syntax,
+                offline_steps,
+                offline_estimated_work,
+                offline_elapsed_us,
             });
         }
         Value::Array(entries) => {
@@ -343,6 +361,44 @@ fn is_xpath_expression(value: &str) -> bool {
         || lowered.starts_with("xpath:")
         || lowered.starts_with("xpath=")
         || lowered.contains("@xpath")
+}
+
+fn is_script_expression(value: &str) -> bool {
+    let lowered = value.trim().to_ascii_lowercase();
+    lowered.contains("@js")
+        || lowered.contains("@put:")
+        || lowered.contains("@get:")
+        || lowered.starts_with("javascript:")
+        || lowered.contains("java.")
+}
+
+fn is_template_expression(value: &str) -> bool {
+    value.contains("{{") || value.contains("}}")
+}
+
+fn is_legacy_selector_expression(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("class.")
+        || trimmed.starts_with("id.")
+        || trimmed.starts_with("tag.")
+        || trimmed.contains("!0")
+        || trimmed.contains(".0@")
+        || trimmed.contains(".1@")
+        || (trimmed.contains("@") && trimmed.contains("tag."))
+}
+
+fn unsupported_rule_reason(value: &str) -> Option<&'static str> {
+    if is_xpath_expression(value) {
+        Some("XPath 规则已保留原表达式，当前不执行")
+    } else if is_script_expression(value) {
+        Some("JavaScript/脚本规则已保留原表达式，当前不执行")
+    } else if is_template_expression(value) {
+        Some("模板表达式已保留原文，当前不执行")
+    } else if is_legacy_selector_expression(value) {
+        Some("Legado 链式选择器已保留原表达式，当前不执行")
+    } else {
+        None
+    }
 }
 
 fn truncate_preview_text(value: &str) -> String {
@@ -664,7 +720,13 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
             if raw.trim().is_empty() {
                 Ok(Value::Null)
             } else {
-                normalize_rule_parts(raw, context, None, None, None)
+                match normalize_rule_parts(raw, context, None, None, None) {
+                    Ok(normalized) => Ok(normalized),
+                    Err(error) if !is_fatal_rule_error(&error) => {
+                        Ok(legacy_rule(Value::String(raw.clone()), error))
+                    }
+                    Err(error) => Err(error),
+                }
             }
         }
         Value::Object(object) => {
@@ -694,25 +756,51 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
                 return Ok(json!({ "chain": normalized }));
             }
 
-            let raw_selector =
+            let Some(raw_selector) =
                 first_value(object, &["selector", "rule", "value", "jsonPath", "path"])
                     .and_then(Value::as_str)
-                    .ok_or_else(|| format!("{context} 缺少 selector 或 JSONPath"))?;
+            else {
+                return Ok(legacy_rule(
+                    Value::Object(object.clone()),
+                    format!("{context} 缺少 selector 或 JSONPath"),
+                ));
+            };
             if raw_selector.trim().is_empty() {
                 return Ok(Value::Null);
             }
             let attr = object.get("attr").and_then(Value::as_str);
             let regex = object.get("regex").and_then(Value::as_str);
             let replacement = object.get("replacement").and_then(Value::as_str);
-            let normalized = normalize_rule_parts(raw_selector, context, attr, regex, replacement)?;
-            if normalized.is_string() {
-                Ok(json!({ "selector": normalized }))
-            } else {
-                Ok(normalized)
+            match normalize_rule_parts(raw_selector, context, attr, regex, replacement) {
+                Ok(normalized) => {
+                    if normalized.is_string() {
+                        Ok(json!({ "selector": normalized }))
+                    } else {
+                        Ok(normalized)
+                    }
+                }
+                Err(error) if !is_fatal_rule_error(&error) => {
+                    Ok(legacy_rule(Value::Object(object.clone()), error))
+                }
+                Err(error) => Err(error),
             }
         }
-        _ => Err(format!("{context} 必须是字符串或规则对象")),
+        other => Ok(legacy_rule(
+            other.clone(),
+            format!("{context} 必须是字符串或规则对象"),
+        )),
     }
+}
+
+fn is_fatal_rule_error(error: &str) -> bool {
+    error.contains("最多支持")
+}
+
+fn legacy_rule(value: Value, reason: String) -> Value {
+    json!({
+        "legacy": value,
+        "reason": truncate_preview_text(&reason),
+    })
 }
 
 fn normalize_rule_parts(
@@ -748,13 +836,21 @@ fn normalize_rule_parts(
 
         let mut joined = Vec::with_capacity(join_parts.len());
         for join_part in join_parts {
-            let (selector, parsed_attr) = parse_legado_rule(join_part, context)?;
+            let (selector, parsed_attr) = match parse_legado_rule(join_part, context) {
+                Ok(parsed) => parsed,
+                Err(error) if !is_fatal_rule_error(&error) => {
+                    joined.push(legacy_rule(Value::String(join_part.to_string()), error));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let attr = if let Some(raw_attr) = override_attr {
                 if !is_supported_attr(raw_attr) {
-                    return Err(format!(
-                        "{context} 的属性后缀 @{} 不在安全子集内",
-                        raw_attr.trim()
+                    joined.push(legacy_rule(
+                        Value::String(join_part.to_string()),
+                        format!("{context} 的属性后缀 @{} 不在安全子集内", raw_attr.trim()),
                     ));
+                    continue;
                 }
                 normalize_attr(raw_attr)
             } else {
@@ -769,7 +865,11 @@ fn normalize_rule_parts(
                 .filter(|value| !value.is_empty())
                 .or(parsed_replacement.as_deref());
             if effective_replacement.is_some() && effective_regex.is_none() {
-                return Err(format!("{context} replacement 不能脱离 regex 使用"));
+                joined.push(legacy_rule(
+                    Value::String(join_part.to_string()),
+                    format!("{context} replacement 不能脱离 regex 使用"),
+                ));
+                continue;
             }
 
             if attr.is_none() && effective_regex.is_none() && effective_replacement.is_none() {
@@ -875,20 +975,64 @@ fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>
     }
 
     let first = if raw.starts_with('@') { &raw[1..] } else { raw };
-    let (selector, suffix) = match first.rsplit_once('@') {
-        Some((selector, suffix)) if !selector.trim().is_empty() => {
-            (selector.trim(), Some(suffix.trim()))
+    let segments = split_top_level_at(first);
+    let (selector_text, suffix) = if segments.len() > 1 {
+        let candidate = segments.last().copied().unwrap_or_default().trim();
+        if is_supported_attr(candidate) || !looks_like_selector_segment(candidate) {
+            (
+                segments[..segments.len() - 1].join("@"),
+                Some(candidate.to_string()),
+            )
+        } else {
+            (first.to_string(), None)
         }
-        _ => (first.trim(), None),
+    } else {
+        (first.to_string(), None)
     };
-    let selector = normalize_selector(selector, context)?;
-    let attr = suffix.and_then(normalize_attr);
-    if let Some(suffix) = suffix {
+    let selector = normalize_selector(&selector_text, context)?;
+    let attr = suffix.as_deref().and_then(normalize_attr);
+    if let Some(suffix) = suffix.as_deref() {
         if !is_supported_attr(suffix) {
             return Err(format!("{context} 的属性后缀 @{suffix} 不在安全子集内"));
         }
     }
     Ok((selector, attr))
+}
+
+fn split_top_level_at(value: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, character) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote.is_some() {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if character == active {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '[' | '(' => depth = depth.saturating_add(1),
+            ']' | ')' => depth = depth.saturating_sub(1),
+            '@' if depth == 0 => {
+                parts.push(value[start..index].trim());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(value[start..].trim());
+    parts
 }
 
 fn normalize_selector(value: &str, context: &str) -> Result<String, String> {
@@ -907,12 +1051,6 @@ fn normalize_selector(value: &str, context: &str) -> Result<String, String> {
             "{context} 使用了不受支持的 XPath/脚本规则；请改写为 CSS 选择器"
         ));
     }
-    for (prefix, replacement) in [("class.", "."), ("id.", "#"), ("tag.", "")] {
-        if let Some(rest) = selector.strip_prefix(prefix) {
-            selector = format!("{replacement}{rest}");
-            break;
-        }
-    }
     if selector.starts_with("css:") {
         selector = selector.trim_start_matches("css:").trim().to_string();
     }
@@ -921,31 +1059,127 @@ fn normalize_selector(value: &str, context: &str) -> Result<String, String> {
             "{context} 包含多段未实现的规则表达式；请改写为单个 CSS 选择器"
         ));
     }
-    Ok(selector)
+
+    let mut normalized_segments = Vec::new();
+    for raw_segment in split_top_level_at(&selector) {
+        if raw_segment.is_empty() {
+            return Err(format!("{context} selector 包含空链式候选"));
+        }
+        let mut segment = raw_segment.to_string();
+        for (prefix, replacement) in [("class.", "."), ("id.", "#"), ("tag.", "")] {
+            if let Some(rest) = segment.strip_prefix(prefix) {
+                segment = format!("{replacement}{rest}");
+                break;
+            }
+        }
+        segment = strip_legacy_indexes(&segment);
+        if segment.trim().is_empty() {
+            return Err(format!("{context} selector 不能为空"));
+        }
+        if segment.starts_with("text.") || segment.contains('!') {
+            return Err(format!(
+                "{context} 使用了仅 Legado 支持的文本/索引选择器"
+            ));
+        }
+        normalized_segments.push(segment);
+    }
+    Ok(normalized_segments.join(" "))
+}
+
+fn strip_legacy_indexes(value: &str) -> String {
+    let mut output = value.trim().to_string();
+    loop {
+        let mut changed = false;
+        if let Some((base, suffix)) = output.rsplit_once('!') {
+            if !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit()) {
+                output = base.trim_end().to_string();
+                changed = true;
+            }
+        }
+        if !changed {
+            if let Some((base, suffix)) = output.rsplit_once('.') {
+                if !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit()) {
+                    output = base.trim_end().to_string();
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    if let Some((base, suffix)) = output.split_once(':') {
+        if suffix.split(':').all(|part| {
+            !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+        }) {
+            output = base.trim_end().to_string();
+        }
+    }
+    output
+}
+
+fn looks_like_selector_segment(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with('.')
+        || value.starts_with('#')
+        || value.starts_with('[')
+        || value.starts_with("class.")
+        || value.starts_with("id.")
+        || value.starts_with("tag.")
+        || value.contains('.')
+        || value.contains('#')
+        || value.contains(':')
+        || matches!(
+            value.to_ascii_lowercase().as_str(),
+            "a" | "abbr" | "article" | "aside" | "blockquote" | "button" | "div" | "em"
+                | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "img" | "li" | "main"
+                | "nav" | "p" | "section" | "span" | "strong" | "table" | "tbody" | "td"
+                | "th" | "thead" | "tr" | "ul"
+        )
 }
 
 fn is_supported_attr(value: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
     matches!(
-        value.trim().to_ascii_lowercase().as_str(),
+        value.as_str(),
         "text"
             | "textnodes"
             | "owntext"
+            | "all"
             | "content"
             | "html"
             | "href"
             | "src"
             | "title"
             | "alt"
+            | "value"
+            | "style"
+            | "poster"
+            | "rel"
+            | "id"
+            | "class"
+            | "name"
             | "data-src"
-    )
+            | "data-original"
+            | "data-url"
+            | "data-href"
+            | "data-cover"
+    ) || is_safe_custom_attr(&value)
+}
+
+fn is_safe_custom_attr(value: &str) -> bool {
+    (value.starts_with("data-") || value.starts_with("aria-"))
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
 }
 
 fn normalize_attr(value: &str) -> Option<String> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "text" | "textnodes" | "owntext" => None,
-        "content" | "html" | "href" | "src" | "title" | "alt" | "data-src" => {
-            Some(value.trim().to_ascii_lowercase())
-        }
+    let value = value.trim().to_ascii_lowercase();
+    match value.as_str() {
+        "text" | "textnodes" | "owntext" | "all" => None,
+        _ if is_supported_attr(&value) => Some(value),
         _ => None,
     }
 }
@@ -1288,18 +1522,24 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unsafe_legado_script_rule() {
+    fn preserves_unsafe_legado_script_rule_as_inert_legacy() {
         let payload = json!({
             "bookSourceName": "Unsafe",
             "searchUrl": "https://example.test/search?q={{key}}",
             "ruleSearch": { "bookList": "li", "name": "@js:java.return 'x'" }
         });
-        let error = parse_import_bundle(&payload.to_string()).expect_err("unsafe rule");
-        assert!(error.contains("不受支持"));
+        let imported = parse_import_bundle(&payload.to_string()).expect("legacy import");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("legacy source");
+        assert!(matches!(
+            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            Some(SourceRule::Legacy { legacy, .. })
+                if legacy.as_str() == Some("@js:java.return 'x'")
+        ));
     }
 
     #[test]
-    fn rejects_template_rule_with_clear_message() {
+    fn preserves_template_rule_as_inert_legacy() {
         let payload = json!({
             "bookSourceName": "Template rule",
             "searchUrl": "https://example.test/search?q={{key}}",
@@ -1307,8 +1547,13 @@ mod tests {
                 "intro": "{{@#novel_intro@html}}##展开收起|飞卢小说(.|\\n)*"
             }
         });
-        let error = parse_import_bundle(&payload.to_string()).expect_err("template rule");
-        assert!(error.contains("模板/脚本"));
+        let imported = parse_import_bundle(&payload.to_string()).expect("template import");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("template source");
+        assert!(matches!(
+            source.book_info.as_ref().and_then(|rules| rules.intro.as_ref()),
+            Some(SourceRule::Legacy { legacy, .. }) if legacy.as_str().is_some()
+        ));
     }
 
     #[test]
@@ -1340,8 +1585,13 @@ mod tests {
             "searchUrl": "https://example.test/search?q={{key}}",
             "ruleSearch": { "bookList": "li", "name": "h2@onclick" }
         });
-        let error = parse_import_bundle(&invalid_payload.to_string()).expect_err("unknown attr");
-        assert!(error.contains("安全子集"));
+        let imported = parse_import_bundle(&invalid_payload.to_string()).expect("legacy attr");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("legacy attr source");
+        assert!(matches!(
+            source.search.as_ref().and_then(|rules| rules.title.as_ref()),
+            Some(SourceRule::Legacy { .. })
+        ));
     }
 
     #[test]
@@ -1467,14 +1717,15 @@ mod tests {
         ]);
         let preview = preview_import_bundle(&payload.to_string()).expect("preview");
         assert_eq!(preview.entries.len(), 2);
-        assert_eq!(preview.valid_count, 1);
-        assert_eq!(preview.invalid_count, 1);
+        assert_eq!(preview.valid_count, 2);
+        assert_eq!(preview.invalid_count, 0);
         assert!(preview.entries[0].valid);
-        assert!(!preview.entries[1].valid);
+        assert!(preview.entries[1].valid);
+        assert!(preview.entries[1].error.is_none());
         assert!(preview.entries[1]
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("不受支持")));
+            .unsupported_rules
+            .iter()
+            .any(|rule| rule.reason.contains("脚本规则")));
     }
 
     #[test]
@@ -1488,10 +1739,10 @@ mod tests {
             }
         }]);
         let preview = preview_import_bundle(&payload.to_string()).expect("preview");
-        assert_eq!(preview.valid_count, 0);
-        assert_eq!(preview.invalid_count, 1);
+        assert_eq!(preview.valid_count, 1);
+        assert_eq!(preview.invalid_count, 0);
         let entry = &preview.entries[0];
-        assert!(!entry.valid);
+        assert!(entry.valid);
         assert_eq!(entry.unsupported_rules.len(), 2);
         assert!(entry
             .unsupported_rules
@@ -1507,15 +1758,12 @@ mod tests {
         assert!(entry
             .unsupported_rules
             .iter()
-            .all(|rule| rule.reason.contains("只读兼容性评估")));
+            .all(|rule| rule.reason.contains("已保留原表达式")));
         assert!(entry
             .unsupported_rules
             .iter()
             .all(|rule| rule.offline_elapsed_us >= 1));
-        assert!(entry
-            .error
-            .as_deref()
-            .is_some_and(|error| error.contains("不受支持")));
+        assert!(entry.error.is_none());
     }
 
     #[test]

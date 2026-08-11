@@ -9,6 +9,8 @@ import SourceView from "./components/SourceView.vue";
 import RemoteReaderView from "./components/RemoteReaderView.vue";
 import LocalReaderView from "./components/LocalReaderView.vue";
 
+const MAX_SOURCE_IMPORT_BYTES = 16 * 1024 * 1024;
+
 type View = "library" | "reader" | "sources" | "settings";
 type ReaderTheme = "night" | "paper" | "sepia" | "custom";
 type ReaderTextAlign = "left" | "justify" | "center";
@@ -1979,7 +1981,7 @@ function showSourceImportPreview(
   sourceTransferMessage.value =
     "已解析 " + preview.entries.length + " 个书源：" +
     preview.valid_count + " 个可导入，" +
-    preview.invalid_count + " 个将跳过";
+    preview.invalid_count + " 个需人工处理；脚本、XPath、模板会保留原文但不执行";
 }
 
 function clearSourceImportPreview() {
@@ -2045,8 +2047,8 @@ async function importSourceFile(event: Event) {
   const file = input.files?.[0];
   if (!file) return;
 
-  if (file.size > 2 * 1024 * 1024) {
-    errorMessage.value = "书源文件超过 2 MB 限制";
+  if (file.size > MAX_SOURCE_IMPORT_BYTES) {
+    errorMessage.value = "书源文件超过 16 MB 限制";
     input.value = "";
     return;
   }

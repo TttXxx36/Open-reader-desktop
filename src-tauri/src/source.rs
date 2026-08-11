@@ -198,6 +198,13 @@ pub enum SourceRule {
     Chain {
         chain: Vec<SourceRule>,
     },
+    /// Original Legado/XPath/JavaScript/template expression preserved for
+    /// round-tripping. It is intentionally inert at runtime.
+    Legacy {
+        legacy: Value,
+        #[serde(default)]
+        reason: Option<String>,
+    },
 }
 
 impl SourceRule {
@@ -208,26 +215,27 @@ impl SourceRule {
             Self::JsonPath { json_path, .. } => json_path,
             Self::Join { join } => join.first().map(Self::selector).unwrap_or_default(),
             Self::Chain { chain } => chain.first().map(Self::selector).unwrap_or_default(),
+            Self::Legacy { .. } => "",
         }
     }
 
     fn attr(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => None,
             Self::Detailed { attr, .. } | Self::JsonPath { attr, .. } => attr.as_deref(),
         }
     }
 
     fn regex(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => None,
             Self::Detailed { regex, .. } | Self::JsonPath { regex, .. } => regex.as_deref(),
         }
     }
 
     fn replacement(&self) -> Option<&str> {
         match self {
-            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } => None,
+            Self::Selector(_) | Self::Join { .. } | Self::Chain { .. } | Self::Legacy { .. } => None,
             Self::Detailed { replacement, .. } | Self::JsonPath { replacement, .. } => {
                 replacement.as_deref()
             }
@@ -239,20 +247,42 @@ impl SourceRule {
             Self::JsonPath { json_path, .. } => Some(json_path),
             Self::Selector(value) if is_json_rule_path(value) => Some(value),
             Self::Detailed { selector, .. } if is_json_rule_path(selector) => Some(selector),
-            Self::Join { join } if !join.is_empty() && join.iter().all(Self::is_json_path) => {
-                join.first().and_then(Self::json_path)
+            Self::Join { join } => {
+                let usable = join.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                if !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path()) {
+                    usable.first().and_then(|rule| rule.json_path())
+                } else {
+                    None
+                }
             }
-            Self::Chain { chain } if !chain.is_empty() && chain.iter().all(Self::is_json_path) => {
-                chain.first().and_then(Self::json_path)
+            Self::Chain { chain } => {
+                let usable = chain.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                if !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path()) {
+                    usable.first().and_then(|rule| rule.json_path())
+                } else {
+                    None
+                }
             }
+            Self::Legacy { .. } => None,
             _ => None,
         }
     }
 
+    fn is_legacy(&self) -> bool {
+        matches!(self, Self::Legacy { .. })
+    }
+
     fn is_json_path(&self) -> bool {
         match self {
-            Self::Join { join } => !join.is_empty() && join.iter().all(Self::is_json_path),
-            Self::Chain { chain } => !chain.is_empty() && chain.iter().all(Self::is_json_path),
+            Self::Join { join } => {
+                let usable = join.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path())
+            }
+            Self::Chain { chain } => {
+                let usable = chain.iter().filter(|rule| !rule.is_legacy()).collect::<Vec<_>>();
+                !usable.is_empty() && usable.iter().all(|rule| rule.is_json_path())
+            }
+            Self::Legacy { .. } => false,
             _ => self.json_path().is_some(),
         }
     }
@@ -1692,6 +1722,7 @@ fn extract_document_rule(
         return Ok(None);
     };
     match rule {
+        SourceRule::Legacy { .. } => Ok(None),
         SourceRule::Chain { chain } => {
             for child in chain {
                 match extract_document_rule(document, Some(child)) {
@@ -2156,7 +2187,10 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         validate_endpoint("exploreUrl", value, &mut errors);
     }
     if source.source_type != 0 {
-        errors.push("bookSourceType 目前仅支持文本书源（0）；音频书源将在后续版本评估".to_string());
+        warnings.push(
+            "bookSourceType 不是文本类型；元数据会保存，但当前阅读执行器不会执行音频/TTS 规则"
+                .to_string(),
+        );
     }
     if source.enabled_explore && source.explore_url.is_none() {
         warnings.push("enabledExplore 已开启，但未配置 exploreUrl".to_string());
@@ -2474,12 +2508,28 @@ fn validate_page_rules(
         ("next", rules.next.as_ref()),
     ] {
         if let Some(rule) = rule {
-            validate_source_rule(&format!("{name}.{field}"), rule, errors);
+            validate_source_rule(&format!("{name}.{field}"), rule, errors, warnings);
         }
     }
 }
 
-fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>) {
+fn validate_source_rule(
+    name: &str,
+    rule: &SourceRule,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    if let SourceRule::Legacy { reason, .. } = rule {
+        warnings.push(format!(
+            "{name} 已保留原始兼容规则，当前不执行{}",
+            reason
+                .as_deref()
+                .map(|value| format!("：{value}"))
+                .unwrap_or_default()
+        ));
+        return;
+    }
+
     let compound = match rule {
         SourceRule::Chain { chain } => Some(("链式规则", chain)),
         SourceRule::Join { join } => Some(("组合规则", join)),
@@ -2496,15 +2546,19 @@ fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>)
                 MAX_RULE_CHAIN_LENGTH
             ));
         }
-        let json_flags = children
+        let usable = children
             .iter()
-            .map(SourceRule::is_json_path)
+            .filter(|child| !child.is_legacy())
+            .collect::<Vec<_>>();
+        let json_flags = usable
+            .iter()
+            .map(|rule| rule.is_json_path())
             .collect::<Vec<_>>();
         if json_flags.iter().any(|flag| *flag) && json_flags.iter().any(|flag| !*flag) {
             errors.push(format!("{name} {label}不能混用 CSS 和 JSONPath"));
         }
         for (index, child) in children.iter().enumerate() {
-            validate_source_rule(&format!("{name}[{index}]"), child, errors);
+            validate_source_rule(&format!("{name}[{index}]"), child, errors, warnings);
         }
         return;
     }
@@ -2890,6 +2944,7 @@ fn parse_selector(value: &str) -> Result<Selector, SourceError> {
 
 fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<String, SourceError> {
     match rule {
+        SourceRule::Legacy { .. } => Err(SourceError::NoMatch),
         SourceRule::Chain { chain } => {
             for child in chain {
                 match extract_from_element(element.clone(), child) {
@@ -2982,6 +3037,7 @@ fn extract_json_path(value: &Value, path: &str) -> Result<Vec<String>, SourceErr
 
 fn extract_json_rule(value: &Value, rule: &SourceRule) -> Result<String, SourceError> {
     match rule {
+        SourceRule::Legacy { .. } => Err(SourceError::NoMatch),
         SourceRule::Chain { chain } => {
             for child in chain {
                 match extract_json_rule(value, child) {
@@ -4455,4 +4511,25 @@ mod tests {
             Some("<p>第一段</p><p>第二段（已替换）</p>".to_string())
         );
     }
+    #[test]
+    fn legacy_rules_are_inert_and_do_not_fail_runtime() {
+        let document = Html::parse_document("<article><h2>safe</h2></article>");
+        let legacy = SourceRule::Legacy {
+            legacy: Value::String("@js:return 'unsafe'".to_string()),
+            reason: Some("脚本规则".to_string()),
+        };
+        assert_eq!(
+            extract_document_rule(&document, Some(&legacy)).expect("legacy is skipped"),
+            None
+        );
+        let article = document
+            .select(&Selector::parse("article").expect("selector"))
+            .next()
+            .expect("article");
+        assert!(matches!(
+            extract_from_element(article, &legacy),
+            Err(SourceError::NoMatch)
+        ));
+    }
+
 }
