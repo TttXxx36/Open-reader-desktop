@@ -4,7 +4,7 @@
 
 本审计以 `main` 当前代码、路线图、兼容性矩阵、M6/M7/M8/M9 专项计划和 GitHub Actions 证据为准。当前不在本地构建或安装；签名方案继续暂缓。
 
-M7.1d 最新代码提交为 [60564de2151738f91e9b953ff44ad0e42496fb2b](https://github.com/TttXxx36/Open-reader-desktop/commit/60564de2151738f91e9b953ff44ad0e42496fb2b)，对应 CI [31475264033](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475264033)、Windows Release [31475774771](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475774771) 和 installer smoke [31476524993](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31476524993)，均已通过。
+M7.1d 最新代码提交为 [cd144e4e218cd5294d1037eb8f0f567e1a9750f7](https://github.com/TttXxx36/Open-reader-desktop/commit/cd144e4e218cd5294d1037eb8f0f567e1a9750f7)，对应主 CI [31487105710](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31487105710)、Windows Release [31487610713](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31487610713) 和 installer smoke [31488344784](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31488344784)，均已通过。
 
 ## 已完成的主要阶段
 
@@ -68,6 +68,21 @@ M7.1d 最新代码提交为 [60564de2151738f91e9b953ff44ad0e42496fb2b](https://g
 7. **隐私与授权**：不保存 Cookie/Authorization/Referer，不执行未知脚本，不上传正文和未授权内容；日志继续脱敏。
 8. **文档一致性**：专项计划、路线图、兼容性矩阵和发布清单必须在每个里程碑后同步更新。
 9. **CI 运行时维护**：首轮升级已完成：`ci.yml` 和 `release-candidate.yml` 使用 `actions/checkout@v5`、`actions/setup-node@v5`、`actions/upload-artifact@v6`，并关闭 setup-node 自动缓存；主 CI [31481090641](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31481090641)、Windows Release [31481646325](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31481646325) 和 installer smoke [31482405080](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31482405080) 均通过。后续仍需在 Action 大版本变化时复验。
+
+## 本轮验收问题修复：在线书源大小限制
+
+验收发现在线网址类书源被提示“文件大小超出限制”。根因不是 URL 字符串长度，而是两层 2 MiB 限制叠加：书源 bundle 导入校验固定为 2 MiB，在线 URL 拉取使用 `SourceEngine::default()` 的 2 MiB response body 上限。
+
+本轮已统一调整为：
+
+- 本地 JSON、对象/数组 bundle 与在线 URL 响应体上限统一为 **16 MiB**；
+- 在线 URL 拉取超时由默认 15 秒提高为 **30 秒**；
+- 三个导入入口共用同一个大小校验函数，超限时明确提示“书源文件超过 16 MB 限制”；
+- URL 本身仍保留 2 KB 长度校验；结构校验、规则安全闸门、脚本/Cookie/Authorization 拒绝和内存/DoS 防护不变。
+
+对应代码已随上述最新提交发布。主 CI、Windows Release（手动 dispatch，`upload_artifacts=true`）和 installer smoke 均通过；Release 产物 artifact [9099996289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31487610713) 的摘要为 `sha256:f3d2f69e38de063303ebe0fc0c83f75676bfd7da5719a3f5069c07910a97a17e`。
+
+目标 Windows 手工验收时应重新导入原在线书源：16 MiB 以内应进入预览/确认导入；超过 16 MiB 时应显示明确边界。当前不做“无限制”放开，以避免异常响应导致内存和网络资源失控；如后续确有超大可信书源需求，再增加带管理员提示的可配置上限。
 
 ## 后续执行顺序
 
