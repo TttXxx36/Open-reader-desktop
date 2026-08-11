@@ -666,7 +666,7 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
             } else {
                 normalize_rule_parts(raw, context, None, None, None)
             }
-        },
+        }
         Value::Object(object) => {
             if let Some(chain) = object.get("chain") {
                 let entries = chain
@@ -704,8 +704,7 @@ fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
             let attr = object.get("attr").and_then(Value::as_str);
             let regex = object.get("regex").and_then(Value::as_str);
             let replacement = object.get("replacement").and_then(Value::as_str);
-            let normalized =
-                normalize_rule_parts(raw_selector, context, attr, regex, replacement)?;
+            let normalized = normalize_rule_parts(raw_selector, context, attr, regex, replacement)?;
             if normalized.is_string() {
                 Ok(json!({ "selector": normalized }))
             } else {
@@ -870,11 +869,7 @@ fn parse_legado_rule(raw: &str, context: &str) -> Result<(String, Option<String>
         ));
     }
 
-    let first = if raw.starts_with('@') {
-        &raw[1..]
-    } else {
-        raw
-    };
+    let first = if raw.starts_with('@') { &raw[1..] } else { raw };
     let (selector, suffix) = match first.rsplit_once('@') {
         Some((selector, suffix)) if !selector.trim().is_empty() => {
             (selector.trim(), Some(suffix.trim()))
@@ -927,8 +922,16 @@ fn normalize_selector(value: &str, context: &str) -> Result<String, String> {
 fn is_supported_attr(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
-        "text" | "textnodes" | "owntext" | "content" | "html" | "href" | "src" | "title"
-            | "alt" | "data-src"
+        "text"
+            | "textnodes"
+            | "owntext"
+            | "content"
+            | "html"
+            | "href"
+            | "src"
+            | "title"
+            | "alt"
+            | "data-src"
     )
 }
 

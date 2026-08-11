@@ -3011,9 +3011,7 @@ fn extract_json_rule(value: &Value, rule: &SourceRule) -> Result<String, SourceE
         }
         _ => {
             let path = rule.json_path().ok_or_else(|| {
-                SourceError::InvalidConfig(
-                    "JSON 文档中的字段必须使用 JSONPath 规则".to_string(),
-                )
+                SourceError::InvalidConfig("JSON 文档中的字段必须使用 JSONPath 规则".to_string())
             })?;
             let selected = extract_json_nodes(value, path)?
                 .into_iter()
@@ -4459,5 +4457,4 @@ mod tests {
             Some("<p>第一段</p><p>第二段（已替换）</p>".to_string())
         );
     }
-
 }
