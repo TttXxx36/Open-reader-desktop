@@ -1696,8 +1696,10 @@ fn extract_document_rule(
     match rule {
         SourceRule::Chain { chain } => {
             for child in chain {
-                if let Some(value) = extract_document_rule(document, Some(child))? {
-                    return Ok(Some(value));
+                match extract_document_rule(document, Some(child)) {
+                    Ok(Some(value)) => return Ok(Some(value)),
+                    Ok(None) | Err(SourceError::NoMatch) => continue,
+                    Err(error) => return Err(error),
                 }
             }
             Ok(None)
@@ -1705,10 +1707,10 @@ fn extract_document_rule(
         SourceRule::Join { join } => {
             let mut values = Vec::new();
             for child in join {
-                if let Some(value) = extract_document_rule(document, Some(child))? {
-                    if !value.trim().is_empty() {
-                        values.push(value);
-                    }
+                match extract_document_rule(document, Some(child)) {
+                    Ok(Some(value)) if !value.trim().is_empty() => values.push(value),
+                    Ok(Some(_)) | Ok(None) | Err(SourceError::NoMatch) => {}
+                    Err(error) => return Err(error),
                 }
             }
             if values.is_empty() {
@@ -2525,6 +2527,9 @@ fn validate_source_rule(name: &str, rule: &SourceRule, errors: &mut Vec<String>)
         if let Err(error) = Regex::new(regex) {
             errors.push(format!("{name} regex：{error}"));
         }
+    }
+    if rule.replacement().is_some() && rule.regex().is_none() {
+        errors.push(format!("{name} replacement 必须与 regex 一起使用"));
     }
     if rule
         .replacement()

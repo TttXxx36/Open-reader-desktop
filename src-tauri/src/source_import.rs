@@ -660,7 +660,13 @@ fn normalize_page_rules(value: &Value, stage: &str, item_keys: &[&str]) -> Resul
 
 fn normalize_rule(value: &Value, context: &str) -> Result<Value, String> {
     match value {
-        Value::String(raw) => normalize_rule_parts(raw, context, None, None, None),
+        Value::String(raw) => {
+            if raw.trim().is_empty() {
+                Ok(Value::Null)
+            } else {
+                normalize_rule_parts(raw, context, None, None, None)
+            }
+        },
         Value::Object(object) => {
             if let Some(chain) = object.get("chain") {
                 let entries = chain
@@ -717,7 +723,9 @@ fn normalize_rule_parts(
     override_regex: Option<&str>,
     override_replacement: Option<&str>,
 ) -> Result<Value, String> {
-    let parts = split_rule_chain(raw_selector, context)?;
+    let (raw_expression, parsed_regex, parsed_replacement) =
+        split_rule_transform(raw_selector, context)?;
+    let parts = split_rule_chain(&raw_expression, context)?;
     if parts.is_empty() {
         return Ok(Value::Null);
     }
@@ -741,9 +749,7 @@ fn normalize_rule_parts(
 
         let mut joined = Vec::with_capacity(join_parts.len());
         for join_part in join_parts {
-            let (expression, parsed_regex, parsed_replacement) =
-                split_rule_transform(join_part, context)?;
-            let (selector, parsed_attr) = parse_legado_rule(&expression, context)?;
+            let (selector, parsed_attr) = parse_legado_rule(join_part, context)?;
             let attr = if let Some(raw_attr) = override_attr {
                 if !is_supported_attr(raw_attr) {
                     return Err(format!(
