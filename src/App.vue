@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, ref, watch } from "vue";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open as openNativeDialog } from "@tauri-apps/plugin-dialog";
 import brandMark from "./assets/open-reader-mark.svg";
 import LibraryOverview from "./components/LibraryOverview.vue";
@@ -11,7 +11,7 @@ import LocalReaderView from "./components/LocalReaderView.vue";
 
 const MAX_SOURCE_IMPORT_BYTES = 16 * 1024 * 1024;
 
-type View = "library" | "reader" | "sources" | "settings";
+type View = "library" | "search" | "reader" | "sources" | "settings";
 type ReaderTheme = "night" | "paper" | "sepia" | "custom";
 type ReaderTextAlign = "left" | "justify" | "center";
 type ReaderMode = "scroll" | "paged";
@@ -577,6 +577,18 @@ interface UnifiedSearchItem {
   title: string;
   author: string | null;
   book_url: string | null;
+  cover_url?: string | null;
+}
+
+interface RemoteShelfEntry {
+  id: string;
+  source_id: string;
+  source_name: string;
+  title: string;
+  author: string | null;
+  book_url: string;
+  cover_url: string | null;
+  added_at: string;
 }
 
 interface RemoteChapter {
@@ -654,6 +666,7 @@ const IMAGE_LOCATION_KEY_PREFIX = "open-reader.image-location.";
 const SETTINGS_KEY = "open-reader.settings";
 const SETTINGS_VERSION = 2;
 const NEXT_PAGE_POLICY_KEY = "open-reader.next-page-policy";
+const REMOTE_SHELF_KEY = "open-reader.remote-shelf";
 const DEFAULT_NEXT_PAGE_POLICY: NextPagePolicy = {
   enabled: false,
   max_depth: 2,
@@ -688,6 +701,9 @@ const readerFontStacks: Record<ReaderFont, string> = {
 };
 const view = ref<View>("library");
 const settingsSection = ref<"reader" | "appearance" | "network">("reader");
+const remoteShelf = ref<RemoteShelfEntry[]>(loadRemoteShelf());
+const shelfMenuTarget = ref<{ kind: "local" | "remote"; id: string } | null>(null);
+let shelfLongPressTimer: ReturnType<typeof setTimeout> | null = null;
 const books = ref<BookSummary[]>([]);
 const libraryQuery = ref("");
 const libraryGroupFilter = ref("");
@@ -807,6 +823,7 @@ const searchPageLimit = ref(1);
 const searchBusy = ref(false);
 const searchOperationId = ref<string | null>(null);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
+const searchInlineMessage = ref("");
 const retryingSourceId = ref<string | null>(null);
 const sourceTransferBusy = ref(false);
 const sourceTransferMessage = ref("");
@@ -916,6 +933,7 @@ onMounted(loadBooks);
 watch([libraryQuery, libraryGroupFilter, librarySort, librarySortDescending], () => {
   void loadBooks();
 });
+watch(remoteShelf, persistRemoteShelf, { deep: true });
 watch(settings, (value) => {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
@@ -1197,6 +1215,64 @@ function loadSettings(): ReaderSettings {
     return { ...DEFAULT_READER_SETTINGS };
   }
 }
+
+function loadRemoteShelf(): RemoteShelfEntry[] {
+  try {
+    const raw = localStorage.getItem(REMOTE_SHELF_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const record = item as Record<string, unknown>;
+      const sourceId = typeof record.source_id === "string" ? record.source_id.trim() : "";
+      const bookUrl = typeof record.book_url === "string" ? record.book_url.trim() : "";
+      const title = typeof record.title === "string" ? record.title.trim() : "";
+      if (!sourceId || !bookUrl || !title) return [];
+      return [{
+        id: typeof record.id === "string" && record.id ? record.id : `${sourceId}::${bookUrl}`,
+        source_id: sourceId,
+        source_name: typeof record.source_name === "string" ? record.source_name : "书源",
+        title,
+        author: typeof record.author === "string" && record.author.trim() ? record.author.trim() : null,
+        book_url: bookUrl,
+        cover_url: typeof record.cover_url === "string" && record.cover_url.trim() ? record.cover_url.trim() : null,
+        added_at: typeof record.added_at === "string" ? record.added_at : new Date().toISOString(),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function persistRemoteShelf() {
+  try {
+    localStorage.setItem(REMOTE_SHELF_KEY, JSON.stringify(remoteShelf.value));
+  } catch {
+    // 本地存储不可用时仍保留当前会话的书架状态。
+  }
+}
+
+const visibleRemoteShelf = computed(() => {
+  const query = libraryQuery.value.trim().toLocaleLowerCase();
+  if (libraryGroupFilter.value) return [];
+  const filtered = query
+    ? remoteShelf.value.filter((book) =>
+        [book.title, book.author ?? "", book.source_name].some((value) =>
+          value.toLocaleLowerCase().includes(query),
+        ),
+      )
+    : [...remoteShelf.value];
+  return filtered.sort((left, right) => {
+    if (librarySort.value === "title") return left.title.localeCompare(right.title, "zh-CN");
+    if (librarySort.value === "author") return (left.author ?? "").localeCompare(right.author ?? "", "zh-CN");
+    if (librarySort.value === "custom_order") return 0;
+    return librarySortDescending.value
+      ? right.added_at.localeCompare(left.added_at)
+      : left.added_at.localeCompare(right.added_at);
+  });
+});
+
 async function loadBooks() {
   const loadId = libraryLoadId.value + 1;
   libraryLoadId.value = loadId;
@@ -1386,6 +1462,157 @@ async function saveBatchBookMetadata() {
   } finally {
     batchMetadataBusy.value = false;
   }
+}
+
+
+function openSearch() {
+  view.value = "search";
+  errorMessage.value = "";
+  sourceTransferMessage.value = "";
+  searchInlineMessage.value = "";
+}
+
+function remoteShelfId(item: UnifiedSearchItem) {
+  return item.source_id.trim() + "::" + (item.book_url?.trim() ?? "");
+}
+
+function isRemoteShelfSaved(item: UnifiedSearchItem) {
+  const id = remoteShelfId(item);
+  return Boolean(item.book_url?.trim()) && remoteShelf.value.some((book) => book.id === id);
+}
+
+function toggleRemoteShelf(item: UnifiedSearchItem) {
+  const bookUrl = item.book_url?.trim();
+  if (!bookUrl) {
+    searchInlineMessage.value = "这个结果没有可用的书籍链接，无法加入书架。";
+    return;
+  }
+  const id = item.source_id.trim() + "::" + bookUrl;
+  const existingIndex = remoteShelf.value.findIndex((book) => book.id === id);
+  if (existingIndex >= 0) {
+    remoteShelf.value = remoteShelf.value.filter((book) => book.id !== id);
+    status.value = "已从书架移除书源书籍";
+    searchInlineMessage.value = "";
+    return;
+  }
+  remoteShelf.value = [
+    ...remoteShelf.value,
+    {
+      id,
+      source_id: item.source_id.trim(),
+      source_name: item.source_name.trim() || "书源",
+      title: item.title.trim() || "未命名书籍",
+      author: item.author?.trim() || null,
+      book_url: bookUrl,
+      cover_url: item.cover_url?.trim() || null,
+      added_at: new Date().toISOString(),
+    },
+  ];
+  status.value = "已加入书架，可在书架的“书源书籍”区域继续阅读";
+  searchInlineMessage.value = "";
+}
+
+function remoteShelfItem(entry: RemoteShelfEntry): UnifiedSearchItem {
+  return {
+    source_id: entry.source_id,
+    source_name: entry.source_name,
+    title: entry.title,
+    author: entry.author,
+    book_url: entry.book_url,
+    cover_url: entry.cover_url,
+  };
+}
+
+function openRemoteShelfEntry(entry: RemoteShelfEntry) {
+  void openRemoteBook(remoteShelfItem(entry));
+}
+
+function renameRemoteShelfEntry(entry: RemoteShelfEntry) {
+  const nextTitle = window.prompt("重命名书源书籍", entry.title)?.trim();
+  if (!nextTitle || nextTitle === entry.title) return;
+  remoteShelf.value = remoteShelf.value.map((book) =>
+    book.id === entry.id ? { ...book, title: nextTitle } : book,
+  );
+  status.value = "书源书籍名称已更新";
+}
+
+function removeRemoteShelfEntry(entry: RemoteShelfEntry) {
+  if (!window.confirm("确定从书架移除这本书源书籍吗？")) return;
+  remoteShelf.value = remoteShelf.value.filter((book) => book.id !== entry.id);
+  shelfMenuTarget.value = null;
+  status.value = "已从书架移除书源书籍";
+}
+
+function startShelfLongPress(kind: "local" | "remote", id: string) {
+  if (shelfLongPressTimer) clearTimeout(shelfLongPressTimer);
+  shelfLongPressTimer = setTimeout(() => {
+    shelfMenuTarget.value = { kind, id };
+    shelfLongPressTimer = null;
+  }, 520);
+}
+
+function cancelShelfLongPress() {
+  if (!shelfLongPressTimer) return;
+  clearTimeout(shelfLongPressTimer);
+  shelfLongPressTimer = null;
+}
+
+function openShelfMenu(kind: "local" | "remote", id: string) {
+  cancelShelfLongPress();
+  shelfMenuTarget.value = { kind, id };
+}
+
+function closeShelfMenu() {
+  shelfMenuTarget.value = null;
+}
+
+function sortShelfFromMenu() {
+  librarySort.value = "custom_order";
+  librarySortDescending.value = false;
+  closeShelfMenu();
+  status.value = "已切换到自定义书架排序";
+}
+
+function handleLocalShelfClick(book: BookSummary) {
+  if (shelfMenuTarget.value) {
+    closeShelfMenu();
+    return;
+  }
+  continueReading(book);
+}
+
+function handleRemoteShelfClick(book: RemoteShelfEntry) {
+  if (shelfMenuTarget.value) {
+    closeShelfMenu();
+    return;
+  }
+  openRemoteShelfEntry(book);
+}
+
+async function renameLocalBook(book: BookSummary) {
+  const nextTitle = window.prompt("重命名本地书籍", book.title)?.trim();
+  if (!nextTitle || nextTitle === book.title) return;
+  try {
+    await invoke<BookSummary>("rename_book", { bookId: book.id, title: nextTitle });
+    await loadBooks();
+    status.value = "本地书籍名称已更新";
+  } catch (error) {
+    errorMessage.value = "重命名失败：" + String(error);
+  }
+  closeShelfMenu();
+}
+
+async function deleteLocalBook(book: BookSummary) {
+  if (!window.confirm("删除后会同时移除本书的章节和阅读进度，确定继续吗？")) return;
+  try {
+    await invoke("delete_book", { bookId: book.id });
+    selectedBookIds.value = selectedBookIds.value.filter((id) => id !== book.id);
+    await loadBooks();
+    status.value = "本地书籍已删除";
+  } catch (error) {
+    errorMessage.value = "删除书籍失败：" + String(error);
+  }
+  closeShelfMenu();
 }
 
 async function openSources() {
@@ -1800,6 +2027,7 @@ async function dropSourceDrag(targetId: string) {
 }
 
 async function searchSources() {
+  searchInlineMessage.value = "";
   const keyword = searchKeyword.value.trim();
   if (!keyword || searchBusy.value || retryingSourceId.value) return;
 
@@ -1911,6 +2139,7 @@ async function cancelSearch() {
 function clearSearch() {
   searchResult.value = null;
   searchKeyword.value = "";
+  searchInlineMessage.value = "";
 }
 
 async function finishSourceImport(result: SourceImportResult, label: string) {
@@ -2073,15 +2302,21 @@ async function importSourceFile(event: Event) {
 
 async function openRemoteBook(item: UnifiedSearchItem) {
   const bookUrl = item.book_url?.trim();
+  view.value = "search";
   if (!bookUrl) {
-    sourceTransferMessage.value = "该结果没有可用的书籍链接";
+    searchInlineMessage.value = "这个结果没有可用的书籍链接，无法打开。请重试该书源或选择其他结果。";
+    errorMessage.value = "";
     return;
   }
-  if (remoteBusy.value) return;
+  if (remoteBusy.value) {
+    searchInlineMessage.value = "正在打开上一条书籍，请稍候…";
+    return;
+  }
 
   const operationId = "remote-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   remoteOperationId.value = operationId;
   remoteBusy.value = true;
+  searchInlineMessage.value = "正在读取书籍详情和目录…";
   errorMessage.value = "";
   remoteBook.value = null;
   remoteChapter.value = null;
@@ -2096,9 +2331,10 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     });
     const firstChapter = loaded.chapters[0];
     if (!firstChapter) {
-      throw new Error("书源未返回可阅读章节");
+      throw new Error("书源未返回可阅读章节，请重试该书源或检查规则");
     }
 
+    searchInlineMessage.value = "目录已找到，正在加载第一章…";
     const firstContent = await invoke<RemoteChapterContent>("fetch_source_chapter", {
       sourceId: loaded.source_id,
       chapter: firstChapter,
@@ -2109,18 +2345,25 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     remoteBook.value = loaded;
     remoteChapterRef.value = firstChapter;
     remoteChapter.value = firstContent;
-    searchResult.value = null;
+    const shelfId = remoteShelfId(item);
+    if (remoteShelf.value.some((book) => book.id === shelfId) && loaded.book_info.cover_url) {
+      remoteShelf.value = remoteShelf.value.map((book) =>
+        book.id === shelfId ? { ...book, cover_url: loaded.book_info.cover_url } : book,
+      );
+    }
+    searchInlineMessage.value = "";
     view.value = "reader";
   } catch (error) {
     const message = String(error);
-    if (message.includes("已取消")) {
-      sourceTransferMessage.value = "远端打开已取消";
-    } else {
-      errorMessage.value = message;
-    }
+    const displayMessage = message.includes("已取消")
+      ? "远端打开已取消"
+      : "打开失败：" + message;
+    searchInlineMessage.value = displayMessage;
+    errorMessage.value = "";
     remoteBook.value = null;
     remoteChapter.value = null;
     remoteChapterRef.value = null;
+    view.value = "search";
   } finally {
     if (remoteOperationId.value === operationId) {
       remoteOperationId.value = null;
@@ -2960,6 +3203,22 @@ function imageSequenceHealthClass(book: BookSummary) {
       : "missing";
 }
 
+function coverSource(path: string | null) {
+  const value = path?.trim();
+  if (!value) return "";
+  if (/^(https?:|data:|asset:|blob:)/i.test(value)) return value;
+  try {
+    return convertFileSrc(value);
+  } catch {
+    return value;
+  }
+}
+
+function hideBrokenCover(event: Event) {
+  const target = event.currentTarget;
+  if (target instanceof HTMLImageElement) target.style.display = "none";
+}
+
 function coverStateLabel(book: BookSummary) {
   if (!book.cover_state || book.cover_state === "ready") return "";
   if (book.cover_state === "stale") return "封面待刷新";
@@ -3568,7 +3827,7 @@ function continueReading(book: BookSummary) {
 }
 
 function closeReader() {
-  view.value = "library";
+  view.value = searchResult.value ? "search" : "library";
   detail.value = null;
   chapter.value = null;
   remoteBook.value = null;
@@ -3641,6 +3900,11 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <span class="nav-label">书架</span>
           <span class="nav-meta">LIBRARY</span>
         </button>
+        <button class="nav-item" :class="{ active: view === 'search' }" type="button" @click="openSearch">
+          <span class="nav-icon" aria-hidden="true">⌕</span>
+          <span class="nav-label">搜索</span>
+          <span class="nav-meta">SEARCH</span>
+        </button>
         <button class="nav-item" :class="{ active: view === 'sources' }" type="button" @click="openSources">
           <span class="nav-icon" aria-hidden="true">◇</span>
           <span class="nav-label">书源</span>
@@ -3675,25 +3939,12 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
           <h1>书架</h1>
         </div>
         <div class="library-actions">
-          <input
-            v-model="searchKeyword"
-            class="library-search-input"
-            aria-label="搜索书源中的书"
-            placeholder="搜索书源中的书"
-            @keyup.enter="searchSources"
-          />
-          <label class="search-page-limit">
-            <span>页数</span>
-            <input v-model.number="searchPageLimit" type="number" min="1" max="20" aria-label="搜索页数上限" />
-          </label>
-          <button class="secondary-button" type="button" :disabled="searchBusy || !searchKeyword.trim()" @click="searchSources">
-            {{ searchBusy ? "搜索中…" : "搜索书源" }}
-          </button>
-          <button v-if="searchBusy" class="secondary-button" type="button" @click="cancelSearch">
-            取消搜索
+          <button class="secondary-button" type="button" @click="openSearch">
+            <span aria-hidden="true">⌕</span>
+            去搜索书源
           </button>
           <button class="import-button" type="button" :disabled="isImporting" @click="openFilePicker">
-            {{ isImporting ? "解析中…" : "导入 TXT / EPUB / 图片" }}
+            {{ isImporting ? "解析中…" : "导入本地书籍" }}
           </button>
         </div>
       </header>
@@ -4214,143 +4465,290 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         @sources="openSources"
       />
 
-      <section
-        v-if="searchResult"
-        class="search-results-panel online-search-section"
-        aria-live="polite"
-        aria-labelledby="online-search-heading"
-      >
-        <div class="search-results-heading">
-          <div>
-            <span class="eyebrow">MULTI-SOURCE SEARCH</span>
-            <h2 id="online-search-heading">在线搜索结果</h2>
-          </div>
-          <button class="source-link-button" type="button" @click="clearSearch">清除</button>
-        </div>
-        <p class="search-results-context">
-          当前关键词：{{ searchKeyword }}
-        </p>
-        <p v-if="!searchResult.results.length" class="search-results-empty">没有找到匹配书籍。</p>
-        <div v-else class="search-results-list">
-          <button
-            v-for="item in searchResult.results"
-            :key="item.source_id + '-' + item.title + '-' + (item.author || '')"
-            class="search-result-row"
-            :class="{ clickable: Boolean(item.book_url), loading: remoteBusy && Boolean(item.book_url) }"
-            :disabled="!item.book_url || remoteBusy"
-            type="button"
-            :aria-label="item.book_url ? '打开 ' + (item.title || '未命名书籍') : (item.title || '未命名书籍') + ' 没有可用链接'"
-            @click="openRemoteBook(item)"
-          >
-            <span class="search-result-copy">
-              <strong>{{ item.title || "未命名书籍" }}</strong>
-              <span>{{ item.author || "作者未知" }}</span>
-            </span>
-            <span class="search-result-actions">
-              <span class="search-source-badge">{{ item.source_name }}</span>
-              <span class="search-open-label">{{ item.book_url ? (remoteBusy ? "加载中…" : "打开") : "无链接" }}</span>
-            </span>
-          </button>
-        </div>
-        <div v-if="searchResult.failures.length" class="search-failures">
-          <strong>部分书源暂不可用</strong>
-          <div v-for="failure in searchResult.failures" :key="failure.source_id" class="search-failure-row">
-            <p>{{ failure.source_name }}</p>
-            <button
-              class="source-link-button"
-              type="button"
-              :disabled="searchBusy || Boolean(retryingSourceId)"
-              @click="retrySourceSearch(failure.source_id)"
-            >
-              {{ retryingSourceId === failure.source_id ? "重试中…" : "重试此源" }}
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="local-shelf-section" aria-labelledby="local-shelf-heading">
+      <section class="shelf-section" aria-labelledby="local-shelf-heading">
         <div class="library-section-heading">
           <div>
-            <span class="eyebrow">LOCAL SHELF</span>
-            <h2 id="local-shelf-heading">本地书架</h2>
+            <span class="eyebrow">YOUR DESK</span>
+            <h2 id="local-shelf-heading">我的书架</h2>
+            <p class="section-subtitle">本地书籍与已加入书架的书源书籍分开管理，点击封面继续阅读。</p>
           </div>
-          <span class="library-section-caption">{{ books.length }} 本已保存到本机</span>
+          <span class="library-section-caption">{{ books.length + visibleRemoteShelf.length }} 本 · {{ remoteShelf.length }} 本书源书籍</span>
         </div>
-      <section v-if="books.length" class="library-grid" aria-label="本地书架">
-        <article
-          v-for="book in books"
-          :key="book.id"
-          class="book-card"
-          :class="{ selected: selectedBookIds.includes(book.id) }"
-          tabindex="0"
-          @click="continueReading(book)"
-          @keydown.enter="continueReading(book)"
-        >
-          <label class="book-select-control" @click.stop>
-            <input
-              type="checkbox"
-              :checked="selectedBookIds.includes(book.id)"
-              :aria-label="'选择 ' + book.title"
-              @change="toggleBookSelection(book.id)"
-            />
-            <span>选择</span>
-          </label>
-          <div class="book-cover" :class="`format-${book.format}`">
-            <span>{{ book.format.toUpperCase() }}</span>
-            <small
-              v-if="coverStateLabel(book)"
-              class="book-cover-status"
-              :class="coverStateClass(book)"
-            >{{ coverStateLabel(book) }}</small>
-          </div>
-          <div class="book-card-body">
-            <span class="book-format">{{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }}</span>
-            <h2>{{ book.title }}</h2>
-            <p>{{ book.author || "本地导入" }}</p>
-            <div v-if="book.shelf_group || book.tags.length" class="book-metadata-chips" aria-label="书籍分组和标签">
-              <span v-if="book.shelf_group" class="book-metadata-chip">{{ book.shelf_group }}</span>
-              <span v-for="tag in book.tags.slice(0, 4)" :key="tag" class="book-metadata-chip tag">{{ tag }}</span>
-            </div>
-            <span
-              v-if="imageSequenceHealthLabel(book)"
-              class="book-health-badge"
-              :class="imageSequenceHealthClass(book)"
-            >{{ imageSequenceHealthLabel(book) }}</span>
-            <div class="progress-track"><span :style="{ width: `${book.progress * 100}%` }"></span></div>
-            <button class="text-button book-edit-button" type="button" @click.stop="beginBookMetadataEdit(book)">编辑分组和标签</button>
-            <div v-if="editingBookId === book.id" class="book-metadata-editor" @click.stop>
-              <label>
-                <span>分组</span>
-                <input v-model="metadataGroupDraft" type="text" maxlength="128" placeholder="例如：待读 / 收藏" />
-              </label>
-              <label>
-                <span>标签</span>
-                <input v-model="metadataTagsDraft" type="text" placeholder="用逗号分隔多个标签" />
-              </label>
-              <label>
-                <span>顺序</span>
-                <input v-model="metadataOrderDraft" type="number" step="1" />
-              </label>
-              <div class="book-metadata-editor-actions">
-                <button class="secondary-button" type="button" :disabled="metadataBusy" @click="saveBookMetadata(book)">
-                  {{ metadataBusy ? "保存中…" : "保存" }}
-                </button>
-                <button class="text-button" type="button" :disabled="metadataBusy" @click="cancelBookMetadataEdit">取消</button>
-              </div>
-            </div>
-          </div>
-        </article>
-      </section>
 
-      <section v-else class="empty-state">
-        <div class="empty-icon">✦</div>
-        <h3>书架还是空的</h3>
-        <p>导入一本 TXT 或 EPUB，马上开始离线阅读。文件内容只会保存在本机。</p>
-        <button class="text-button" type="button" @click="openFilePicker">选择本地书籍 →</button>
-      </section>
+        <div v-if="books.length" class="shelf-subsection">
+          <div class="shelf-subsection-heading">
+            <div>
+              <span class="eyebrow">LOCAL BOOKS</span>
+              <h3>本地书籍</h3>
+            </div>
+            <button class="text-button" type="button" @click="openFilePicker">＋ 添加书籍</button>
+          </div>
+          <div class="shelf-grid" aria-label="本地书架">
+            <article
+              v-for="book in books"
+              :key="book.id"
+              class="shelf-card"
+              :class="{ selected: selectedBookIds.includes(book.id) }"
+              tabindex="0"
+              @click="handleLocalShelfClick(book)"
+              @keydown.enter="handleLocalShelfClick(book)"
+            >
+              <div
+                class="shelf-cover-wrap"
+                @pointerdown="startShelfLongPress('local', book.id)"
+                @pointerup="cancelShelfLongPress"
+                @pointerleave="cancelShelfLongPress"
+                @contextmenu.prevent="openShelfMenu('local', book.id)"
+              >
+                <div class="shelf-cover" :class="`format-${book.format}`">
+                  <img
+                    v-if="book.cover_path"
+                    :src="coverSource(book.cover_path)"
+                    :alt="book.title + ' 封面'"
+                    @error="hideBrokenCover"
+                  />
+                  <span class="shelf-cover-fallback">{{ book.format.toUpperCase() }}</span>
+                  <small
+                    v-if="coverStateLabel(book)"
+                    class="book-cover-status"
+                    :class="coverStateClass(book)"
+                  >{{ coverStateLabel(book) }}</small>
+                </div>
+                <button
+                  class="shelf-more-button"
+                  type="button"
+                  aria-label="打开书籍操作菜单"
+                  @click.stop="openShelfMenu('local', book.id)"
+                >⋯</button>
+              </div>
+              <label class="book-select-control shelf-select-control" @click.stop>
+                <input
+                  type="checkbox"
+                  :checked="selectedBookIds.includes(book.id)"
+                  :aria-label="'选择 ' + book.title"
+                  @change="toggleBookSelection(book.id)"
+                />
+                <span>选择</span>
+              </label>
+              <div class="shelf-card-body">
+                <span class="book-format">{{ book.chapter_count }} 章 · {{ formatProgress(book.progress) }}</span>
+                <h3>{{ book.title }}</h3>
+                <p>{{ book.author || "本地导入" }}</p>
+                <div v-if="book.shelf_group || book.tags.length" class="book-metadata-chips" aria-label="书籍分组和标签">
+                  <span v-if="book.shelf_group" class="book-metadata-chip">{{ book.shelf_group }}</span>
+                  <span v-for="tag in book.tags.slice(0, 3)" :key="tag" class="book-metadata-chip tag">{{ tag }}</span>
+                </div>
+                <span
+                  v-if="imageSequenceHealthLabel(book)"
+                  class="book-health-badge"
+                  :class="imageSequenceHealthClass(book)"
+                >{{ imageSequenceHealthLabel(book) }}</span>
+                <div class="progress-track"><span :style="{ width: `${book.progress * 100}%` }"></span></div>
+                <button class="text-button book-edit-button" type="button" @click.stop="beginBookMetadataEdit(book)">编辑分组和标签</button>
+                <div v-if="editingBookId === book.id" class="book-metadata-editor" @click.stop>
+                  <label>
+                    <span>分组</span>
+                    <input v-model="metadataGroupDraft" type="text" maxlength="128" placeholder="例如：待读 / 收藏" />
+                  </label>
+                  <label>
+                    <span>标签</span>
+                    <input v-model="metadataTagsDraft" type="text" placeholder="用逗号分隔多个标签" />
+                  </label>
+                  <label>
+                    <span>顺序</span>
+                    <input v-model="metadataOrderDraft" type="number" step="1" />
+                  </label>
+                  <div class="book-metadata-editor-actions">
+                    <button class="secondary-button" type="button" :disabled="metadataBusy" @click="saveBookMetadata(book)">
+                      {{ metadataBusy ? "保存中…" : "保存" }}
+                    </button>
+                    <button class="text-button" type="button" :disabled="metadataBusy" @click="cancelBookMetadataEdit">取消</button>
+                  </div>
+                </div>
+                <div
+                  v-if="shelfMenuTarget?.kind === 'local' && shelfMenuTarget.id === book.id"
+                  class="shelf-card-menu"
+                  @click.stop
+                >
+                  <span>书籍操作</span>
+                  <button type="button" @click="sortShelfFromMenu">按自定义顺序</button>
+                  <button type="button" @click="renameLocalBook(book)">重命名</button>
+                  <button type="button" class="danger-text" @click="deleteLocalBook(book)">删除</button>
+                  <button type="button" class="text-button" @click="closeShelfMenu">关闭</button>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div v-if="visibleRemoteShelf.length" class="shelf-subsection remote-shelf-subsection">
+          <div class="shelf-subsection-heading">
+            <div>
+              <span class="eyebrow">SOURCE BOOKS</span>
+              <h3>书源书籍</h3>
+            </div>
+            <span class="section-subtitle">只保存书源链接和阅读入口，打开时按需更新内容</span>
+          </div>
+          <div class="shelf-grid" aria-label="书源书架">
+            <article
+              v-for="entry in visibleRemoteShelf"
+              :key="entry.id"
+              class="shelf-card remote-shelf-card"
+              tabindex="0"
+              @click="handleRemoteShelfClick(entry)"
+              @keydown.enter="handleRemoteShelfClick(entry)"
+            >
+              <div
+                class="shelf-cover-wrap"
+                @pointerdown="startShelfLongPress('remote', entry.id)"
+                @pointerup="cancelShelfLongPress"
+                @pointerleave="cancelShelfLongPress"
+                @contextmenu.prevent="openShelfMenu('remote', entry.id)"
+              >
+                <div class="shelf-cover remote-cover">
+                  <img v-if="entry.cover_url" :src="entry.cover_url" :alt="entry.title + ' 封面'" />
+                  <span v-else class="shelf-cover-fallback">SOURCE</span>
+                </div>
+                <button
+                  class="shelf-more-button"
+                  type="button"
+                  aria-label="打开书源书籍操作菜单"
+                  @click.stop="openShelfMenu('remote', entry.id)"
+                >⋯</button>
+              </div>
+              <div class="shelf-card-body">
+                <span class="book-format">{{ entry.source_name }}</span>
+                <h3>{{ entry.title }}</h3>
+                <p>{{ entry.author || "作者未知" }}</p>
+                <span class="shelf-entry-hint">点击打开书籍 · 长按更多操作</span>
+                <div
+                  v-if="shelfMenuTarget?.kind === 'remote' && shelfMenuTarget.id === entry.id"
+                  class="shelf-card-menu"
+                  @click.stop
+                >
+                  <span>书籍操作</span>
+                  <button type="button" @click="sortShelfFromMenu">按加入时间排序</button>
+                  <button type="button" @click="renameRemoteShelfEntry(entry); closeShelfMenu()">重命名</button>
+                  <button type="button" class="danger-text" @click="removeRemoteShelfEntry(entry)">移出书架</button>
+                  <button type="button" class="text-button" @click="closeShelfMenu">关闭</button>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <div v-if="!books.length && !visibleRemoteShelf.length" class="empty-state shelf-empty-state">
+          <div class="empty-icon">✦</div>
+          <h3>书架还是空的</h3>
+          <p>导入本地书籍，或在“搜索”中把喜欢的书源结果加入书架。</p>
+          <div class="empty-state-actions">
+            <button class="import-button" type="button" @click="openFilePicker">导入本地书籍</button>
+            <button class="text-button" type="button" @click="openSearch">搜索书源 →</button>
+          </div>
+        </div>
       </section>
     </section>
 
+    <section v-else-if="view === 'search'" class="content search-content" id="search">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">MULTI-SOURCE SEARCH</span>
+          <h1>搜索</h1>
+          <p class="section-subtitle">在已启用书源中查找书籍；点击整行打开，加入书架后可随时回来。</p>
+        </div>
+        <div class="library-actions">
+          <label class="search-page-limit">
+            <span>页数</span>
+            <input v-model.number="searchPageLimit" type="number" min="1" max="20" aria-label="搜索页数上限" />
+          </label>
+          <button class="secondary-button" type="button" :disabled="searchBusy || !searchKeyword.trim()" @click="searchSources">
+            {{ searchBusy ? "搜索中…" : "开始搜索" }}
+          </button>
+          <button v-if="searchBusy" class="secondary-button" type="button" @click="cancelSearch">取消搜索</button>
+        </div>
+      </header>
+      <div class="search-workspace">
+        <div class="search-input-row">
+          <input
+            v-model="searchKeyword"
+            class="search-workspace-input"
+            aria-label="搜索书名、作者"
+            placeholder="输入书名或作者，例如：诡秘之主"
+            @keyup.enter="searchSources"
+          />
+          <button class="import-button" type="button" :disabled="searchBusy || !searchKeyword.trim()" @click="searchSources">
+            {{ searchBusy ? "搜索中…" : "搜索书源" }}
+          </button>
+          <button v-if="searchResult" class="text-button" type="button" @click="clearSearch">清除结果</button>
+        </div>
+        <p v-if="searchBusy" class="search-inline-status" role="status">正在扫描已启用书源…</p>
+        <p v-if="searchInlineMessage" class="search-inline-status search-inline-error" role="alert">{{ searchInlineMessage }}</p>
+        <p v-else-if="errorMessage" class="search-inline-status search-inline-error" role="alert">{{ errorMessage }}</p>
+        <section v-if="searchResult" class="search-results-panel" aria-live="polite" aria-labelledby="online-search-heading">
+          <div class="search-results-heading">
+            <div>
+              <span class="eyebrow">RESULTS</span>
+              <h2 id="online-search-heading">在线搜索结果</h2>
+            </div>
+            <span class="library-section-caption">{{ searchResult.results.length }} 条结果</span>
+          </div>
+          <p class="search-results-context">当前关键词：{{ searchKeyword }}</p>
+          <p v-if="!searchResult.results.length" class="search-results-empty">没有找到匹配书籍。</p>
+          <div v-else class="search-results-list">
+            <article
+              v-for="item in searchResult.results"
+              :key="item.source_id + '-' + item.title + '-' + (item.author || '')"
+              class="search-result-row"
+              :class="{ clickable: Boolean(item.book_url), loading: remoteBusy && Boolean(item.book_url), unavailable: !item.book_url }"
+              :aria-label="item.book_url ? '打开 ' + (item.title || '未命名书籍') : (item.title || '未命名书籍') + ' 没有可用链接'"
+              :tabindex="item.book_url && !remoteBusy ? 0 : -1"
+              role="button"
+              @click="openRemoteBook(item)"
+              @keydown.enter.prevent="openRemoteBook(item)"
+            >
+              <span class="search-result-copy">
+                <strong>{{ item.title || "未命名书籍" }}</strong>
+                <span>{{ item.author || "作者未知" }}</span>
+              </span>
+              <span class="search-result-actions">
+                <span class="search-source-badge">{{ item.source_name }}</span>
+                <button
+                  class="search-save-button"
+                  type="button"
+                  :disabled="!item.book_url"
+                  @click.stop="toggleRemoteShelf(item)"
+                >{{ isRemoteShelfSaved(item) ? "已在书架" : "加入书架" }}</button>
+                <button
+                  class="search-open-button"
+                  type="button"
+                  :disabled="!item.book_url || remoteBusy"
+                  @click.stop="openRemoteBook(item)"
+                >{{ item.book_url ? (remoteBusy ? "加载中…" : "打开") : "无链接" }}</button>
+              </span>
+            </article>
+          </div>
+          <div v-if="searchResult.failures.length" class="search-failures">
+            <strong>部分书源暂不可用</strong>
+            <div v-for="failure in searchResult.failures" :key="failure.source_id" class="search-failure-row">
+              <p>{{ failure.source_name }}</p>
+              <button
+                class="source-link-button"
+                type="button"
+                :disabled="searchBusy || Boolean(retryingSourceId)"
+                @click="retrySourceSearch(failure.source_id)"
+              >
+                {{ retryingSourceId === failure.source_id ? "重试中…" : "重试此源" }}
+              </button>
+            </div>
+          </div>
+        </section>
+        <section v-else class="search-empty-panel">
+          <div class="empty-icon">⌕</div>
+          <h2>从书名开始</h2>
+          <p>搜索结果会只出现在这个工作区，不会混进书架。</p>
+        </section>
+      </div>
+    </section>
 
     <SourceView v-else-if="view === 'sources'" />
 
@@ -7300,6 +7698,445 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   .import-button:hover:not(:disabled),
   .book-card:hover {
     transform: none;
+  }
+}
+
+
+/* Search workspace and desk shelf */
+.search-content,
+#library {
+  min-width: 0;
+}
+
+.search-content .topbar,
+#library .topbar {
+  align-items: flex-start;
+}
+
+.search-workspace {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(211, 224, 241, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(23, 42, 64, 0.86), rgba(10, 20, 34, 0.9));
+  box-shadow: 0 18px 42px rgba(1, 8, 18, 0.2);
+}
+
+.search-workspace-input {
+  min-width: 0;
+  flex: 1;
+  min-height: 42px;
+  border: 1px solid rgba(211, 224, 241, 0.16);
+  border-radius: 12px;
+  padding: 0 14px;
+  color: var(--text);
+  background: rgba(4, 13, 24, 0.58);
+}
+
+.search-inline-status {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  color: var(--mint);
+  background: rgba(134, 223, 194, 0.08);
+}
+
+.search-inline-error {
+  color: #ffd2d9;
+  border: 1px solid rgba(242, 154, 170, 0.3);
+  background: rgba(242, 154, 170, 0.08);
+}
+
+.search-results-panel {
+  margin-top: 0;
+}
+
+.search-result-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  min-height: 78px;
+  padding: 15px 16px;
+  border: 1px solid rgba(211, 224, 241, 0.12);
+  border-radius: 16px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: rgba(13, 27, 44, 0.72);
+  transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+
+.search-result-row:hover,
+.search-result-row:focus-visible {
+  border-color: rgba(134, 223, 194, 0.52);
+  background: rgba(24, 47, 67, 0.9);
+  box-shadow: 0 14px 28px rgba(1, 8, 18, 0.2);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.search-result-row.loading {
+  cursor: progress;
+  opacity: .78;
+}
+
+.search-result-row.unavailable {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+.search-result-copy {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.search-result-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-copy span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.search-open-button,
+.search-save-button {
+  min-height: 32px;
+  border: 1px solid rgba(211, 224, 241, 0.16);
+  border-radius: 9px;
+  padding: 0 10px;
+  color: var(--text-soft);
+  background: rgba(211, 224, 241, 0.06);
+  cursor: pointer;
+}
+
+.search-open-button {
+  border-color: rgba(134, 223, 194, 0.38);
+  color: var(--mint);
+  background: rgba(134, 223, 194, 0.08);
+}
+
+.search-open-button:hover:not(:disabled),
+.search-save-button:hover:not(:disabled) {
+  border-color: var(--gold);
+  color: var(--gold-soft);
+}
+
+.search-open-button:disabled,
+.search-save-button:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+}
+
+.shelf-section {
+  margin-top: 24px;
+}
+
+.shelf-subsection {
+  margin-top: 18px;
+}
+
+.shelf-subsection-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.shelf-subsection-heading h3 {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Microsoft YaHei", serif;
+  font-size: 19px;
+}
+
+.shelf-subsection-heading .section-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.shelf-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.shelf-card {
+  position: relative;
+  min-width: 0;
+  overflow: visible;
+  border: 1px solid rgba(211, 224, 241, 0.12);
+  border-radius: 18px;
+  padding: 10px;
+  color: inherit;
+  background: linear-gradient(145deg, rgba(23, 42, 64, 0.94), rgba(8, 19, 32, 0.92));
+  box-shadow: 0 16px 30px rgba(1, 8, 18, 0.2);
+  cursor: pointer;
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+}
+
+.shelf-card::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: -6px;
+  left: 10px;
+  height: 5px;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(90deg, rgba(232, 182, 111, .56), rgba(134, 223, 194, .32));
+  opacity: .7;
+}
+
+.shelf-card:hover,
+.shelf-card:focus-visible,
+.shelf-card.selected {
+  border-color: rgba(232, 182, 111, 0.52);
+  box-shadow: 0 22px 38px rgba(1, 8, 18, 0.3);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+.shelf-cover-wrap {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.shelf-cover {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(232, 182, 111, 0.28);
+  border-radius: 12px;
+  color: var(--gold-soft);
+  background:
+    radial-gradient(circle at 20% 15%, rgba(232, 182, 111, .24), transparent 45%),
+    linear-gradient(145deg, rgba(134, 223, 194, .16), rgba(23, 42, 64, .92));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .04);
+}
+
+.shelf-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.shelf-cover-fallback {
+  position: absolute;
+  inset: auto 10px 12px;
+  overflow: hidden;
+  color: rgba(255, 240, 221, .8);
+  font-family: "Noto Serif CJK SC", serif;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-cover {
+  background:
+    radial-gradient(circle at 80% 10%, rgba(134, 223, 194, .28), transparent 38%),
+    linear-gradient(155deg, rgba(46, 68, 93, .92), rgba(11, 22, 37, .94));
+}
+
+.shelf-more-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 9px;
+  color: var(--text);
+  background: rgba(5, 13, 23, .76);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity .16s ease, border-color .16s ease;
+}
+
+.shelf-card:hover .shelf-more-button,
+.shelf-card:focus-within .shelf-more-button,
+.shelf-more-button:focus-visible {
+  opacity: 1;
+}
+
+.shelf-more-button:hover {
+  border-color: var(--gold);
+  color: var(--gold-soft);
+}
+
+.shelf-select-control {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity .16s ease;
+}
+
+.shelf-card:hover .shelf-select-control,
+.shelf-card:focus-within .shelf-select-control,
+.shelf-card.selected .shelf-select-control {
+  opacity: 1;
+}
+
+.shelf-card-body {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px 3px 3px;
+}
+
+.shelf-card-body h3 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text);
+  font-family: "Noto Serif CJK SC", "Microsoft YaHei", serif;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-card-body p {
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-entry-hint {
+  color: var(--mint);
+  font-size: 11px;
+}
+
+.shelf-card-menu {
+  position: absolute;
+  z-index: 5;
+  right: 12px;
+  top: 52px;
+  display: grid;
+  gap: 4px;
+  min-width: 148px;
+  padding: 9px;
+  border: 1px solid rgba(232, 182, 111, .3);
+  border-radius: 12px;
+  background: rgba(8, 18, 30, .97);
+  box-shadow: 0 18px 34px rgba(1, 8, 18, .38);
+}
+
+.shelf-card-menu span {
+  padding: 3px 6px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.shelf-card-menu button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 8px;
+  color: var(--text-soft);
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.shelf-card-menu button:hover {
+  color: var(--gold-soft);
+  background: rgba(232, 182, 111, .1);
+}
+
+.shelf-card-menu .danger-text {
+  color: #ffb7c1;
+}
+
+.shelf-empty-state {
+  margin-top: 18px;
+}
+
+.empty-state-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1120px) {
+  .shelf-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .shelf-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .search-input-row,
+  .search-result-row {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-input-row {
+    display: flex;
+  }
+
+  .search-result-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 540px) {
+  .shelf-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .shelf-more-button,
+  .shelf-select-control {
+    opacity: 1;
   }
 }
 
