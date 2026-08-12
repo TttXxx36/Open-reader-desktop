@@ -1288,6 +1288,10 @@ fn normalize_headers(value: &Value) -> Result<Value, String> {
             if text.is_empty() {
                 return Ok(Value::Object(Map::new()));
             }
+            let lowered = text.to_ascii_lowercase();
+            if lowered.starts_with("@js") || lowered.contains("json.stringify") {
+                return Err("headers 包含未实现的脚本表达式".to_string());
+            }
             if let Ok(parsed) = serde_json::from_str::<Value>(text) {
                 if parsed.is_object() {
                     return normalize_headers(&parsed);
