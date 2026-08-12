@@ -1,5 +1,8 @@
 # 开发环境
 
+> 维护状态（2026-08-12）：当前 main 提交 0e73968 已完成阅读工作区视觉刷新；CI run 31574147034、Windows release run 31574767135 和 installer smoke run 31575465554 均通过。自动化检查不替代目标 Windows 环境的升级、WebView2、离线错误、中文字体、窄窗口和键盘焦点验收。
+
+
 ## 必备环境
 
 - Windows 10 1809 或更高版本。
@@ -81,7 +84,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## M5.2 配置迁移与章节刷新
 
-- 书源页的“导出 JSON”会生成版本为 1 的书源包，包含书源 ID、启用状态和原始配置 JSON；“导入 JSON”只接受不超过 2 MB 且通过现有书源校验的配置。
+- 书源页的“导出 JSON”会生成版本为 1 的书源包，包含书源 ID、启用状态和原始配置 JSON；本地 JSON、对象/数组 bundle 和在线 URL 响应体统一接受不超过 16 MiB 的配置。
+- 在线 URL 拉取超时为 30 秒，URL 本身限制为 2 KiB；超过 16 MiB 时明确提示并拒绝，不取消结构校验、规则安全闸门或敏感请求头拒绝。
 - 导入会按书源 ID 更新已有配置，并恢复启用/停用状态；Authorization、Cookie 和 Proxy-Authorization 等敏感请求头仍会被拒绝。
 - 远程阅读页的“刷新内容”会同时强制刷新详情、目录和当前章节，绕过 TTL 缓存并写回新的缓存条目；普通打开和章节切换仍优先使用缓存。
 - 导入/导出只迁移书源配置，不迁移远程正文缓存；远程内容不会导入本地书架。
@@ -105,8 +109,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 - 书源可填写 `permission` 权限记录；“安全审计”会检查权限状态、主机范围、敏感请求头和结构错误。
 - “缓存状态”只显示条目数、字节数、过期条目数与容量上限，不展示缓存正文；应用启动和缓存写入后的淘汰会在 Rust stderr 记录实际删除数量。
-- Rust 网络客户端最多跟随 5 次重定向；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
-- Windows 图标已加入仓库，`bundle.active=true`；签名证书暂缓，GitHub Actions 发布的安装器和便携 ZIP 会明确标记为未签名，干净安装/升级/卸载环境仍需回归。
+- Rust 网络客户端最多跟随 5 次重定向；普通书源请求默认 15 秒/2 MiB 响应体，书源配置导入的本地 JSON/在线 URL 另受 16 MiB bundle 上限和 30 秒拉取超时约束；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
+- Windows 图标已加入仓库，`bundle.active=true`；签名证书暂缓，GitHub Actions 发布的安装器和便携 ZIP 会明确标记为未签名。自动化 smoke 已覆盖首次安装、启动、卸载和数据保留，覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口和键盘焦点仍需目标环境回归。
 - 当前可执行验收：`npm run typecheck`、`npm run build`、`npm run test:rust`、`cargo fmt --check --manifest-path src-tauri/Cargo.toml` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
 
 - 完整的安装包、签名和回滚验收项见 [Windows 发布验收清单](release-checklist.md)。
@@ -118,7 +122,14 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - CI 已运行非严格预检；GitHub Actions 的版本标签工作流会在严格预检后生成 NSIS/MSI 安装器、便携 ZIP 和 SHA-256 清单，并创建标记为 unsigned 的 Release。
 - `src-tauri/icons/icon.ico` 与 `icon.png` 是实际打包资产；签名仍暂缓，Windows SmartScreen 可能显示警告。
 
-- GitHub Actions 的 `Windows release` 支持手动触发和 `v*` 版本标签；严格预检通过后构建安装器与便携 ZIP，标签触发会自动创建未签名 GitHub Release，并生成 `release-sha256.txt`。
+- GitHub Actions 的 `Windows release` 支持手动触发和 `v*` 版本标签；严格预检通过后构建安装器与便携 ZIP，标签触发会自动创建未签名 GitHub Release，并生成 `release-sha256.txt`。当前 main 的 Windows release run [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 与 installer smoke run [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 已通过。
+
+## M6.6 视觉系统刷新
+
+- 当前 main 已统一导航、书架、书源工作区、阅读工具栏、阅读页面和设置面板的墨色/暖金视觉语言。
+- 设置页增加个性化引导，控件统一了边框、焦点、滑块、颜色选择和响应式窄窗口表现。
+- 本次只改变展示层和交互反馈，不改变书源解析、阅读进度、缓存或 SQLite 数据模型。
+- 前端 typecheck/build、UI contract、Rust checks、Windows release 和 installer smoke 已由 GitHub Actions 验证；目标 Windows 的键盘 Tab、高对比度和中文字体仍属于人工验收。
 
 ## 本地数据
 
@@ -129,4 +140,4 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - WebView2 缺失：安装 Microsoft Edge WebView2 Runtime 后重启应用。
 - Vite 端口被占用：释放 1420 端口，或调整 `vite.config.ts` 与 `tauri.conf.json` 中的端口配置。
 - 浏览器预览模式下，SQLite 和 Tauri 命令不可用是正常现象；请使用 `npm run tauri dev` 验证桌面桥接。
-- 如果导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB。
+- 如果本地书籍导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB；书源 JSON 或在线 URL 导入则检查 16 MiB bundle 上限、30 秒拉取超时和 URL 长度边界。

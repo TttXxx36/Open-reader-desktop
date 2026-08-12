@@ -1,5 +1,7 @@
 # 开发路线图
 
+> 维护复核（2026-08-12）：main 提交 [0e73968](https://github.com/TttXxx36/Open-reader-desktop/commit/0e73968ce14dea5e53f613c9df66d97f32316a72) 完成阅读工作区视觉刷新；CI [31574147034](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574147034)、Windows release [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 和 installer smoke [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 均通过。正式发布仍受目标 Windows 人工验收和签名暂缓约束。
+
 路线图按“可独立验收、可回滚、可持续兼容”的里程碑推进。每个里程碑都必须在 GitHub Issue、PR、自动化检查和变更记录中留下证据；“已实现”只表示代码与远程 CI 通过，不替代 Windows 安装包手工验收。
 
 ## 总体原则
@@ -14,7 +16,7 @@
 
 ### M0 — 范围与治理（已完成基础版）
 
-确定产品定位、贡献规范、安全报告方式、内容合法性和隐私边界；记录 Legado 3.0 兼容目标与“安全子集优先”原则。许可证、脚本运行时和同步范围仍是治理决策项。
+确定产品定位、贡献规范、安全报告方式、内容合法性和隐私边界；记录 Legado 3.0 兼容目标与“安全子集优先”原则。仓库根目录已有 MIT License，但 README、CONTRIBUTING、SECURITY 和兼容性矩阵的一致性仍由 M0 issue #1 跟踪；脚本运行时和同步范围仍是后续治理决策项。
 
 ### M1 — 工程骨架（已完成）
 
@@ -54,21 +56,25 @@
 
 这是发布闸门，不是后续代码开发的硬阻塞项：
 
-- 已在 `main` 上成功运行 Windows Release（run [31308312340](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31308312340)），安装版、便携版和 SHA-256 清单均来自提交 `4efd9b82b76f87e657d48d943bb15fbbea64d3e7`。
-- 已上传并核对产物 `open-reader-windows-main-4efd9b82b76f87e657d48d943bb15fbbea64d3e7`（artifact 9036716349），摘要为 `sha256:eb8be3edd3a2cbac23ab795d4ea3e1e4cbe81311e7a3c8502182cbbafc4a90e4`。
-- 已成功运行 Windows installer smoke（run [31308654635](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31308654635)），自动覆盖产物/校验和、便携版启动、NSIS 安装/启动/卸载/数据保留、MSI 安装/启动/卸载/数据保留。
-- 仍需在真实 Windows 用户环境手工补验：双版本原地升级、WebView2 缺失运行时提示、离线/网络错误交互、回滚/撤销策略，以及中文字体、窄窗口和键盘 Tab 焦点。
-- 生成并保存验收证据；签名方案在用户可提供证书前继续暂缓。
-- Actions workflow dispatch 权限已恢复并实测可用；本轮未在本地构建或安装。
+- main 上的 Windows release run [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 已完成严格预检、Tauri 安装器构建、便携 ZIP 打包和 SHA-256 清单生成。
+- installer smoke run [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 已通过产物校验、便携版启动、NSIS/MSI 安装/启动/卸载和数据保留检查。
+- 仍需在目标 Windows 环境手工补验：双版本原地升级、WebView2 缺失提示、离线/网络错误、回滚/撤回策略、中文字体、窄窗口、键盘 Tab 焦点、高对比度和书源导入体验。
+- 签名方案在用户可提供证书前继续暂缓；本轮及后续验证不在本地构建或安装。
 
-### M7 — 书源兼容性 v2（当前开发阶段）
+
+
+### M6.6 — 阅读工作区视觉系统（已完成）
+
+统一导航、书架、书源工作区、阅读工具栏、阅读页面和设置面板的墨色/暖金视觉语言；补充焦点状态、悬停反馈、响应式窄窗口和设置引导。只改变展示层，不改变解析、缓存、阅读进度或 SQLite 数据模型。
+
+### M7 — 书源兼容性 v2（核心代码已完成，兼容收尾与人工验收待完成）
 
 详细执行清单见 [M7 书源兼容性 v2 实施计划](m7-source-compatibility-plan.md)。 当前阶段缺口与后续顺序见 [2026-08-11 开发缺口审计](development-gap-audit-2026-08-11.md)。
 
 目标是“导入信息不丢、能力边界可见、执行行为可测试”，而不是立即复制全部 Android 行为。
 
 - **M7.0 元数据保真（本轮）**：映射并校验 bookSourceUrl、bookSourceGroup、bookSourceType、bookUrlPattern、exploreUrl、enabledExplore、customOrder、weight、bookSourceComment；文本书源以外类型明确拒绝。
-- **M7.1 书源管理基础（M7.1a/b/c/d 已完成）**：SQLite 已保存分组、类型、权重、发现开关、自定义顺序和备注；列表已支持按分组/自定义顺序/权重排序、分组筛选、多选、批量启停/发现开关/删除、同组拖拽与上下移动、批量分组/备注/权重编辑、导入新增/更新/无变化差异提示。M7.1c 已加入更新已有/跳过已有/全部新建冲突策略、导入前快照、快照恢复和失败时的 replace-all 原子事务；M7.1d 的批量元数据修改先完成全量预校验，再以单个 SQLite 事务写入，避免半批次更新。最新 CI run [31475264033](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475264033)、Windows Release [31475774771](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475774771) 和 installer smoke [31476524993](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31476524993) 均通过；快照保留/清理策略和真实 Windows 手工体验仍待补齐。
+- **M7.1 书源管理基础（M7.1a/b/c/d 已完成）**：SQLite 已保存分组、类型、权重、发现开关、自定义顺序和备注；列表已支持按分组/自定义顺序/权重排序、分组筛选、多选、批量启停/发现开关/删除、同组拖拽与上下移动、批量分组/备注/权重编辑、导入新增/更新/无变化差异提示。M7.1c 已加入更新已有/跳过已有/全部新建冲突策略、导入前快照、快照恢复和失败时的 replace-all 原子事务；M7.1d 的批量元数据修改先完成全量预校验，再以单个 SQLite 事务写入，避免半批次更新。M7.1d 的 CI、Windows Release 和 installer smoke 均已通过；当前统一验证基线为 CI [31574147034](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574147034)、Windows Release [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 和 installer smoke [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554)；快照保留/清理策略和真实 Windows 手工体验仍待补齐。
 - **M7.2 规则执行增强（核心、边界夹具、可取消链与首轮 UI 已完成）**：已接入 page/pageNum/pageIndex/page+1/page-1、keyword/key、bookUrl/bookId/chapterId 模板上下文；多页搜索最多 20 页并在空页/无新增结果时停止；调试面板展示脱敏变量快照。纯 next URL 策略闸门、累计配额、显式 opt-in 三页 HTTP 链和部分成功/环路/跨源/超时/超体积夹具已通过（run 30774860219，67 个 Rust 测试）；`fetch_source_chapter` 已接受可选 policy 并复用取消 token（run 30775360305）；设置页首轮追链开关、配额控件、同源限制、远端停止原因与缓存绕过已通过（run 31302166671），默认仍关闭；诊断导出已补充分页策略的安全配额、同源开关、停止原因和状态说明（run 31302984553），Windows Release 与 installer smoke 自动化验收已完成，下一步补充真实 Windows 环境手工验收。
 - **M7.3 XPath 评估（静态识别、离线 PoC、授权夹具与耗时指标预览已完成）**：导入预览在规则上下文中识别 `//`、`xpath:`、`xpath=`、`@xpath` 等表达式，最多保留 8 条、每条 512 字节并展示原始值、不执行原因、静态解析状态、步数和估算工作量；离线 PoC 只解析受限路径/谓词并统计合成 HTML 节点，首轮夹具覆盖 6 条受限语法和 6 条拒绝语法，明确拒绝函数、联合、轴、父节点和超限输入，不翻译为 CSS、不访问网络。授权合成夹具、解析耗时分布和边界/回归夹具已完成（70 个 Rust 测试，run 31307700513）；继续保持不执行真实网络。
 - **M7.4 JavaScript 评估闸门**：设计条件已记录在 [M7.4 JavaScript 评估安全闸门](m7-js-evaluation-gate.md)；许可证/供应链、独立隔离、资源配额、API 白名单、脱敏审计、逐源授权、回滚和 Windows 合成夹具全部通过前，不引入运行时，默认仍拒绝脚本。
@@ -98,6 +104,12 @@
 - 阅读历史时间线、章节统计、书签、笔记、划线和“已读/未读”状态。
 - 书籍元数据编辑、封面来源策略、最近阅读和继续阅读统一为可查询数据模型。
 - 设计搜索索引与迁移策略，避免把大型正文直接存入前端状态。
+
+## 2026-08-12 维护复核
+
+- 书源配置导入本地 JSON/在线 URL 统一使用 16 MiB bundle 上限，在线拉取超时 30 秒；普通书源请求仍维持 15 秒、2 MiB、最多 5 次重定向边界。
+- M7/M8/M9 文档中的“已实现”只表示代码与远程自动化通过；安装升级、WebView2、键盘/字体/窄窗口、书源导入和迁移仍需目标 Windows 记录。
+- 维护决策与 #1–#5 issue 状态见 [2026-08-12 维护审计](maintenance-audit-2026-08-12.md)。
 
 ### M10 — 备份、恢复与同步
 
@@ -129,6 +141,13 @@
 - **CI/发布**：前端 typecheck/build、UI 契约、Rust fmt/check/test、Windows 安装器 smoke、便携包和 SHA-256 都进入 GitHub Actions；本地不构建、不安装。
 
 ## 当前执行顺序
+
+1. **P0 目标 Windows 人工验收**：按模板记录安装器覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘 Tab、高对比度，以及本地 JSON/在线 URL 书源导入、16 MiB 边界、冲突策略和快照恢复。
+2. **M9.3.1-d2 迁移前收口**：在 P0 记录完成后冻结 0016 schema、预览二次校验、纯文本/无冲突范围、单事务回滚和旧库夹具；未经确认不执行迁移、物理删除或静默覆盖。
+3. **M7.1/M8 横向收尾**：补快照保留/清理、缺失资源提示、窄窗口/键盘可用性和兼容矩阵回归；继续明确拒绝 XPath、JavaScript、Cookie、Authorization 和音频执行。
+4. **M10 备份/恢复**：在 d2 可回滚边界稳定后，再实现版本化备份、导入预览、校验和、损坏恢复和冲突策略；WebDAV/RSS/OPDS/TTS 继续排在后续阶段。
+
+### 已完成历史（保留证据）
 
 1. M7.0 元数据保真（已完成，CI 通过）。
 2. M7.1a 书源管理基础切片（已完成，CI run 30755061447 通过）。
