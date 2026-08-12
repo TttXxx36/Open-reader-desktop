@@ -3,6 +3,7 @@ use crate::xpath_poc;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
+use url::Url;
 
 const MAX_RULE_CHAIN_LENGTH: usize = 8;
 const MAX_URL_CHAIN_LENGTH: usize = 8;
@@ -528,11 +529,22 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
 
     let name = required_text(object, &["name", "bookSourceName"], "name")?;
     let search_url = required_text(object, &["searchUrl", "search_url"], "searchUrl")?;
+    let source_base = first_value(object, &["sourceUrl", "bookSourceUrl", "source_url"])
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_url(value).ok());
+    let mut legacy_urls = Map::new();
+    let normalized_search_url = normalize_endpoint(
+        &search_url,
+        source_base.as_deref(),
+        "searchUrl",
+        &mut legacy_urls,
+        true,
+    )?;
     let mut output = Map::new();
     output.insert("name".to_string(), Value::String(name));
     output.insert(
         "searchUrl".to_string(),
-        Value::String(normalize_url(&search_url)?),
+        Value::String(normalized_search_url),
     );
 
     for (target, keys) in [
@@ -548,7 +560,6 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
             "book_url_pattern",
             &["bookUrlPattern", "book_url_pattern"][..],
         ),
-        ("explore_url", &["exploreUrl", "explore_url"][..]),
         (
             "comment",
             &["comment", "bookSourceComment", "book_source_comment"][..],
@@ -559,16 +570,34 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
                 .as_str()
                 .ok_or_else(|| format!("{target} 必须是字符串"))?
                 .trim();
-            if !text.is_empty() {
-                let normalized = if matches!(target, "source_url" | "explore_url") {
-                    normalize_url(text)?
+            if text.is_empty() {
+                continue;
+            }
+            if target == "source_url" {
+                if let Ok(normalized) = normalize_url(text) {
+                    output.insert(target.to_string(), Value::String(normalized));
                 } else {
-                    text.to_string()
-                };
-                output.insert(target.to_string(), Value::String(normalized));
+                    legacy_urls.insert(target.to_string(), Value::String(text.to_string()));
+                }
+            } else {
+                output.insert(target.to_string(), Value::String(text.to_string()));
             }
         }
     }
+    if let Some(value) = first_value(object, &["exploreUrl", "explore_url"]) {
+        let text = value
+            .as_str()
+            .ok_or_else(|| "exploreUrl 必须是字符串".to_string())?
+            .trim();
+        if !text.is_empty() {
+            if let Ok(normalized) = normalize_url_with_base(text, source_base.as_deref()) {
+                output.insert("explore_url".to_string(), Value::String(normalized));
+            } else {
+                legacy_urls.insert("exploreUrl".to_string(), Value::String(text.to_string()));
+            }
+        }
+    }
+
 
     if let Some(value) = first_value(object, &["source_type", "bookSourceType", "sourceType"][..]) {
         let source_type = value
@@ -602,10 +631,19 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
         if let Some(value) = first_value(object, keys) {
             let url = value
                 .as_str()
-                .ok_or_else(|| format!("{target} 必须是字符串；当前只支持 HTTP/CSS 书源"))?;
-            output.insert(target.to_string(), Value::String(normalize_url(url)?));
+                .ok_or_else(|| format!("{target} 必须是字符串；当前只支持 HTTP/CSS 书源"))?
+                .trim();
+            if url.is_empty() {
+                continue;
+            }
+            if let Ok(normalized) = normalize_url_with_base(url, source_base.as_deref()) {
+                output.insert(target.to_string(), Value::String(normalized));
+            } else {
+                legacy_urls.insert(target.to_string(), Value::String(url.to_string()));
+            }
         }
     }
+
 
     if let Some(rules) = first_value(object, &["search", "ruleSearch"]) {
         output.insert(
@@ -644,6 +682,9 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
         if replacements.is_array() {
             output.insert("replaceRules".to_string(), replacements.clone());
         }
+    }
+    if !legacy_urls.is_empty() {
+        output.insert("legacy_urls".to_string(), Value::Object(legacy_urls));
     }
 
     Ok(Value::Object(output))
@@ -1298,9 +1339,17 @@ fn first_value<'a>(object: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a 
 }
 
 fn normalize_url(value: &str) -> Result<String, String> {
-    let parts = value.split("||").map(str::trim).collect::<Vec<_>>();
-    if parts.is_empty() || parts.iter().any(|part| part.is_empty()) {
-        return Err("URL 回退链包含空候选".to_string());
+    normalize_url_with_base(value, None)
+}
+
+fn normalize_url_with_base(value: &str, base: Option<&str>) -> Result<String, String> {
+    let parts = value
+        .split("||")
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return Err("URL 回退链没有可用候选".to_string());
     }
     if parts.len() > MAX_URL_CHAIN_LENGTH {
         return Err(format!(
@@ -1308,22 +1357,94 @@ fn normalize_url(value: &str) -> Result<String, String> {
             MAX_URL_CHAIN_LENGTH
         ));
     }
-    Ok(parts
-        .into_iter()
-        .map(|part| {
-            part.replace("{{page}}", "1")
-                .replace("{{pageNum}}", "1")
-                .replace("{{page+1}}", "2")
-                .replace("{{page-1}}", "0")
-        })
-        .collect::<Vec<_>>()
-        .join("||"))
+    let mut normalized = Vec::with_capacity(parts.len());
+    for part in parts {
+        let candidate = part
+            .replace("{{page}}", "1")
+            .replace("{{pageNum}}", "1")
+            .replace("{{page+1}}", "2")
+            .replace("{{page-1}}", "0");
+        if let Ok(parsed) = Url::parse(&candidate) {
+            if matches!(parsed.scheme(), "http" | "https") {
+                normalized.push(candidate);
+                continue;
+            }
+        }
+        if let Some(base) = base {
+            let base = Url::parse(base).map_err(|_| "书源基础 URL 无效".to_string())?;
+            let joined = base
+                .join(&candidate)
+                .map_err(|_| "相对 URL 无法依据 bookSourceUrl 补全".to_string())?;
+            if matches!(joined.scheme(), "http" | "https") {
+                normalized.push(joined.to_string());
+                continue;
+            }
+        }
+        return Err("URL 必须是 HTTP(S) 绝对地址或可依据 bookSourceUrl 补全的相对地址".to_string());
+    }
+    Ok(normalized.join("||"))
+}
+
+fn normalize_endpoint(
+    value: &str,
+    base: Option<&str>,
+    key: &str,
+    legacy_urls: &mut Map<String, Value>,
+    required: bool,
+) -> Result<String, String> {
+    match normalize_url_with_base(value, base) {
+        Ok(normalized) => Ok(normalized),
+        Err(_) if required => {
+            legacy_urls.insert(key.to_string(), Value::String(value.trim().to_string()));
+            Ok("https://legacy.invalid/".to_string())
+        }
+        Err(_) => {
+            legacy_urls.insert(key.to_string(), Value::String(value.trim().to_string()));
+            Ok(String::new())
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::source::SourceRule;
+
+    #[test]
+    fn preserves_relative_and_dynamic_endpoints() {
+        let payload = json!({
+            "bookSourceName": "Endpoint compatibility",
+            "bookSourceUrl": "https://example.test/base/",
+            "searchUrl": "/search?q={{key}}",
+            "exploreUrl": "[{\"title\":\"榜单\",\"url\":\"/rank\"}]",
+            "ruleSearch": { "bookList": "li.book" }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("endpoint compatibility");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("canonical endpoint source");
+        assert_eq!(source.search_url, "https://example.test/search?q={{key}}");
+        assert_eq!(
+            source.legacy_urls.get("exploreUrl").map(String::as_str),
+            Some("[{\"title\":\"榜单\",\"url\":\"/rank\"}]")
+        );
+    }
+
+    #[test]
+    fn imports_dynamic_search_endpoint_as_inert_compatibility() {
+        let payload = json!({
+            "bookSourceName": "Dynamic endpoint",
+            "searchUrl": "@js:return 'https://example.test/search?q=' + key",
+            "ruleSearch": { "bookList": "li.book" }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("dynamic endpoint");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("dynamic endpoint source");
+        assert_eq!(source.search_url, "https://legacy.invalid/");
+        assert!(source.legacy_urls.contains_key("searchUrl"));
+        let validation = validate_source_json(&imported[0].config_json);
+        assert!(validation.valid);
+        assert!(validation.warnings.iter().any(|warning| warning.contains("searchUrl")));
+    }
 
     #[test]
     fn imports_native_bundle() {

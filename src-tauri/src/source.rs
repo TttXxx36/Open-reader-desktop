@@ -86,6 +86,8 @@ pub struct BookSource {
     pub comment: Option<String>,
     #[serde(alias = "searchUrl")]
     pub search_url: String,
+    #[serde(default)]
+    pub legacy_urls: HashMap<String, String>,
     #[serde(default, alias = "bookInfoUrl")]
     pub book_info_url: Option<String>,
     #[serde(default, alias = "tocUrl")]
@@ -833,6 +835,7 @@ impl SourceEngine {
         keyword: &str,
         page: usize,
     ) -> Result<Vec<SearchResult>, SourceError> {
+        ensure_runtime_endpoint(source, "searchUrl")?;
         let context = SourceRequestContext::search(keyword, page);
         let search_url = render_url_context(&source.search_url, &context);
         let fetched = self
@@ -1054,6 +1057,7 @@ impl SourceEngine {
         source: &BookSource,
         keyword: &str,
     ) -> Result<SourcePipelineResult, SourceError> {
+        ensure_runtime_endpoint(source, "searchUrl")?;
         let mut debug_steps = Vec::new();
         let search_context = SourceRequestContext::search(keyword, 1);
         let (search_body, search_url) = self
@@ -1255,6 +1259,7 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<BookInfo, SourceError> {
+        ensure_runtime_endpoint(source, "bookInfoUrl")?;
         let template = source
             .book_info_url
             .as_deref()
@@ -1294,6 +1299,7 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
+        ensure_runtime_endpoint(source, "tocUrl")?;
         let template = source
             .toc_url
             .as_deref()
@@ -1318,6 +1324,7 @@ impl SourceEngine {
         chapter: &SourceChapter,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<SourceChapterContent, SourceError> {
+        ensure_runtime_endpoint(source, "contentUrl")?;
         let template = source
             .content_url
             .as_deref()
@@ -1373,6 +1380,7 @@ impl SourceEngine {
         policy: &NextPagePolicy,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<SourceChapterContent, SourceError> {
+        ensure_runtime_endpoint(source, "contentUrl")?;
         if !policy.enabled {
             return self
                 .fetch_chapter_content(source, chapter, debug_steps)
@@ -2213,6 +2221,11 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
                 .to_string(),
         );
     }
+    for (key, value) in &source.legacy_urls {
+        warnings.push(format!(
+            "{key} 已保留原始动态/相对表达式，当前不会执行：{value}"
+        ));
+    }
     if source.enabled_explore && source.explore_url.is_none() {
         warnings.push("enabledExplore 已开启，但未配置 exploreUrl".to_string());
     }
@@ -2258,14 +2271,18 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         ));
     }
     validate_permission(&source.permission, &mut errors);
-    validate_endpoint("searchUrl", &source.search_url, &mut errors);
+    if !source.legacy_urls.contains_key("searchUrl") {
+        validate_endpoint("searchUrl", &source.search_url, &mut errors);
+    }
     for (name, value) in [
         ("bookInfoUrl", source.book_info_url.as_deref()),
         ("tocUrl", source.toc_url.as_deref()),
         ("contentUrl", source.content_url.as_deref()),
     ] {
         if let Some(value) = value {
-            validate_endpoint(name, value, &mut errors);
+            if !source.legacy_urls.contains_key(name) {
+                validate_endpoint(name, value, &mut errors);
+            }
         }
     }
 
@@ -2399,7 +2416,7 @@ fn source_endpoint_hosts(source: &BookSource) -> Vec<String> {
     for endpoint in [
         source.source_url.as_deref(),
         source.explore_url.as_deref(),
-        Some(source.search_url.as_str()),
+        (!source.legacy_urls.contains_key("searchUrl")).then_some(source.search_url.as_str()),
         source.book_info_url.as_deref(),
         source.toc_url.as_deref(),
         source.content_url.as_deref(),
@@ -2485,6 +2502,15 @@ fn apply_replace_rules(content: &str, rules: &[ReplaceRule]) -> Result<String, S
             .into_owned();
     }
     Ok(result)
+}
+
+fn ensure_runtime_endpoint(source: &BookSource, key: &str) -> Result<(), SourceError> {
+    if source.legacy_urls.contains_key(key) {
+        return Err(SourceError::InvalidConfig(format!(
+            "{key} 仅保留原始兼容表达式，当前不会执行"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_endpoint(name: &str, value: &str, errors: &mut Vec<String>) {
@@ -3267,6 +3293,19 @@ mod tests {
         assert_eq!(source.custom_order, 12);
         assert_eq!(source.weight, 80);
         assert_eq!(source.comment.as_deref(), Some("仅用于授权夹具"));
+    }
+
+    #[test]
+    fn skips_legacy_endpoint_at_runtime() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Legacy endpoint",
+              "searchUrl": "https://legacy.invalid/",
+              "legacy_urls": { "searchUrl": "@js:return 'dynamic'" }
+            }"#,
+        )
+        .expect("legacy endpoint source");
+        assert!(ensure_runtime_endpoint(&source, "searchUrl").is_err());
     }
 
     #[test]
