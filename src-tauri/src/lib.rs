@@ -337,10 +337,7 @@ fn rename_book(
 }
 
 #[tauri::command]
-fn delete_book(
-    database: tauri::State<'_, Database>,
-    book_id: String,
-) -> Result<(), String> {
+fn delete_book(database: tauri::State<'_, Database>, book_id: String) -> Result<(), String> {
     database
         .delete_book(&book_id)
         .map_err(|error| error.to_string())

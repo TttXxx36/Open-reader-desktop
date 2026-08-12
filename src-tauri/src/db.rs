@@ -1144,9 +1144,7 @@ impl Database {
     pub fn rename_book(&self, book_id: &str, title: &str) -> Result<BookSummary, DbError> {
         let title = title.trim();
         if title.is_empty() {
-            return Err(DbError::InvalidBookMetadata(
-                "书名不能为空".to_string(),
-            ));
+            return Err(DbError::InvalidBookMetadata("书名不能为空".to_string()));
         }
         if title.len() > 512 {
             return Err(DbError::InvalidBookMetadata(
