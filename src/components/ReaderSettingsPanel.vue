@@ -142,10 +142,11 @@ function setString(key: keyof ReaderSettings, event: Event) {
 <style scoped>
 .settings-panel {
   margin-top: 28px;
-  padding: 24px;
-  border: 1px solid rgba(148, 163, 184, 0.15);
-  border-radius: 16px;
-  background: rgba(19, 27, 42, 0.72);
+  padding: 26px;
+  border: 1px solid rgba(211, 224, 241, 0.13);
+  border-radius: 20px;
+  background: linear-gradient(145deg, rgba(17, 30, 48, 0.88), rgba(10, 20, 34, 0.8));
+  box-shadow: 0 20px 52px rgba(1, 8, 18, 0.24);
 }
 
 .settings-section-heading {
@@ -157,74 +158,144 @@ function setString(key: keyof ReaderSettings, event: Event) {
 
 .settings-section-heading h2 {
   margin: 9px 0 0;
-  font-size: 20px;
+  color: #eef3fb;
+  font-family: "Noto Serif CJK SC", "Source Han Serif SC", "Microsoft YaHei", serif;
+  font-size: 21px;
+  letter-spacing: -0.03em;
 }
 
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 14px 16px;
   margin-top: 24px;
 }
 
 .settings-field {
   display: grid;
-  gap: 8px;
-  color: #aebbd0;
-  font-size: 13px;
+  gap: 9px;
+  color: #acb9ca;
+  font-size: 12px;
 }
 
 .settings-field > span {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  letter-spacing: 0.01em;
 }
 
-.settings-field strong {
-  color: #dce7f7;
+.settings-field > span::before {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: #e8b66f;
+  box-shadow: 0 0 8px rgba(232, 182, 111, 0.45);
+  content: "";
+}
+
+.settings-field > span {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.settings-field > span strong {
+  justify-self: end;
+  color: #f3d39d;
   font-variant-numeric: tabular-nums;
-}
-
-.settings-field select,
-.settings-field input[type="range"] {
-  width: 100%;
+  font-weight: 650;
 }
 
 .settings-field select {
-  padding: 10px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 9px;
-  color: #dce7f7;
-  background: #0c111b;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 34px 9px 12px;
+  border: 1px solid rgba(211, 224, 241, 0.17);
+  border-radius: 10px;
+  color: #eef3fb;
+  background:
+    linear-gradient(45deg, transparent 50%, #e8b66f 50%) calc(100% - 16px) 17px / 5px 5px no-repeat,
+    linear-gradient(135deg, #e8b66f 50%, transparent 50%) calc(100% - 12px) 17px / 5px 5px no-repeat,
+    rgba(6, 15, 27, 0.84);
+  appearance: none;
+  cursor: pointer;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.settings-field select:hover {
+  border-color: rgba(232, 182, 111, 0.42);
+}
+
+.settings-field select:focus {
+  border-color: rgba(232, 182, 111, 0.68);
+  box-shadow: 0 0 0 3px rgba(232, 182, 111, 0.12);
+  outline: none;
 }
 
 .settings-field input[type="range"] {
-  accent-color: #86dfc2;
+  width: 100%;
+  height: 5px;
+  margin: 10px 0 7px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, rgba(134, 223, 194, 0.72), rgba(232, 182, 111, 0.82));
+  cursor: pointer;
+  accent-color: #e8b66f;
+}
+
+.settings-field input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(211, 224, 241, 0.16);
+}
+
+.settings-field input[type="range"]::-webkit-slider-thumb {
+  width: 15px;
+  height: 15px;
+  margin-top: -5px;
+  border: 2px solid #f3d39d;
+  border-radius: 50%;
+  background: #102033;
+  box-shadow: 0 0 0 4px rgba(232, 182, 111, 0.12);
+  appearance: none;
+}
+
+.settings-field input[type="range"]:focus-visible {
+  outline: 2px solid rgba(232, 182, 111, 0.72);
+  outline-offset: 4px;
 }
 
 .settings-field input[type="color"] {
   width: 100%;
-  min-height: 37px;
+  min-height: 40px;
   padding: 3px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
-  border-radius: 9px;
-  background: #0c111b;
+  border: 1px solid rgba(232, 182, 111, 0.26);
+  border-radius: 10px;
+  background: rgba(6, 15, 27, 0.84);
   cursor: pointer;
 }
 
-.settings-field input:disabled {
+.settings-field input[type="color"]:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.42;
 }
 
 .settings-note {
   margin: 24px 0 0;
-  color: #8391a6;
+  padding-top: 16px;
+  border-top: 1px solid rgba(211, 224, 241, 0.1);
+  color: #92a1b6;
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.75;
 }
 
 @media (max-width: 720px) {
+  .settings-panel {
+    padding: 20px;
+  }
+
   .settings-grid {
     grid-template-columns: 1fr;
   }
