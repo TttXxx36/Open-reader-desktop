@@ -1,5 +1,7 @@
 # M4 单书源端到端流程
 
+> 维护状态（2026-08-12）：M4/M5 的合成夹具、书源导入和诊断链路仍由 main CI 验证；当前 UI 刷新不改变请求边界。书源配置导入已统一为 16 MiB bundle 上限，在线拉取超时 30 秒。
+
 M4 把 M3 的书源协议串成一条可测试的最小链路：
 
 搜索 → 书籍详情 → 目录 → 第一章正文
@@ -39,7 +41,7 @@ Tauri 命令 `run_source_pipeline` 接收两个参数：
 
 ## M5.2 配置包与强制刷新
 
-书源页提供版本化 JSON 配置包导入/导出。导入前会限制文件大小并逐项执行书源协议校验，校验失败时不会写入该配置；导出内容不包含远程正文缓存。
+书源页提供版本化 JSON 配置包导入/导出。导入前会逐项执行书源协议校验；本地 JSON、对象/数组 bundle 和在线 URL 响应体统一限制为 16 MiB，在线拉取超时为 30 秒，超限或超时不会写入配置；导出内容不包含远程正文缓存。
 
 远程阅读页的“刷新内容”会为当前书籍详情、目录和章节请求设置 force_refresh，绕过未过期的缓存并重新写入 TTL 缓存。普通读取仍按详情 5 分钟、章节 10 分钟的 TTL 工作。
 
@@ -65,4 +67,11 @@ Tauri 命令 `run_source_pipeline` 接收两个参数：
 
 书源页的“缓存状态”按钮调用 `get_source_cache_status`，只显示条目数、payload 字节数、过期条目数与 256 条/32 MiB 容量上限。应用启动和每次远程内容写入后都会执行过期清理与容量淘汰，并在 Rust 日志中记录实际删除数量。
 
-网络边界继续保持：只允许 HTTP/HTTPS、15 秒超时、2 MiB 响应体上限和最多 5 次重定向；WebView CSP 不开放任意 HTTPS `connect-src`。刷新失败时仍优先返回 stale 本机缓存，安全审计与缓存统计不会读取或展示缓存正文。
+网络边界继续保持：普通书源请求只允许 HTTP/HTTPS、15 秒超时、2 MiB 响应体上限和最多 5 次重定向；配置导入的在线 URL 单独使用 30 秒、16 MiB 上限；WebView CSP 不开放任意 HTTPS `connect-src`。刷新失败时仍优先返回 stale 本机缓存，安全审计与缓存统计不会读取或展示缓存正文。
+
+
+## 2026-08-12 维护复核
+
+- 本机临时 TCP 合成夹具仍是 M4 的可重复验收边界；真实站点只在获得授权且服务条款允许时使用。
+- 当前 CI run [31574147034](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574147034)、Windows release run [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 和 installer smoke run [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 已通过。
+- XPath、JavaScript、Cookie、Authorization 和音频能力继续按兼容性矩阵明确标记或拒绝，不以导入成功代替执行成功。
