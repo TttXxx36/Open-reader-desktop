@@ -55,14 +55,14 @@ const previewFontStacks: Record<ReaderFont, string> = {
   serif: '"Noto Serif CJK SC", "Songti SC", serif',
   kai: '"KaiTi", "STKaiti", serif',
 };
-const previewPalettes: Record<ReaderTheme, { background: string; text: string; accent: string }> = {
-  night: { background: "#15171c", text: "#eef1f7", accent: "#91b4ff" },
-  paper: { background: "#f4f0e8", text: "#2e3034", accent: "#6c86c7" },
-  sepia: { background: "#efe3cb", text: "#493c30", accent: "#a26d45" },
-  custom: { background: props.modelValue.customBackground, text: props.modelValue.customText, accent: props.modelValue.customAccent },
-};
 const previewStyle = computed(() => {
-  const palette = previewPalettes[props.modelValue.theme];
+  const palettes: Record<ReaderTheme, { background: string; text: string; accent: string }> = {
+    night: { background: "#15171c", text: "#eef1f7", accent: "#91b4ff" },
+    paper: { background: "#f4f0e8", text: "#2e3034", accent: "#6c86c7" },
+    sepia: { background: "#efe3cb", text: "#493c30", accent: "#a26d45" },
+    custom: { background: props.modelValue.customBackground, text: props.modelValue.customText, accent: props.modelValue.customAccent },
+  };
+  const palette = palettes[props.modelValue.theme];
   return {
     fontFamily: previewFontStacks[props.modelValue.fontFamily],
     fontSize: String(props.modelValue.fontSize) + "px",

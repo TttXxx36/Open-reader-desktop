@@ -240,7 +240,7 @@ function openSourcePanel(panel: SourcePanel) {
                 </button>
                 <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click.stop="reorderSource(source, 'up')">上移</button>
                 <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click.stop="reorderSource(source, 'down')">下移</button>
-                <button class="source-link-button" type="button" @click.stop="openSourcePanel('manage')">管理</button>
+                <button class="source-link-button" type="button" @click.stop="selectSource(source); openSourcePanel('manage')">管理</button>
                 <button class="source-link-button danger" type="button" @click.stop="deleteSource(source)">删除</button>
               </div>
             </article>

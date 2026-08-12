@@ -1139,3 +1139,37 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+/* Higher-specificity overrides keep the scoped reader panel aligned with the global visual system. */
+.settings-main .settings-panel {
+  margin-top: 0;
+  border-color: var(--line);
+  border-radius: 14px;
+  background: #111318;
+  box-shadow: none;
+}
+.settings-main .settings-field select {
+  border-color: var(--line);
+  color: var(--text);
+  background: #0d0f12;
+}
+.settings-main .settings-field select:hover {
+  border-color: var(--line-strong);
+}
+.settings-main .settings-field select:focus {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 3px rgba(134, 170, 255, 0.12);
+}
+.settings-main .settings-field input[type="range"] {
+  background: linear-gradient(90deg, rgba(143, 216, 207, 0.65), rgba(134, 170, 255, 0.82));
+  accent-color: #86aaff;
+}
+.settings-main .settings-field input[type="range"]::-webkit-slider-thumb {
+  border-color: #9dbaff;
+  background: #0d0f12;
+  box-shadow: 0 0 0 4px rgba(134, 170, 255, 0.12);
+}
+.settings-main .settings-note {
+  border-color: var(--line);
+  color: var(--muted);
+}
