@@ -597,8 +597,6 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
             }
         }
     }
-
-
     if let Some(value) = first_value(object, &["source_type", "bookSourceType", "sourceType"][..]) {
         let source_type = value
             .as_i64()
@@ -643,8 +641,6 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
             }
         }
     }
-
-
     if let Some(rules) = first_value(object, &["search", "ruleSearch"]) {
         output.insert(
             "search".to_string(),
@@ -1443,7 +1439,10 @@ mod tests {
         assert!(source.legacy_urls.contains_key("searchUrl"));
         let validation = validate_source_json(&imported[0].config_json);
         assert!(validation.valid);
-        assert!(validation.warnings.iter().any(|warning| warning.contains("searchUrl")));
+        assert!(validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("searchUrl")));
     }
 
     #[test]
