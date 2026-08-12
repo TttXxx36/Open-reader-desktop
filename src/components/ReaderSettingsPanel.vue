@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 type ReaderTheme = "night" | "paper" | "sepia" | "custom";
 type ReaderFont = "system" | "yahei" | "serif" | "kai";
 type ReaderTextAlign = "left" | "justify" | "center";
@@ -41,6 +42,44 @@ function setNumber(key: keyof ReaderSettings, event: Event) {
 function setString(key: keyof ReaderSettings, event: Event) {
   setValue(key, (event.target as HTMLInputElement).value as ReaderSettings[typeof key]);
 }
+
+type ReaderPreset = "comfortable" | "compact" | "large";
+const presetValues: Record<ReaderPreset, Partial<ReaderSettings>> = {
+  comfortable: { fontSize: 18, lineHeight: 1.8, contentWidth: 760, paragraphSpacing: 1.15, textIndent: 2, letterSpacing: 0.02 },
+  compact: { fontSize: 16, lineHeight: 1.55, contentWidth: 680, paragraphSpacing: 0.7, textIndent: 1, letterSpacing: 0 },
+  large: { fontSize: 22, lineHeight: 2, contentWidth: 820, paragraphSpacing: 1.4, textIndent: 2, letterSpacing: 0.03 },
+};
+const previewFontStacks: Record<ReaderFont, string> = {
+  system: '"Segoe UI", "Microsoft YaHei", sans-serif',
+  yahei: '"Microsoft YaHei", "Segoe UI", sans-serif',
+  serif: '"Noto Serif CJK SC", "Songti SC", serif',
+  kai: '"KaiTi", "STKaiti", serif',
+};
+const previewStyle = computed(() => {
+  const palettes: Record<ReaderTheme, { background: string; text: string; accent: string }> = {
+    night: { background: "#15171c", text: "#eef1f7", accent: "#91b4ff" },
+    paper: { background: "#f4f0e8", text: "#2e3034", accent: "#6c86c7" },
+    sepia: { background: "#efe3cb", text: "#493c30", accent: "#a26d45" },
+    custom: { background: props.modelValue.customBackground, text: props.modelValue.customText, accent: props.modelValue.customAccent },
+  };
+  const palette = palettes[props.modelValue.theme];
+  return {
+    fontFamily: previewFontStacks[props.modelValue.fontFamily],
+    fontSize: String(props.modelValue.fontSize) + "px",
+    lineHeight: props.modelValue.lineHeight,
+    letterSpacing: String(props.modelValue.letterSpacing) + "em",
+    maxWidth: String(Math.min(props.modelValue.contentWidth, 760)) + "px",
+    marginLeft: String(Math.min(props.modelValue.marginLeft, 40)) + "px",
+    marginRight: String(Math.min(props.modelValue.marginRight, 40)) + "px",
+    textAlign: props.modelValue.textAlign,
+    "--preview-bg": palette.background,
+    "--preview-text": palette.text,
+    "--preview-accent": palette.accent,
+  } as Record<string, string | number>;
+});
+function applyPreset(preset: ReaderPreset) {
+  emit("update:modelValue", { ...props.modelValue, ...presetValues[preset] });
+}
 </script>
 
 <template>
@@ -51,6 +90,26 @@ function setString(key: keyof ReaderSettings, event: Event) {
         <h2>阅读外观</h2>
       </div>
       <button class="source-link-button" type="button" @click="emit('reset')">恢复默认</button>
+    </div>
+
+    <div class="settings-preset-row" aria-label="阅读预设">
+      <span class="settings-preset-label">快速预设</span>
+      <button class="settings-preset" type="button" @click="applyPreset('comfortable')"><strong>舒适阅读</strong><small>平衡字号与行距</small></button>
+      <button class="settings-preset" type="button" @click="applyPreset('compact')"><strong>紧凑阅读</strong><small>更多内容、少翻页</small></button>
+      <button class="settings-preset" type="button" @click="applyPreset('large')"><strong>大字阅读</strong><small>更宽松、更清晰</small></button>
+    </div>
+
+    <div class="reader-preview-card">
+      <div class="reader-preview-toolbar">
+        <span class="eyebrow">LIVE PREVIEW</span>
+        <span>{{ modelValue.fontSize }} px · {{ modelValue.readingMode === "paged" ? "分页" : "滚动" }}</span>
+      </div>
+      <article class="reader-preview-paper" :style="previewStyle">
+        <span class="reader-preview-kicker">OPEN READER · 第一章</span>
+        <h3>把每一页调成自己的节奏</h3>
+        <p>这一段文字会随着字体、行距、版心和主题实时变化。先选择一个阅读预设，再从下面的细节滑杆中找到最舒服的状态。</p>
+        <p>好的阅读界面会把注意力留给文字，而不是让控件抢走视线。</p>
+      </article>
     </div>
 
     <div class="settings-grid">
@@ -300,4 +359,104 @@ function setString(key: keyof ReaderSettings, event: Event) {
     grid-template-columns: 1fr;
   }
 }
+
+.settings-preset-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 22px;
+  flex-wrap: wrap;
+}
+.settings-preset-label {
+  align-self: center;
+  margin-right: 2px;
+  color: #8f98a8;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.settings-preset {
+  display: grid;
+  gap: 3px;
+  min-width: 126px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 9px;
+  color: #dce2ec;
+  text-align: left;
+  background: #0d0f12;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+.settings-preset:hover {
+  border-color: rgba(145, 180, 255, 0.55);
+  background: #15191f;
+  transform: translateY(-1px);
+}
+.settings-preset strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+.settings-preset small {
+  color: #8f98a8;
+  font-size: 10px;
+}
+.reader-preview-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: #0d0f12;
+}
+.reader-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px;
+  color: #8f98a8;
+  font-size: 11px;
+}
+.reader-preview-paper {
+  min-height: 260px;
+  padding: 24px clamp(18px, 4vw, 52px);
+  border-radius: 9px;
+  color: var(--preview-text);
+  background: var(--preview-bg);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  transition: background 180ms ease, color 180ms ease, max-width 180ms ease;
+}
+.reader-preview-kicker {
+  display: block;
+  margin-bottom: 16px;
+  color: var(--preview-accent);
+  font-family: "Segoe UI", sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.reader-preview-paper h3 {
+  margin: 0 0 18px;
+  color: inherit;
+  font-family: inherit;
+  font-size: 1.22em;
+  letter-spacing: -0.04em;
+}
+.reader-preview-paper p {
+  margin: 0 0 1em;
+  color: inherit;
+  font-size: 0.78em;
+  text-indent: 2em;
+  opacity: 0.88;
+}
+@media (max-width: 720px) {
+  .settings-preset {
+    flex: 1 1 130px;
+  }
+  .reader-preview-paper {
+    padding: 20px 18px;
+  }
+}
+
 </style>

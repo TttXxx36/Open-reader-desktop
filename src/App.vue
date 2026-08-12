@@ -687,6 +687,7 @@ const readerFontStacks: Record<ReaderFont, string> = {
   kai: '"KaiTi", "Kaiti SC", "STKaiti", serif',
 };
 const view = ref<View>("library");
+const settingsSection = ref<"reader" | "appearance" | "network">("reader");
 const books = ref<BookSummary[]>([]);
 const libraryQuery = ref("");
 const libraryGroupFilter = ref("");
@@ -4353,23 +4354,111 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 
     <SourceView v-else-if="view === 'sources'" />
 
+    
     <section v-else-if="view === 'settings'" class="content settings-content" id="settings">
-      <header class="topbar">
+      <header class="topbar settings-topbar">
         <div>
           <span class="eyebrow">APP & READER SETTINGS</span>
           <h1>设置</h1>
         </div>
-        <button class="secondary-button" type="button" @click="closeSettings">返回阅读</button>
+        <div class="settings-topbar-status">
+          <span class="settings-save-dot"></span>
+          <span>本机自动保存</span>
+          <button class="secondary-button" type="button" @click="closeSettings">返回阅读</button>
+        </div>
       </header>
 
-      <div class="settings-intro">
-        <span class="eyebrow">PERSONALIZE YOUR DESK</span>
-        <strong>把每一页调成适合自己的节奏。</strong>
-        <span>字体、版心、背景和远端追链策略都会保存在本机。</span>
-      </div>
+      <div class="settings-layout">
+        <aside class="settings-nav" aria-label="设置分类">
+          <span class="settings-nav-title">SETTINGS</span>
+          <button type="button" :class="{ active: settingsSection === 'reader' }" @click="settingsSection = 'reader'">
+            <span>阅读排版</span>
+            <small>字号与版心</small>
+          </button>
+          <button type="button" :class="{ active: settingsSection === 'appearance' }" @click="settingsSection = 'appearance'">
+            <span>主题与界面</span>
+            <small>颜色与字体</small>
+          </button>
+          <button type="button" :class="{ active: settingsSection === 'network' }" @click="settingsSection = 'network'">
+            <span>远端阅读</span>
+            <small>追链安全</small>
+          </button>
+          <div class="settings-nav-tip">
+            <strong>阅读体验</strong>
+            <span>调整会实时应用到当前章节，并同步保存到本机。</span>
+          </div>
+        </aside>
 
-      <ReaderSettingsPanel v-model="settings" @reset="resetSettings" />
+        <div class="settings-main">
+          <div class="settings-intro">
+            <span class="eyebrow">PERSONALIZE YOUR DESK</span>
+            <strong>把每一页调成适合自己的节奏。</strong>
+            <span>从阅读预设开始，再微调字体、版心、主题和远端追链策略。</span>
+          </div>
 
+          <ReaderSettingsPanel v-if="settingsSection === 'reader'" v-model="settings" @reset="resetSettings" />
+
+          <section v-else-if="settingsSection === 'appearance'" class="settings-panel appearance-panel">
+            <div class="settings-section-heading">
+              <div>
+                <span class="eyebrow">INTERFACE</span>
+                <h2>主题与界面</h2>
+              </div>
+              <span class="settings-section-status">即时预览</span>
+            </div>
+            <p class="settings-note appearance-note">先选择一个基准主题，再使用自定义颜色做细节调整。阅读页面和书源工作区会共享这套低对比度界面语言。</p>
+            <div class="appearance-theme-grid">
+              <button class="appearance-theme-card" :class="{ selected: settings.theme === 'night' }" type="button" @click="settings.theme = 'night'">
+                <span class="appearance-theme-sample theme-night-sample"><i></i><i></i><i></i></span>
+                <strong>夜间</strong>
+                <small>低亮度、长时间阅读</small>
+              </button>
+              <button class="appearance-theme-card" :class="{ selected: settings.theme === 'paper' }" type="button" @click="settings.theme = 'paper'">
+                <span class="appearance-theme-sample theme-paper-sample"><i></i><i></i><i></i></span>
+                <strong>纸张</strong>
+                <small>清晰明亮、适合白天</small>
+              </button>
+              <button class="appearance-theme-card" :class="{ selected: settings.theme === 'sepia' }" type="button" @click="settings.theme = 'sepia'">
+                <span class="appearance-theme-sample theme-sepia-sample"><i></i><i></i><i></i></span>
+                <strong>暖色</strong>
+                <small>柔和护眼、降低冷感</small>
+              </button>
+              <button class="appearance-theme-card" :class="{ selected: settings.theme === 'custom' }" type="button" @click="settings.theme = 'custom'">
+                <span class="appearance-theme-sample theme-custom-sample"><i></i><i></i><i></i></span>
+                <strong>自定义</strong>
+                <small>使用自己的颜色方案</small>
+              </button>
+            </div>
+            <div class="settings-grid appearance-controls">
+              <label class="settings-field">
+                <span>界面字体</span>
+                <select v-model="settings.fontFamily">
+                  <option value="system">系统无衬线</option>
+                  <option value="yahei">微软雅黑</option>
+                  <option value="serif">宋体 / 衬线</option>
+                  <option value="kai">楷体</option>
+                </select>
+              </label>
+              <label class="settings-field">
+                <span>自定义背景色</span>
+                <input v-model="settings.customBackground" type="color" :disabled="settings.theme !== 'custom'" />
+              </label>
+              <label class="settings-field">
+                <span>自定义文字色</span>
+                <input v-model="settings.customText" type="color" :disabled="settings.theme !== 'custom'" />
+              </label>
+              <label class="settings-field">
+                <span>自定义强调色</span>
+                <input v-model="settings.customAccent" type="color" :disabled="settings.theme !== 'custom'" />
+              </label>
+            </div>
+            <div class="appearance-shortcuts">
+              <span class="eyebrow">QUICK TIPS</span>
+              <p><kbd>Ctrl</kbd><span>+</span><kbd>+</kbd> 放大字号，<kbd>Ctrl</kbd><span>+</span><kbd>-</kbd> 缩小字号，阅读时按 <kbd>T</kbd> 可切换主题。</p>
+            </div>
+          </section>
+
+          <div v-else class="settings-network-workspace">
       <section class="settings-panel next-page-settings">
         <div class="settings-section-heading">
           <div>
@@ -4409,9 +4498,12 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         </div>
         <button class="secondary-button policy-reset" type="button" @click="resetNextPagePolicy">恢复追链默认值</button>
       </section>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <RemoteReaderView v-else-if="remoteBook && remoteChapter" />
+<RemoteReaderView v-else-if="remoteBook && remoteChapter" />
 
     <LocalReaderView v-else-if="detail && chapter" />
   </main>
