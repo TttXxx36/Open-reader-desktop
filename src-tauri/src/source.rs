@@ -106,6 +106,10 @@ pub struct BookSource {
     pub permission: SourcePermission,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// Original dynamic or non-standard header expression retained for round-tripping.
+    /// It is intentionally inert at runtime.
+    #[serde(default)]
+    pub legacy_headers: Option<Value>,
     #[serde(default, alias = "replaceRules", alias = "replacements")]
     pub replace_rules: Vec<ReplaceRule>,
 }
@@ -2225,6 +2229,11 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         warnings.push(format!(
             "{key} 已保留原始动态/相对表达式，当前不会执行：{value}"
         ));
+    }
+    if source.legacy_headers.is_some() {
+        warnings.push(
+            "headers 已保留原始动态或非标准对象，当前不会执行其中的兼容表达式".to_string(),
+        );
     }
     if source.enabled_explore && source.explore_url.is_none() {
         warnings.push("enabledExplore 已开启，但未配置 exploreUrl".to_string());

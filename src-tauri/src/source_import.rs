@@ -667,7 +667,20 @@ fn normalize_source_object(object: &Map<String, Value>) -> Result<Value, String>
     }
 
     if let Some(headers) = first_value(object, &["headers", "header"]) {
-        output.insert("headers".to_string(), normalize_headers(headers)?);
+        match normalize_headers(headers) {
+            Ok(normalized) => {
+                output.insert("headers".to_string(), normalized);
+            }
+            Err(error) => {
+                output.insert(
+                    "legacy_headers".to_string(),
+                    json!({
+                        "raw": headers.clone(),
+                        "reason": truncate_preview_text(&error),
+                    }),
+                );
+            }
+        }
     }
     if let Some(permission) = first_value(object, &["permission", "permissions"]) {
         if permission.is_object() {
@@ -1267,6 +1280,7 @@ fn normalize_headers(value: &Value) -> Result<Value, String> {
                     .ok_or_else(|| format!("headers.{key} 必须是字符串"))?;
                 insert_header(&mut headers, key, text)?;
             }
+            validate_safe_headers(&headers)?;
             Ok(Value::Object(headers))
         }
         Value::String(text) => {
@@ -1279,6 +1293,9 @@ fn normalize_headers(value: &Value) -> Result<Value, String> {
                     return normalize_headers(&parsed);
                 }
             }
+            if let Some(parsed) = parse_static_header_object(text) {
+                return normalize_headers(&parsed);
+            }
 
             let mut headers = Map::new();
             for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
@@ -1290,10 +1307,125 @@ fn normalize_headers(value: &Value) -> Result<Value, String> {
             if headers.is_empty() {
                 return Err("header 字符串没有可用字段".to_string());
             }
+            validate_safe_headers(&headers)?;
             Ok(Value::Object(headers))
         }
         _ => Err("headers/header 目前只支持 JSON 对象或 Name: Value 字符串".to_string()),
     }
+}
+
+fn validate_safe_headers(headers: &Map<String, Value>) -> Result<(), String> {
+    for key in headers.keys() {
+        if matches!(
+            key.to_ascii_lowercase().as_str(),
+            "authorization" | "cookie" | "proxy-authorization"
+        ) {
+            return Err(format!("headers 不允许携带敏感认证头：{key}"));
+        }
+    }
+    Ok(())
+}
+
+fn parse_static_header_object(text: &str) -> Option<Value> {
+    let body = text.trim().strip_prefix('{')?.strip_suffix('}')?.trim();
+    if body.is_empty() {
+        return Some(Value::Object(Map::new()));
+    }
+
+    let mut headers = Map::new();
+    for entry in split_header_entries(body) {
+        let (raw_key, raw_value) = split_header_pair(entry)?;
+        let key = parse_header_token(raw_key)?;
+        let value = parse_header_token(raw_value)?;
+        insert_header(&mut headers, &key, &value).ok()?;
+    }
+    Some(Value::Object(headers))
+}
+
+fn split_header_entries(value: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, character) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote.is_some() {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if character == active {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '{' | '[' | '(' => depth = depth.saturating_add(1),
+            '}' | ']' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                entries.push(value[start..index].trim());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    entries.push(value[start..].trim());
+    entries
+}
+
+fn split_header_pair(value: &str) -> Option<(&str, &str)> {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut depth = 0usize;
+    for (index, character) in value.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote.is_some() {
+            escaped = true;
+            continue;
+        }
+        if let Some(active) = quote {
+            if character == active {
+                quote = None;
+            }
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '{' | '[' | '(' => depth = depth.saturating_add(1),
+            '}' | ']' | ')' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => {
+                return Some((&value[..index], &value[index + character.len_utf8()..]))
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_header_token(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.len() >= 2 {
+        let first = value.chars().next()?;
+        let last = value.chars().last()?;
+        if (first == '\'' || first == '"') && last == first {
+            if first == '"' {
+                return serde_json::from_str(value).ok();
+            }
+            return Some(value[1..value.len() - 1].replace("\\'", "'"));
+        }
+    }
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(value.to_string())
 }
 
 fn insert_header(headers: &mut Map<String, Value>, key: &str, value: &str) -> Result<(), String> {
@@ -1450,6 +1582,47 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("searchUrl")));
+    }
+
+    #[test]
+    fn preserves_dynamic_headers_without_rejecting_import() {
+        let payload = json!({
+            "bookSourceName": "Dynamic headers",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "headers": "@js:JSON.stringify({\"Authorization\": token})",
+            "ruleSearch": { "bookList": "li.book" }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("dynamic headers");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("dynamic header source");
+        assert!(source.legacy_headers.is_some());
+        let validation = validate_source_json(&imported[0].config_json);
+        assert!(validation.valid);
+        assert!(validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("headers")));
+    }
+
+    #[test]
+    fn normalizes_static_header_object() {
+        let payload = json!({
+            "bookSourceName": "Static headers",
+            "searchUrl": "https://example.test/search?q={{key}}",
+            "headers": "{ 'User-Agent': 'Open Reader', user_agent: 'desktop' }",
+            "ruleSearch": { "bookList": "li.book" }
+        });
+        let imported = parse_import_bundle(&payload.to_string()).expect("static headers");
+        let source: BookSource =
+            serde_json::from_str(&imported[0].config_json).expect("static header source");
+        assert_eq!(
+            source.headers.get("User-Agent").map(String::as_str),
+            Some("Open Reader")
+        );
+        assert_eq!(
+            source.headers.get("user_agent").map(String::as_str),
+            Some("desktop")
+        );
     }
 
     #[test]
