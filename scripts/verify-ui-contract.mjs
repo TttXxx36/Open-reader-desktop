@@ -53,6 +53,13 @@ requireContract(![app, sourceView, remoteReaderView, localReaderView].some((valu
 requireContract(app.includes("reading-paged") && app.includes("theme-custom"), "阅读器必须包含分页滚动与自定义主题样式");
 requireContract(app.includes(":focus-visible"), "阅读器视图必须提供键盘焦点样式");
 
+requireContract(app.includes("online-search-section") && app.includes("在线搜索结果"), "在线搜索结果必须与本地书架明确分区");
+requireContract(app.includes("class=\"local-shelf-section\"") && app.includes("本地书架"), "本地书架必须拥有独立分区标题");
+requireContract(app.includes("<button\n            v-for=\"item in searchResult.results\"") && app.includes("@click=\"openRemoteBook(item)\""), "搜索结果条目必须使用可点击按钮打开远端书籍");
+// Search results intentionally omit internal scan and parse diagnostics from the user-facing surface.
+requireContract(!app.includes("search-diagnostics") && !app.includes("search-results-summary"), "搜索结果不得展示扫描、解析和分页统计");
+requireContract(app.includes("const bookUrl = item.book_url?.trim();"), "打开远端书籍前必须校验并规范化书籍链接");
+
 if (failures.length > 0) {
   console.error("UI contract check failed:");
   for (const failure of failures) console.error("- " + failure);

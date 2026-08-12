@@ -2071,7 +2071,12 @@ async function importSourceFile(event: Event) {
 }
 
 async function openRemoteBook(item: UnifiedSearchItem) {
-  if (!item.book_url || remoteBusy.value) return;
+  const bookUrl = item.book_url?.trim();
+  if (!bookUrl) {
+    sourceTransferMessage.value = "该结果没有可用的书籍链接";
+    return;
+  }
+  if (remoteBusy.value) return;
 
   const operationId = "remote-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   remoteOperationId.value = operationId;
@@ -2084,7 +2089,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
   try {
     const loaded = await invoke<RemoteBookDetail>("fetch_source_book", {
       sourceId: item.source_id,
-      bookUrl: item.book_url,
+      bookUrl,
       forceRefresh: false,
       operationId,
     });
@@ -4208,48 +4213,48 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         @sources="openSources"
       />
 
-      <section v-if="searchResult" class="search-results-panel" aria-live="polite">
+      <section
+        v-if="searchResult"
+        class="search-results-panel online-search-section"
+        aria-live="polite"
+        aria-labelledby="online-search-heading"
+      >
         <div class="search-results-heading">
           <div>
             <span class="eyebrow">MULTI-SOURCE SEARCH</span>
-            <h2>搜索结果</h2>
+            <h2 id="online-search-heading">在线搜索结果</h2>
           </div>
           <button class="source-link-button" type="button" @click="clearSearch">清除</button>
         </div>
-        <p class="search-results-summary">
-          已查询 {{ searchResult.enabled_sources }} 个启用书源，最多扫描 {{ searchPageLimit }} 页，去重后 {{ searchResult.results.length }} 条结果。
+        <p class="search-results-context">
+          当前关键词：{{ searchKeyword }}
         </p>
-        <ul v-if="searchResult.diagnostics.length" class="search-diagnostics">
-          <li v-for="diagnostic in searchResult.diagnostics" :key="diagnostic.source_id">
-            <strong>{{ diagnostic.source_name }}</strong>
-            <span>扫描 {{ diagnostic.pages_scanned }} 页 · 解析 {{ diagnostic.parsed_items }} 条 · {{ paginationStopLabel(diagnostic.stop_reason) }}</span>
-          </li>
-        </ul>
         <p v-if="!searchResult.results.length" class="search-results-empty">没有找到匹配书籍。</p>
         <div v-else class="search-results-list">
-          <article
+          <button
             v-for="item in searchResult.results"
             :key="item.source_id + '-' + item.title + '-' + (item.author || '')"
             class="search-result-row"
-            :class="{ clickable: Boolean(item.book_url) }"
-            :tabindex="item.book_url ? 0 : undefined"
+            :class="{ clickable: Boolean(item.book_url), loading: remoteBusy && Boolean(item.book_url) }"
+            :disabled="!item.book_url || remoteBusy"
+            type="button"
+            :aria-label="item.book_url ? '打开 ' + (item.title || '未命名书籍') : (item.title || '未命名书籍') + ' 没有可用链接'"
             @click="openRemoteBook(item)"
-            @keydown.enter="openRemoteBook(item)"
           >
-            <div>
-              <h3>{{ item.title || "未命名书籍" }}</h3>
-              <p>{{ item.author || "作者未知" }}</p>
-            </div>
-            <div class="search-result-actions">
+            <span class="search-result-copy">
+              <strong>{{ item.title || "未命名书籍" }}</strong>
+              <span>{{ item.author || "作者未知" }}</span>
+            </span>
+            <span class="search-result-actions">
               <span class="search-source-badge">{{ item.source_name }}</span>
               <span class="search-open-label">{{ item.book_url ? (remoteBusy ? "加载中…" : "打开") : "无链接" }}</span>
-            </div>
-          </article>
+            </span>
+          </button>
         </div>
         <div v-if="searchResult.failures.length" class="search-failures">
-          <strong>{{ searchResult.failures.length }} 个书源失败，已隔离</strong>
-          <div v-for="failure in searchResult.failures" :key="failure.source_id + '-' + failure.message" class="search-failure-row">
-            <p>{{ failure.source_name }}：{{ failure.message }}</p>
+          <strong>部分书源暂不可用</strong>
+          <div v-for="failure in searchResult.failures" :key="failure.source_id" class="search-failure-row">
+            <p>{{ failure.source_name }}</p>
             <button
               class="source-link-button"
               type="button"
@@ -4260,9 +4265,16 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
             </button>
           </div>
         </div>
-        <p class="search-results-note">有书籍链接的结果可直接打开详情和章节阅读；无链接结果仅展示元数据。</p>
       </section>
 
+      <section class="local-shelf-section" aria-labelledby="local-shelf-heading">
+        <div class="library-section-heading">
+          <div>
+            <span class="eyebrow">LOCAL SHELF</span>
+            <h2 id="local-shelf-heading">本地书架</h2>
+          </div>
+          <span class="library-section-caption">{{ books.length }} 本已保存到本机</span>
+        </div>
       <section v-if="books.length" class="library-grid" aria-label="本地书架">
         <article
           v-for="book in books"
@@ -4334,6 +4346,7 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         <h3>书架还是空的</h3>
         <p>导入一本 TXT 或 EPUB，马上开始离线阅读。文件内容只会保存在本机。</p>
         <button class="text-button" type="button" @click="openFilePicker">选择本地书籍 →</button>
+      </section>
       </section>
     </section>
 
@@ -4722,53 +4735,30 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   background: rgba(17, 34, 52, 0.72);
 }
 
-.search-results-heading {
+.search-results-heading,
+.library-section-heading {
   display: flex;
-  align-items: start;
+  align-items: end;
   justify-content: space-between;
   gap: 18px;
 }
 
-.search-results-heading h2 {
+.search-results-heading h2,
+.library-section-heading h2 {
   margin: 9px 0 0;
+  color: #eff5ff;
   font-size: 20px;
 }
 
-.search-results-summary,
-.search-results-empty,
-.search-results-note {
+.search-results-context,
+.search-results-empty {
   color: #8391a6;
   font-size: 12px;
   line-height: 1.6;
 }
 
-.search-results-summary {
-  margin: 16px 0 0;
-}
-
-.search-diagnostics {
-  display: grid;
-  gap: 7px;
-  margin: 13px 0 0;
-  padding: 0;
-  list-style: none;
-  color: #9fb1c8;
-  font-size: 12px;
-}
-
-.search-diagnostics li {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: baseline;
-  padding: 8px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.14);
-  border-radius: 9px;
-  background: rgba(12, 17, 27, 0.42);
-}
-
-.search-diagnostics strong {
-  color: #dce7f7;
+.search-results-context {
+  margin: 14px 0 0;
 }
 
 .search-results-empty {
@@ -4781,15 +4771,21 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   margin-top: 18px;
 }
 
- .search-result-row {
+.search-result-row {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 13px 14px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   border-radius: 10px;
+  color: inherit;
   background: rgba(12, 17, 27, 0.52);
+  cursor: default;
+  font: inherit;
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
 .search-result-row.clickable {
@@ -4800,6 +4796,38 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 .search-result-row.clickable:focus-visible {
   border-color: rgba(139, 183, 255, 0.7);
   outline: none;
+  background: rgba(24, 49, 76, 0.76);
+  transform: translateY(-1px);
+}
+
+.search-result-row:disabled {
+  opacity: 0.76;
+}
+
+.search-result-row.loading {
+  cursor: wait;
+}
+
+.search-result-copy {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.search-result-copy strong {
+  overflow: hidden;
+  color: #edf5ff;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-copy > span {
+  overflow: hidden;
+  color: #8391a6;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .search-result-actions {
@@ -4812,17 +4840,6 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
 .search-open-label {
   color: #8fcfff;
   font-size: 11px;
-}
-
-.search-result-row h3 {
-  margin: 0;
-  font-size: 14px;
-}
-
-.search-result-row p {
-  margin: 5px 0 0;
-  color: #8391a6;
-  font-size: 12px;
 }
 
 .search-source-badge {
@@ -4840,20 +4857,39 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   border-top: 1px solid rgba(255, 176, 188, 0.14);
 }
 
-.search-failures strong {
+.search-failures > strong {
   color: #ffcf9b;
   font-size: 12px;
 }
 
-.search-failures p {
-  margin: 8px 0 0;
-  color: #ffb0bc;
-  font-size: 11px;
-  line-height: 1.5;
+.search-failure-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0 0;
 }
 
-.search-results-note {
-  margin: 17px 0 0;
+.search-failure-row p {
+  margin: 0;
+  color: #ffb0bc;
+  font-size: 11px;
+}
+
+.local-shelf-section {
+  margin-top: 30px;
+  padding-top: 24px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.library-section-caption {
+  color: #8391a6;
+  font-size: 11px;
+}
+
+.local-shelf-section .library-grid,
+.local-shelf-section .empty-state {
+  margin-top: 18px;
 }
 .nav-item {
   border: 0;
