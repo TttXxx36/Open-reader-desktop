@@ -2231,9 +2231,8 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
         ));
     }
     if source.legacy_headers.is_some() {
-        warnings.push(
-            "headers 已保留原始动态或非标准对象，当前不会执行其中的兼容表达式".to_string(),
-        );
+        warnings
+            .push("headers 已保留原始动态或非标准对象，当前不会执行其中的兼容表达式".to_string());
     }
     if source.enabled_explore && source.explore_url.is_none() {
         warnings.push("enabledExplore 已开启，但未配置 exploreUrl".to_string());
