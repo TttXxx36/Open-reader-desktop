@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject } from "vue";
+import { inject, ref } from "vue";
 
 const context = inject<any>("open-reader-context");
 if (!context) throw new Error("Open Reader context is not available.");
@@ -8,52 +8,54 @@ const formatDebugVariables = (variables: Record<string, string> = {}) =>
     .map(([key, value]) => `${key}=${value}`)
     .join(" · ");
 const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, sourceBatchWeight, sourceBatchComment, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceMetrics, sourceRuleMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, loadSourceRequestMetrics, loadSourceRuleMetrics, formatBytes, formatPercent, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, beginSourceDrag, dropSourceDrag, clearSourceDrag, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
+
+type SourcePanel = "library" | "import" | "manage";
+const sourcePanel = ref<SourcePanel>("library");
+function openSourcePanel(panel: SourcePanel) {
+  sourcePanel.value = panel;
+}
 </script>
 
 <template>
 <section v-if="view === 'sources'" class="content source-content" id="sources">
-      <header class="topbar">
+      <header class="topbar source-topbar">
         <div>
           <span class="eyebrow">SOURCE PROTOCOL</span>
           <h1>书源</h1>
+          <p class="source-topbar-copy">管理可信来源，保持搜索、导入和维护彼此独立。</p>
         </div>
-        <div class="source-toolbar-actions">
-          <input
-            v-model="sourceImportUrl"
-            class="source-url-input"
-            type="url"
-            autocomplete="url"
-            placeholder="粘贴书源 JSON URL"
-            @keyup.enter="importSourceUrl"
-          />
-          <button
-            class="secondary-button"
-            type="button"
-            :disabled="sourceTransferBusy || !sourceImportUrl.trim()"
-            @click="importSourceUrl"
-          >
-            {{ sourceTransferBusy ? "处理中…" : "从 URL 导入" }}
-          </button>
-          <button class="secondary-button" type="button" :disabled="sourceTransferBusy" @click="openSourceImportPicker">
-            {{ sourceTransferBusy ? "处理中…" : "导入 JSON" }}
-          </button>
-          <button class="secondary-button" type="button" :disabled="sourceTransferBusy" @click="exportSources">
-            {{ sourceTransferBusy ? "处理中…" : "导出 JSON" }}
-          </button>
-          <button class="secondary-button" type="button" :disabled="sourceBusy || sourceTransferBusy" @click="saveSource">
-            {{ sourceBusy ? "保存中…" : "保存书源" }}
-          </button>
-          <button class="import-button" type="button" :disabled="sourceBusy || sourceTransferBusy" @click="validateSource">
-            {{ sourceBusy ? "校验中…" : "校验 JSON" }}
-          </button>
-          <button class="secondary-button" type="button" :disabled="sourceAuditBusy || sourceTransferBusy" @click="runSourceAudit">
+        <div class="source-topbar-actions">
+          <button class="secondary-button" type="button" @click="openSourcePanel('import')">导入书源</button>
+          <button class="import-button" type="button" @click="openSourcePanel('manage'); newSourceDraft()">新建书源</button>
+        </div>
+      </header>
+
+      <nav class="source-subnav" aria-label="书源工作区">
+        <button type="button" :class="{ active: sourcePanel === 'library' }" @click="openSourcePanel('library')">
+          <span>已保存书源</span>
+          <strong>{{ sources.length }}</strong>
+        </button>
+        <button type="button" :class="{ active: sourcePanel === 'import' }" @click="openSourcePanel('import')">
+          <span>导入书源</span>
+          <small>JSON / URL</small>
+        </button>
+        <button type="button" :class="{ active: sourcePanel === 'manage' }" @click="openSourcePanel('manage')">
+          <span>书源管理</span>
+          <small>配置与验证</small>
+        </button>
+      </nav>
+
+      <div class="source-utility-bar">
+        <span>数据保存在本机 · 当前仅执行安全子集</span>
+        <div class="source-utility-actions">
+          <button class="source-link-button" type="button" :disabled="sourceAuditBusy || sourceTransferBusy" @click="runSourceAudit">
             {{ sourceAuditBusy ? "审计中…" : "安全审计" }}
           </button>
-          <button class="secondary-button" type="button" :disabled="sourceCacheBusy || sourceTransferBusy" @click="refreshSourceCacheStatus">
+          <button class="source-link-button" type="button" :disabled="sourceCacheBusy || sourceTransferBusy" @click="refreshSourceCacheStatus">
             {{ sourceCacheBusy ? "读取中…" : "缓存状态" }}
           </button>
         </div>
-      </header>
+      </div>
 
       <p v-if="sourceTransferMessage" class="source-inline-success">{{ sourceTransferMessage }}</p>
       <div v-if="sourceSnapshots.length" class="source-snapshot-bar">
@@ -63,7 +65,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
         </button>
       </div>
 
-      <section v-if="sourceImportPreview" class="source-import-preview" aria-live="polite">
+      <section v-if="sourcePanel === 'import' && sourceImportPreview" class="source-import-preview" aria-live="polite">
         <div class="source-import-preview-heading">
           <div>
             <span class="eyebrow">SOURCE IMPORT REVIEW</span>
@@ -133,7 +135,40 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
         </div>
       </section>
 
-      <div class="source-grid">
+      <section v-if="sourcePanel === 'import'" class="source-import-workspace">
+        <div class="source-subview-heading">
+          <div>
+            <span class="eyebrow">SOURCE IMPORT</span>
+            <h2>导入书源</h2>
+            <p>在线地址和本地 JSON 都先进入预览，再由你确认写入已保存书源。</p>
+          </div>
+          <button class="source-link-button" type="button" @click="openSourcePanel('library')">返回已保存书源</button>
+        </div>
+        <div class="source-import-methods">
+          <article class="source-import-method">
+            <span class="eyebrow">REMOTE JSON</span>
+            <h3>从 URL 导入</h3>
+            <p>适合导入公开书源集合；系统会保留可识别字段，并把不执行的规则标记出来。</p>
+            <div class="source-import-inline">
+              <input v-model="sourceImportUrl" type="url" autocomplete="url" placeholder="https://example.com/sources.json" @keyup.enter="importSourceUrl" />
+              <button class="import-button" type="button" :disabled="sourceTransferBusy || !sourceImportUrl.trim()" @click="importSourceUrl">
+                {{ sourceTransferBusy ? "读取中…" : "读取并预览" }}
+              </button>
+            </div>
+          </article>
+          <article class="source-import-method">
+            <span class="eyebrow">LOCAL FILE</span>
+            <h3>导入本地 JSON</h3>
+            <p>选择一个或多个 JSON 文件，导入前可查看条目数量、兼容情况和失败原因。</p>
+            <div class="source-import-actions">
+              <button class="secondary-button" type="button" :disabled="sourceTransferBusy" @click="openSourceImportPicker">选择 JSON 文件</button>
+              <button class="source-link-button" type="button" :disabled="sourceTransferBusy" @click="exportSources">导出已保存书源</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <div v-if="sourcePanel === 'library'" class="source-grid source-library-grid">
         <section class="source-library">
           <div class="source-section-heading">
             <div>
@@ -145,7 +180,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
               <button class="source-link-button" type="button" @click="toggleSelectAllSources">
                 {{ allFilteredSourcesSelected ? "取消全选" : "全选当前" }}
               </button>
-              <button class="source-link-button" type="button" @click="newSourceDraft">新建</button>
+              <button class="source-link-button" type="button" @click="openSourcePanel('manage'); newSourceDraft()">新建</button>
             </div>
           </div>
           <div v-if="selectedSourceIds.length" class="source-batch-bar">
@@ -205,19 +240,27 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
                 </button>
                 <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click.stop="reorderSource(source, 'up')">上移</button>
                 <button class="source-link-button" type="button" :disabled="sourceBatchBusy" @click.stop="reorderSource(source, 'down')">下移</button>
+                <button class="source-link-button" type="button" @click.stop="openSourcePanel('manage')">管理</button>
                 <button class="source-link-button danger" type="button" @click.stop="deleteSource(source)">删除</button>
               </div>
             </article>
           </div>
         </section>
 
+      </div>
+
+      <div v-else-if="sourcePanel === 'manage'" class="source-grid source-manage-grid">
         <section class="source-editor">
           <div class="source-section-heading">
             <div>
               <span class="eyebrow">LEGADO-INSPIRED</span>
               <h2>粘贴书源配置</h2>
             </div>
-            <span class="source-limit">仅校验结构，不访问真实站点</span>
+            <div class="source-editor-actions">
+              <span class="source-limit">仅校验结构，不访问真实站点</span>
+              <button class="secondary-button" type="button" :disabled="sourceBusy || sourceTransferBusy" @click="validateSource">校验配置</button>
+              <button class="import-button" type="button" :disabled="sourceBusy || sourceTransferBusy" @click="saveSource">{{ sourceBusy ? "保存中…" : "保存书源" }}</button>
+            </div>
           </div>
           <textarea v-model="sourceJson" spellcheck="false" aria-label="书源 JSON"></textarea>
           <p class="source-hint">支持 searchUrl、bookInfoUrl、tocUrl、contentUrl，以及 search / bookInfo / toc / content 规则别名。</p>
@@ -284,7 +327,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
         </section>
       </div>
 
-      <section v-if="sourceAudit || sourceCacheStatus || sourceFailureHistory || sourceFailureHistoryBusy" class="source-audit-panel" aria-live="polite">
+      <section v-if="sourcePanel === 'manage' && (sourceAudit || sourceCacheStatus || sourceFailureHistory || sourceFailureHistoryBusy)" class="source-audit-panel" aria-live="polite">
         <div class="source-section-heading">
           <div>
             <span class="eyebrow">SECURITY & CACHE</span>
@@ -404,7 +447,7 @@ const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStack
         </div>
       </section>
 
-      <section class="source-debug">
+      <section v-if="sourcePanel === 'manage'" class="source-debug">
         <div class="source-debug-heading">
           <div>
             <span class="eyebrow">DEBUG RUN</span>
