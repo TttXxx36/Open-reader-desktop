@@ -1360,6 +1360,13 @@ fn normalize_url_with_base(value: &str, base: Option<&str>) -> Result<String, St
             .replace("{{pageNum}}", "1")
             .replace("{{page+1}}", "2")
             .replace("{{page-1}}", "0");
+        if candidate.starts_with('[')
+            || candidate.starts_with('{')
+            || candidate.starts_with('@')
+            || candidate.contains("::")
+        {
+            return Err("URL 字段包含 Legado 动态/列表表达式".to_string());
+        }
         if let Ok(parsed) = Url::parse(&candidate) {
             if matches!(parsed.scheme(), "http" | "https") {
                 normalized.push(candidate);
