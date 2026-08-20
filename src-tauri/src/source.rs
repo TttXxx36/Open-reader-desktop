@@ -362,6 +362,7 @@ pub struct SourceSecurityAudit {
 pub struct SearchResult {
     pub title: String,
     pub author: Option<String>,
+    pub intro: Option<String>,
     pub book_url: Option<String>,
     pub source_name: String,
 }
@@ -379,7 +380,11 @@ pub struct UnifiedSearchResult {
     pub source_name: String,
     pub title: String,
     pub author: Option<String>,
+    pub intro: Option<String>,
     pub book_url: Option<String>,
+    pub can_open: bool,
+    pub can_read: bool,
+    pub unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -964,12 +969,20 @@ impl SourceEngine {
                         stop_reason: paged.stop_reason,
                         rule_evaluations: paged.rule_evaluations,
                     });
-                    results.extend(paged.results.into_iter().map(|item| UnifiedSearchResult {
-                        source_id: definition.id.clone(),
-                        source_name: definition.name.clone(),
-                        title: item.title,
-                        author: item.author,
-                        book_url: item.book_url,
+                    results.extend(paged.results.into_iter().map(|item| {
+                        let (can_open, can_read, unavailable_reason) =
+                            source_capabilities(&definition.source, item.book_url.as_deref());
+                        UnifiedSearchResult {
+                            source_id: definition.id.clone(),
+                            source_name: definition.name.clone(),
+                            title: item.title,
+                            author: item.author,
+                            intro: item.intro,
+                            book_url: item.book_url,
+                            can_open,
+                            can_read,
+                            unavailable_reason,
+                        }
                     }));
                 }
                 Ok((definition, Err(error))) => {
@@ -1272,6 +1285,10 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<BookInfo, SourceError> {
+        let rules = source
+            .book_info
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("bookInfo rules are required".to_string()))?;
         let template = runtime_endpoint_or_fallback(
             source,
             "bookInfoUrl",
@@ -1288,10 +1305,6 @@ impl SourceEngine {
                 debug_steps,
             )
             .await?;
-        let rules = source
-            .book_info
-            .as_ref()
-            .ok_or_else(|| SourceError::InvalidConfig("bookInfo rules are required".to_string()))?;
         if rules.is_json() {
             return parse_book_info_json(rules, &body, book_url)
                 .map_err(|error| rule_error("book_info", "document", error));
@@ -1361,16 +1374,16 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
+        let rules = source
+            .toc
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("toc rules are required".to_string()))?;
         let template =
             runtime_endpoint_or_fallback(source, "tocUrl", source.toc_url.as_deref(), book_url);
         let context = SourceRequestContext::book(book_url);
         let (body, url) = self
             .fetch_stage_chain("toc", template, &source.headers, &context, debug_steps)
             .await?;
-        let rules = source
-            .toc
-            .as_ref()
-            .ok_or_else(|| SourceError::InvalidConfig("toc rules are required".to_string()))?;
         if rules.is_json() {
             return parse_chapter_list_json(rules, &body, &url)
                 .map_err(|error| rule_error("toc", "document", error));
@@ -1384,6 +1397,10 @@ impl SourceEngine {
         chapter: &SourceChapter,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<SourceChapterContent, SourceError> {
+        let rules = source
+            .content
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
         let template = runtime_endpoint_or_fallback(
             source,
             "contentUrl",
@@ -1394,10 +1411,6 @@ impl SourceEngine {
         let (body, content_url) = self
             .fetch_stage_chain("content", template, &source.headers, &context, debug_steps)
             .await?;
-        let rules = source
-            .content
-            .as_ref()
-            .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
         let content = if rules.is_json() {
             parse_json_rule_document(&body, rules.item.as_deref(), rules.content.as_ref())
                 .map_err(|error| rule_error("content", "content", error))?
@@ -1659,6 +1672,13 @@ impl SourceEngine {
                 .transpose()?
                 .flatten()
                 .or_else(|| json_object_text(item, &["author", "bookAuthor"]));
+            let intro = rules
+                .intro
+                .as_ref()
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
+                .transpose()?
+                .flatten()
+                .or_else(|| json_object_text(item, &["intro", "description", "desc", "summary"]));
             let book_url = rules
                 .url
                 .as_ref()
@@ -1671,6 +1691,7 @@ impl SourceEngine {
                 results.push(SearchResult {
                     title,
                     author: non_empty(author),
+                    intro: non_empty(intro),
                     book_url: non_empty(book_url),
                     source_name: source.name.clone(),
                 });
@@ -1713,6 +1734,25 @@ impl SourceEngine {
                 .as_ref()
                 .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?;
+            let intro = rules
+                .intro
+                .as_ref()
+                .map(|rule| extract_from_element_optional(item, rule))
+                .transpose()?
+                .flatten()
+                .or_else(|| {
+                    extract_from_element_optional(item, &SourceRule::Selector(".intro".to_string()))
+                        .ok()
+                        .flatten()
+                })
+                .or_else(|| {
+                    extract_from_element_optional(
+                        item,
+                        &SourceRule::Selector(".description".to_string()),
+                    )
+                    .ok()
+                    .flatten()
+                });
             let book_url = rules
                 .url
                 .as_ref()
@@ -1726,6 +1766,7 @@ impl SourceEngine {
                 results.push(SearchResult {
                     title,
                     author: non_empty(author.flatten()),
+                    intro: non_empty(intro),
                     book_url: non_empty(book_url),
                     source_name: source.name.clone(),
                 });
@@ -1780,12 +1821,18 @@ fn dedupe_search_results(mut results: Vec<UnifiedSearchResult>) -> Vec<UnifiedSe
         (
             normalize_search_text(&left.title),
             normalize_search_text(left.author.as_deref().unwrap_or_default()),
+            !left.can_read,
+            !left.can_open,
+            left.book_url.is_none(),
             normalize_search_text(&left.source_name),
             left.source_id.clone(),
         )
             .cmp(&(
                 normalize_search_text(&right.title),
                 normalize_search_text(right.author.as_deref().unwrap_or_default()),
+                !right.can_read,
+                !right.can_open,
+                right.book_url.is_none(),
                 normalize_search_text(&right.source_name),
                 right.source_id.clone(),
             ))
@@ -1796,6 +1843,26 @@ fn dedupe_search_results(mut results: Vec<UnifiedSearchResult>) -> Vec<UnifiedSe
         .into_iter()
         .filter(|item| seen.insert(search_result_key(item)))
         .collect()
+}
+
+fn source_capabilities(
+    source: &BookSource,
+    book_url: Option<&str>,
+) -> (bool, bool, Option<String>) {
+    if book_url.map_or(true, |value| value.trim().is_empty()) {
+        return (false, false, Some("搜索结果没有可用的书籍链接".to_string()));
+    }
+
+    let can_open = source.book_info.is_some() && source.toc.is_some();
+    let can_read = can_open && source.content.is_some();
+    let reason = if !can_open {
+        Some("该书源仅支持搜索，未配置书籍详情或目录规则".to_string())
+    } else if !can_read {
+        Some("该书源缺少正文规则，暂时无法阅读".to_string())
+    } else {
+        None
+    };
+    (can_open, can_read, reason)
 }
 
 fn search_result_key(item: &UnifiedSearchResult) -> String {
@@ -3690,27 +3757,63 @@ mod tests {
                 source_name: "书源 B".to_string(),
                 title: " 测试 书 ".to_string(),
                 author: Some(" 作者甲 ".to_string()),
+                intro: None,
                 book_url: Some("https://b.test/book".to_string()),
+                can_open: true,
+                can_read: true,
+                unavailable_reason: None,
             },
             UnifiedSearchResult {
                 source_id: "source-a".to_string(),
                 source_name: "书源 A".to_string(),
                 title: "测试书".to_string(),
                 author: Some("作者甲".to_string()),
+                intro: None,
                 book_url: Some("https://a.test/book".to_string()),
+                can_open: true,
+                can_read: true,
+                unavailable_reason: None,
             },
             UnifiedSearchResult {
                 source_id: "source-a".to_string(),
                 source_name: "书源 A".to_string(),
                 title: "另一本".to_string(),
                 author: None,
+                intro: None,
                 book_url: None,
+                can_open: false,
+                can_read: false,
+                unavailable_reason: Some("搜索结果没有可用的书籍链接".to_string()),
             },
         ]);
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].title, "另一本");
         assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
+    fn exposes_search_result_capabilities_without_blocking_search_only_sources() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Search only",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "search": { "item": "article", "title": { "selector": "h2" } }
+            }"#,
+        )
+        .expect("source should parse");
+        let (can_open, can_read, reason) =
+            source_capabilities(&source, Some("https://example.test/book/1"));
+        assert!(!can_open);
+        assert!(!can_read);
+        assert_eq!(
+            reason.as_deref(),
+            Some("该书源仅支持搜索，未配置书籍详情或目录规则")
+        );
+
+        let missing_url = source_capabilities(&source, None);
+        assert!(!missing_url.0);
+        assert_eq!(missing_url.2.as_deref(), Some("搜索结果没有可用的书籍链接"));
     }
 
     #[test]

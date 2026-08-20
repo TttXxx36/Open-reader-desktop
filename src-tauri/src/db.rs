@@ -130,9 +130,17 @@ pub struct ChapterSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ReadingState {
+    pub position: f64,
+    pub read_state: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct BookDetail {
     pub book: BookSummary,
     pub chapters: Vec<ChapterSummary>,
+    pub reading_state: ReadingState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,7 +341,7 @@ pub struct SourceSnapshotSummary {
 }
 
 const SOURCE_SNAPSHOT_RETENTION_COUNT: i64 = 20;
-const MAX_SOURCE_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SOURCE_SNAPSHOT_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SourceWrite {
@@ -2713,7 +2721,32 @@ impl Database {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(BookDetail { book, chapters })
+        let reading_state = connection
+            .query_row(
+                "SELECT position, read_state, updated_at
+                 FROM book_reading_state
+                 WHERE book_id = ?1",
+                params![book_id],
+                |row| {
+                    Ok(ReadingState {
+                        position: row.get(0)?,
+                        read_state: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_else(|| ReadingState {
+                position: 0.0,
+                read_state: "unread".to_string(),
+                updated_at: book.updated_at.clone(),
+            });
+
+        Ok(BookDetail {
+            book,
+            chapters,
+            reading_state,
+        })
     }
 
     pub fn get_chapter_content(
@@ -2754,23 +2787,43 @@ impl Database {
         chapter_id: &str,
         current_chapter: i64,
         progress: f64,
+        position: f64,
+        read_state: Option<&str>,
     ) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let progress = progress.clamp(0.0, 1.0);
+        let position = if position.is_finite() {
+            position.max(0.0)
+        } else {
+            0.0
+        };
+        let read_state = match read_state {
+            Some("unread") => "unread",
+            Some("reading") => "reading",
+            Some("finished") => "finished",
+            _ if progress >= 0.999 => "finished",
+            _ if progress > 0.0 || position > 0.0 => "reading",
+            _ => "unread",
+        };
         let changed = connection.execute(
             "UPDATE books
              SET current_chapter = ?1, progress = ?2, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?3
                AND EXISTS (SELECT 1 FROM chapters WHERE id = ?4 AND book_id = ?3)",
-            params![
-                current_chapter,
-                progress.clamp(0.0, 1.0),
-                book_id,
-                chapter_id
-            ],
+            params![current_chapter, progress, book_id, chapter_id],
         )?;
         if changed == 0 {
             return Err(DbError::NotFound);
         }
+        connection.execute(
+            "INSERT INTO book_reading_state (book_id, position, read_state)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(book_id) DO UPDATE SET
+                position = excluded.position,
+                read_state = excluded.read_state,
+                updated_at = CURRENT_TIMESTAMP",
+            params![book_id, position, read_state],
+        )?;
         Ok(())
     }
 
@@ -2850,6 +2903,7 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             include_str!("../migrations/0014_book_shelf_metadata.sql"),
         ),
         (15_i64, include_str!("../migrations/0015_book_covers.sql")),
+        (17_i64, include_str!("../migrations/0017_reading_state.sql")),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -3280,6 +3334,67 @@ fn source_failure_history_from_row(row: &Row<'_>) -> rusqlite::Result<SourceFail
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persists_reading_position_and_explicit_read_state() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-reading-state-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, format) VALUES (?1, ?2, ?3)",
+                    params!["reading-book", "Reading state", "txt"],
+                )
+                .expect("book should insert");
+            connection
+                .execute(
+                    "INSERT INTO chapters (id, book_id, chapter_index, title, content)
+                     VALUES (?1, ?2, 0, ?3, ?4)",
+                    params!["reading-chapter", "reading-book", "第一章", "正文"],
+                )
+                .expect("chapter should insert");
+        }
+
+        database
+            .save_progress(
+                "reading-book",
+                "reading-chapter",
+                0,
+                0.64,
+                812.5,
+                Some("reading"),
+            )
+            .expect("progress should save");
+        let detail = database
+            .get_book_detail("reading-book")
+            .expect("book detail should load");
+        assert!((detail.reading_state.position - 812.5).abs() < f64::EPSILON);
+        assert_eq!(detail.reading_state.read_state, "reading");
+        assert!((detail.book.progress - 0.64).abs() < f64::EPSILON);
+
+        database
+            .save_progress(
+                "reading-book",
+                "reading-chapter",
+                0,
+                1.0,
+                1600.0,
+                Some("finished"),
+            )
+            .expect("finished state should save");
+        let finished = database
+            .get_book_detail("reading-book")
+            .expect("finished detail should load");
+        assert_eq!(finished.reading_state.read_state, "finished");
+        assert_eq!(finished.book.progress, 1.0);
+    }
 
     #[test]
     fn persists_image_sequence_schema_and_enforces_recovery_contract() {

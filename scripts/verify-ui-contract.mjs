@@ -57,7 +57,7 @@ requireContract(app.includes(":focus-visible"), "阅读器视图必须提供键�
 requireContract(app.includes("view === 'search'") && app.includes("id=\"search\""), "搜索必须拥有独立的左侧导航工作区");
 requireContract(app.includes("search-results-panel") && app.includes("在线搜索结果"), "在线搜索结果必须与本地书架明确分区");
 requireContract(app.includes("class=\"shelf-section\"") && app.includes("本地书籍"), "本地书架必须拥有独立网格分区");
-requireContract(app.includes("<article\n              v-for=\"item in searchResult.results\"") && app.includes("@click=\"openRemoteBook(item)\""), "搜索结果条目必须使用整行可点击容器打开远端书籍");
+requireContract(app.includes("<article\n              v-for=\"item in searchResult.results\"") && app.includes("openRemoteBook(item)") && app.includes("item.can_open"), "搜索结果条目必须使用能力判断后的整行可点击容器打开远端书籍");
 requireContract(app.includes("加入书架") && app.includes("toggleRemoteShelf"), "搜索结果必须提供加入书架入口");
 requireContract(app.includes("startShelfLongPress") && app.includes("shelf-card-menu"), "书架封面必须支持长按和更多操作菜单");
 requireContract(app.includes("rename_book") && app.includes("delete_book"), "本地书籍必须提供重命名和删除命令");
@@ -66,6 +66,9 @@ requireContract(!app.includes("search-diagnostics") && !app.includes("search-res
 requireContract(app.includes("const bookUrl = item.book_url?.trim();"), "打开远端书籍前必须校验并规范化书籍链接");
 requireContract(app.includes("function retryRemoteBook") && app.includes("forceRefresh"), "远端书籍规则失败必须提供强制刷新重试");
 requireContract(app.includes("remoteFailedItem") && app.includes("重试并刷新"), "远端书籍失败状态和重试按钮必须保留");
+requireContract(app.includes("item.unavailable_reason") && app.includes("仅搜索"), "不可阅读书源必须明确显示原因并禁用打开操作");
+requireContract(localReaderView.includes("reading_state") && localReaderView.includes("标记已读") && localReaderView.includes("scheduleProgressSave"), "本地阅读器必须保存滚动位置并支持已读状态切换");
+requireContract(app.includes("MAX_SOURCE_IMPORT_BYTES = 128 * 1024 * 1024"), "书源导入前端限制必须与后端 128 MB 上限一致");
 requireContract(sourceView.includes("source-subnav") && sourceView.includes("sourcePanel"), "书源页必须提供已保存、导入、管理的二级导航");
 requireContract(sourceView.includes("sourcePanel === 'library'") && sourceView.includes("sourcePanel === 'manage'"), "书源页必须把书源列表与配置编辑拆分");
 requireContract(sourceView.includes("source-import-workspace") && sourceView.includes("source-import-methods"), "书源导入必须提供独立工作区");

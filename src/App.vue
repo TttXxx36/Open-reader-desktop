@@ -9,7 +9,7 @@ import SourceView from "./components/SourceView.vue";
 import RemoteReaderView from "./components/RemoteReaderView.vue";
 import LocalReaderView from "./components/LocalReaderView.vue";
 
-const MAX_SOURCE_IMPORT_BYTES = 16 * 1024 * 1024;
+const MAX_SOURCE_IMPORT_BYTES = 128 * 1024 * 1024;
 
 type View = "library" | "search" | "reader" | "sources" | "settings";
 type ReaderTheme = "night" | "paper" | "sepia" | "custom";
@@ -37,6 +37,13 @@ interface BookSummary {
   image_sequence_missing_pages: number;
   image_sequence_stale_pages: number;
 }
+
+interface ReadingState {
+  position: number;
+  read_state: "unread" | "reading" | "finished";
+  updated_at: string;
+}
+
 interface DuplicateBookGroup {
   key: string;
   books: BookSummary[];
@@ -273,6 +280,7 @@ interface ChapterSummary {
 interface BookDetail {
   book: BookSummary;
   chapters: ChapterSummary[];
+  reading_state: ReadingState;
 }
 
 interface ChapterContent {
@@ -576,8 +584,12 @@ interface UnifiedSearchItem {
   source_name: string;
   title: string;
   author: string | null;
+  intro: string | null;
   book_url: string | null;
   cover_url?: string | null;
+  can_open: boolean;
+  can_read: boolean;
+  unavailable_reason: string | null;
 }
 
 interface RemoteShelfEntry {
@@ -2286,7 +2298,7 @@ async function importSourceFile(event: Event) {
   if (!file) return;
 
   if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-    errorMessage.value = "书源文件超过 16 MB 限制";
+    errorMessage.value = "书源文件超过 128 MB 限制";
     input.value = "";
     return;
   }
@@ -2311,9 +2323,11 @@ async function importSourceFile(event: Event) {
 async function openRemoteBook(item: UnifiedSearchItem, forceRefresh = false) {
   const bookUrl = item.book_url?.trim();
   view.value = "search";
-  if (!bookUrl) {
+  if (!bookUrl || !item.can_open || !item.can_read) {
     remoteFailedItem.value = item;
-    searchInlineMessage.value = "这个结果没有可用的书籍链接，无法打开。请重试该书源或选择其他结果。";
+    searchInlineMessage.value = item.unavailable_reason
+      ? `暂时无法打开：${item.unavailable_reason}`
+      : "这个结果没有完整的书籍详情或正文规则，无法打开。请选择其他来源。";
     errorMessage.value = "";
     return;
   }
@@ -3814,6 +3828,10 @@ async function loadChapter(chapterId: string, persist = true) {
     const index = detail.value.chapters.findIndex((item) => item.id === chapterId);
     detail.value.book.current_chapter = Math.max(index, 0);
     if (persist && index >= 0) {
+      detail.value.reading_state = {
+        ...detail.value.reading_state,
+        position: 0,
+      };
       await saveProgress(index, chapterId);
     }
   } catch (error) {
@@ -3821,18 +3839,34 @@ async function loadChapter(chapterId: string, persist = true) {
   }
 }
 
-async function saveProgress(index: number, chapterId: string) {
+async function saveProgress(
+  index: number,
+  chapterId: string,
+  readingPosition = 0,
+  progressOverride?: number,
+  readState?: "unread" | "reading" | "finished",
+) {
   if (!detail.value) return;
 
   const lastIndex = Math.max(detail.value.chapters.length - 1, 1);
-  const progress = index / lastIndex;
+  const progress = Math.max(0, Math.min(1, progressOverride ?? index / lastIndex));
+  const position = Number.isFinite(readingPosition) ? Math.max(0, readingPosition) : 0;
+  const resolvedReadState = readState
+    ?? (progress >= 0.999 ? "finished" : progress > 0 || position > 0 ? "reading" : "unread");
   await invoke("save_progress", {
     bookId: detail.value.book.id,
     chapterId,
     currentChapter: index,
     progress,
+    readingPosition: position,
+    readState: resolvedReadState,
   });
   detail.value.book.progress = progress;
+  detail.value.reading_state = {
+    ...detail.value.reading_state,
+    position,
+    read_state: resolvedReadState,
+  };
   const bookIndex = books.value.findIndex((item) => item.id === detail.value?.book.id);
   if (bookIndex >= 0) {
     books.value[bookIndex] = { ...books.value[bookIndex], current_chapter: index, progress };
@@ -4723,31 +4757,32 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
               v-for="item in searchResult.results"
               :key="item.source_id + '-' + item.title + '-' + (item.author || '')"
               class="search-result-row"
-              :class="{ clickable: Boolean(item.book_url), loading: remoteBusy && Boolean(item.book_url), unavailable: !item.book_url }"
-              :aria-label="item.book_url ? '打开 ' + (item.title || '未命名书籍') : (item.title || '未命名书籍') + ' 没有可用链接'"
-              :tabindex="item.book_url && !remoteBusy ? 0 : -1"
-              role="button"
-              @click="openRemoteBook(item)"
-              @keydown.enter.prevent="openRemoteBook(item)"
+              :class="{ clickable: item.can_open && item.can_read, loading: remoteBusy && item.can_open && item.can_read, unavailable: !item.can_open || !item.can_read }"
+              :aria-label="item.can_open && item.can_read ? '打开 ' + (item.title || '未命名书籍') : (item.title || '未命名书籍') + ' 暂不可阅读'"
+              :tabindex="item.can_open && item.can_read && !remoteBusy ? 0 : -1"
+              :role="item.can_open && item.can_read ? 'button' : undefined"
+              @click="item.can_open && item.can_read ? openRemoteBook(item) : undefined"
+              @keydown.enter.prevent="item.can_open && item.can_read ? openRemoteBook(item) : undefined"
             >
               <span class="search-result-copy">
                 <strong>{{ item.title || "未命名书籍" }}</strong>
                 <span>{{ item.author || "作者未知" }}</span>
+                <small v-if="item.intro" class="search-result-intro">{{ item.intro }}</small>
               </span>
               <span class="search-result-actions">
                 <span class="search-source-badge">{{ item.source_name }}</span>
                 <button
                   class="search-save-button"
                   type="button"
-                  :disabled="!item.book_url"
+                  :disabled="!item.book_url || !item.can_open"
                   @click.stop="toggleRemoteShelf(item)"
                 >{{ isRemoteShelfSaved(item) ? "已在书架" : "加入书架" }}</button>
                 <button
                   class="search-open-button"
                   type="button"
-                  :disabled="!item.book_url || remoteBusy"
+                  :disabled="!item.book_url || !item.can_open || !item.can_read || remoteBusy"
                   @click.stop="openRemoteBook(item)"
-                >{{ item.book_url ? (remoteBusy ? "加载中…" : "打开") : "无链接" }}</button>
+                >{{ item.can_open && item.can_read ? (remoteBusy ? "加载中…" : "打开") : "仅搜索" }}</button>
               </span>
             </article>
           </div>
@@ -5342,6 +5377,16 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.search-result-intro {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #718096;
+  font-size: 11px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .search-result-actions {

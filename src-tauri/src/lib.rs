@@ -611,9 +611,18 @@ fn save_progress(
     chapter_id: String,
     current_chapter: i64,
     progress: f64,
+    reading_position: Option<f64>,
+    read_state: Option<String>,
 ) -> Result<(), String> {
     database
-        .save_progress(&book_id, &chapter_id, current_chapter, progress)
+        .save_progress(
+            &book_id,
+            &chapter_id,
+            current_chapter,
+            progress,
+            reading_position.unwrap_or(0.0),
+            read_state.as_deref(),
+        )
         .map_err(|error| error.to_string())
 }
 
@@ -1007,7 +1016,7 @@ fn audit_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceAudit
         .collect())
 }
 
-const MAX_SOURCE_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SOURCE_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_SOURCE_IMPORT_TIMEOUT_SECS: u64 = 30;
 const MAX_SOURCE_IMPORT_URL_BYTES: usize = 2 * 1024;
 
@@ -1876,7 +1885,7 @@ mod tests {
         assert!(validate_source_bundle_size(MAX_SOURCE_BUNDLE_BYTES).is_ok());
         let error = validate_source_bundle_size(MAX_SOURCE_BUNDLE_BYTES + 1)
             .expect_err("payload over the expanded limit should be rejected");
-        assert_eq!(error, "书源文件超过 16 MB 限制");
+        assert_eq!(error, "书源文件超过 128 MB 限制");
     }
 }
 
