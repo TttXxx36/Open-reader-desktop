@@ -1263,11 +1263,12 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<BookInfo, SourceError> {
-        ensure_runtime_endpoint(source, "bookInfoUrl")?;
-        let template = source
-            .book_info_url
-            .as_deref()
-            .ok_or_else(|| SourceError::InvalidConfig("bookInfoUrl is required".to_string()))?;
+        let template = runtime_endpoint_or_fallback(
+            source,
+            "bookInfoUrl",
+            source.book_info_url.as_deref(),
+            book_url,
+        );
         let context = SourceRequestContext::book(book_url);
         let (body, _url) = self
             .fetch_stage_chain(
@@ -1303,11 +1304,12 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
-        ensure_runtime_endpoint(source, "tocUrl")?;
-        let template = source
-            .toc_url
-            .as_deref()
-            .ok_or_else(|| SourceError::InvalidConfig("tocUrl is required".to_string()))?;
+        let template = runtime_endpoint_or_fallback(
+            source,
+            "tocUrl",
+            source.toc_url.as_deref(),
+            book_url,
+        );
         let context = SourceRequestContext::book(book_url);
         let (body, url) = self
             .fetch_stage_chain("toc", template, &source.headers, &context, debug_steps)
@@ -1328,11 +1330,12 @@ impl SourceEngine {
         chapter: &SourceChapter,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<SourceChapterContent, SourceError> {
-        ensure_runtime_endpoint(source, "contentUrl")?;
-        let template = source
-            .content_url
-            .as_deref()
-            .ok_or_else(|| SourceError::InvalidConfig("contentUrl is required".to_string()))?;
+        let template = runtime_endpoint_or_fallback(
+            source,
+            "contentUrl",
+            source.content_url.as_deref(),
+            chapter.url.as_str(),
+        );
         let context = SourceRequestContext::chapter(&chapter.url);
         let (body, content_url) = self
             .fetch_stage_chain("content", template, &source.headers, &context, debug_steps)
@@ -1384,17 +1387,18 @@ impl SourceEngine {
         policy: &NextPagePolicy,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<SourceChapterContent, SourceError> {
-        ensure_runtime_endpoint(source, "contentUrl")?;
         if !policy.enabled {
             return self
                 .fetch_chapter_content(source, chapter, debug_steps)
                 .await;
         }
 
-        let template = source
-            .content_url
-            .as_deref()
-            .ok_or_else(|| SourceError::InvalidConfig("contentUrl is required".to_string()))?;
+        let template = runtime_endpoint_or_fallback(
+            source,
+            "contentUrl",
+            source.content_url.as_deref(),
+            chapter.url.as_str(),
+        );
         let rules = source
             .content
             .as_ref()
@@ -2316,13 +2320,13 @@ pub fn validate_source_json(input: &str) -> SourceValidation {
     validate_replace_rules(&source.replace_rules, &mut errors, &mut warnings);
 
     if source.book_info_url.is_none() {
-        warnings.push("未配置 bookInfoUrl，端到端流程无法完成详情链路".to_string());
+        warnings.push("未配置 bookInfoUrl，将使用搜索结果详情页作为回退地址".to_string());
     }
     if source.toc_url.is_none() {
-        warnings.push("未配置 tocUrl，端到端流程无法完成目录链路".to_string());
+        warnings.push("未配置 tocUrl，将使用书籍详情页作为回退地址".to_string());
     }
     if source.content_url.is_none() {
-        warnings.push("未配置 contentUrl，端到端流程无法完成正文链路".to_string());
+        warnings.push("未配置 contentUrl，将使用章节链接作为回退地址".to_string());
     }
     for header in source.headers.keys() {
         let normalized = header.to_ascii_lowercase();
@@ -2519,6 +2523,20 @@ fn ensure_runtime_endpoint(source: &BookSource, key: &str) -> Result<(), SourceE
         )));
     }
     Ok(())
+}
+
+fn runtime_endpoint_or_fallback<'a>(
+    source: &BookSource,
+    key: &str,
+    configured: Option<&'a str>,
+    fallback: &'a str,
+) -> &'a str {
+    if source.legacy_urls.contains_key(key) {
+        return fallback;
+    }
+    configured
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback)
 }
 
 fn validate_endpoint(name: &str, value: &str, errors: &mut Vec<String>) {
@@ -3301,6 +3319,60 @@ mod tests {
         assert_eq!(source.custom_order, 12);
         assert_eq!(source.weight, 80);
         assert_eq!(source.comment.as_deref(), Some("仅用于授权夹具"));
+    }
+
+    #[test]
+    fn uses_direct_page_fallback_for_missing_runtime_endpoints() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Fallback endpoint",
+              "searchUrl": "https://example.test/search?q={{keyword}}"
+            }"#,
+        )
+        .expect("fallback endpoint source");
+
+        assert_eq!(
+            runtime_endpoint_or_fallback(
+                &source,
+                "bookInfoUrl",
+                source.book_info_url.as_deref(),
+                "https://example.test/book/1",
+            ),
+            "https://example.test/book/1"
+        );
+        assert_eq!(
+            runtime_endpoint_or_fallback(
+                &source,
+                "tocUrl",
+                source.toc_url.as_deref(),
+                "https://example.test/book/1",
+            ),
+            "https://example.test/book/1"
+        );
+        assert_eq!(
+            runtime_endpoint_or_fallback(
+                &source,
+                "contentUrl",
+                source.content_url.as_deref(),
+                "https://example.test/chapter/1",
+            ),
+            "https://example.test/chapter/1"
+        );
+
+        let mut legacy_source = source.clone();
+        legacy_source.legacy_urls.insert(
+            "bookInfoUrl".to_string(),
+            "@js:return 'dynamic'".to_string(),
+        );
+        assert_eq!(
+            runtime_endpoint_or_fallback(
+                &legacy_source,
+                "bookInfoUrl",
+                Some("https://example.test/ignored"),
+                "https://example.test/book/1",
+            ),
+            "https://example.test/book/1"
+        );
     }
 
     #[test]
