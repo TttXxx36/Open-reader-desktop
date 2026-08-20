@@ -37,7 +37,7 @@
 
 ## 当前状态
 
-M5.5 已完成安全审计、缓存统计和前端可观测性；M5.6 已加入真实图标、自动安装器/便携 ZIP 发布和 SHA-256 清单；M6.6 已完成阅读工作区视觉刷新。当前 main 的 CI run [31574147034](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574147034)、Windows release run [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 和 installer smoke run [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 均通过；签名暂缓，覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘焦点和高对比度仍需人工回归。
+M5.5 已完成安全审计、缓存统计和前端可观测性；M5.6 已加入真实图标、自动安装器/便携 ZIP 发布和 SHA-256 清单；M6.6 已完成阅读工作区视觉刷新。当前 main 的 CI run [32368235610](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368235610)、Windows release run [32368262290](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368262290) 和 installer smoke run [32369094467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32369094467) 均通过；Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16` 的 digest 为 `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`；签名暂缓，覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘焦点和高对比度仍需人工回归。
 
 ## M5.6 发布预检
 
@@ -74,7 +74,7 @@ npm run verify:release:strict
 要手动重跑：
 
 1. 打开 Actions → Windows installer smoke → Run workflow。
-2. 在 `release_run_id` 填写成功的 Windows release run ID（当前候选为 `31574767135`）。
+2. 在 `release_run_id` 填写成功的 Windows release run ID（当前候选为 `32368262290`）。
 3. 等待 smoke job 完成；失败时先查看失败步骤，再决定是否修复 workflow 或记录环境差异。
 
 ## 手动 Windows 发布候选工作流
