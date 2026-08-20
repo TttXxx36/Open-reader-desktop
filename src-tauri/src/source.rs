@@ -1304,12 +1304,8 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
-        let template = runtime_endpoint_or_fallback(
-            source,
-            "tocUrl",
-            source.toc_url.as_deref(),
-            book_url,
-        );
+        let template =
+            runtime_endpoint_or_fallback(source, "tocUrl", source.toc_url.as_deref(), book_url);
         let context = SourceRequestContext::book(book_url);
         let (body, url) = self
             .fetch_stage_chain("toc", template, &source.headers, &context, debug_steps)
