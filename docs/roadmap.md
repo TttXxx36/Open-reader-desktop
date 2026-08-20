@@ -1,6 +1,6 @@
 # 开发路线图
 
-> 维护复核（2026-08-20）：main 提交 [b2ee3d4](https://github.com/TttXxx36/Open-reader-desktop/commit/b2ee3d4c26423b434036cbc5f646749476e4d91e) 已合并 PR10；合并后 CI [32354559064](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32354559064)、Windows Release [32354623024](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32354623024) 和 installer smoke [32355446613](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32355446613) 均通过。正式发布仍受目标 Windows 手工验收和签名暂缓约束。完整未完成清单见 [2026-08-20 开发状态审计](development-status-2026-08-20.md)。
+> 后续维护复核（2026-08-20）：main 提交 [89185e6](https://github.com/TttXxx36/Open-reader-desktop/commit/89185e640cefb2665510fc8b4622d918a9f1ab16) 已按顺序合并 PR11、PR12、PR13；CI [32368235610](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368235610)、Windows Release [32368262290](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368262290) 和 installer smoke [32369094467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32369094467) 均通过。Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16` 的 digest 为 `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`；正式发布仍受目标 Windows 手工验收和签名暂缓约束。
 
 路线图按“可独立验收、可回滚、可持续兼容”的里程碑推进。每个里程碑都必须在 GitHub Issue、PR、自动化检查和变更记录中留下证据；“已实现”只表示代码与远程 CI 通过，不替代 Windows 安装包手工验收。
 
