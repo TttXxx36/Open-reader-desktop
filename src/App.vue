@@ -3827,7 +3827,10 @@ function continueReading(book: BookSummary) {
 }
 
 function closeReader() {
-  view.value = searchResult.value ? "search" : "library";
+  // The shelf navigation must always return to the shelf. Search results live
+  // in their own workspace and should not hijack the library route merely
+  // because a previous search is still cached in memory.
+  view.value = "library";
   detail.value = null;
   chapter.value = null;
   remoteBook.value = null;
