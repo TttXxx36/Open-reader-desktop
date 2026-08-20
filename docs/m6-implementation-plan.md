@@ -128,6 +128,7 @@ M7 交接：
 - M6.3/M6.4 验证基线：前端构建必须通过新增组件导入、设置迁移、阅读 CSS 变量和首页契约检查；Windows 安装包需手工确认设置实时生效、重启保持、重置回退、Tab 焦点和 1024px 左右窗口不横向溢出。
 - CI 验证：运行 [30746099373](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30746099373) 通过 Frontend checks（typecheck、Vite build、UI contract）与 Rust checks（fmt、cargo check、Rust tests）；视图组件拆分和设置 v2 契约均已覆盖。
 - 2026-08-20：针对 Windows 验收中“点击在线结果后规则解析失败”完成 P0 修复切片：搜索/详情/目录/正文规则错误保留阶段与字段上下文；非关键详情字段允许降级；搜索和章节项跳过不完整候选；目录为空时不再生成伪造章节 URL；搜索页增加失败重试；导入预览区分可运行、兼容保留和需人工处理。
+- 2026-08-20：补齐 P1 安全兼容回退：搜索/目录条目在 Legacy 或规则无产出时仅回退到普通 `a[href]`、常见标题选择器和固定 JSON 字段；过滤 javascript/data/mailto/tel 链接；详情元数据允许从常见 HTML/JSON 字段补全。补齐 P2 回归夹具和 UI 契约，覆盖 Legacy URL、JSON 常见字段、目录链接回退及危险链接拒绝；不扩大 XPath、JavaScript、Cookie 或 Authorization 的执行边界。
 
 ## 四、测试与验收
 

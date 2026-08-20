@@ -1299,20 +1299,57 @@ impl SourceEngine {
         let document = Html::parse_document(&body);
 
         Ok(BookInfo {
-            title: extract_document_rule(&document, rules.title.as_ref())
-                .map_err(|error| rule_error("book_info", "title", error))?
-                .unwrap_or_else(|| "未命名书籍".to_string()),
+            title: extract_document_rule_with_fallback(
+                &document,
+                rules.title.as_ref(),
+                &[
+                    ("h1", None),
+                    ("h2", None),
+                    (".book-title", None),
+                    (".bookname", None),
+                    (".title", None),
+                ],
+            )
+            .map_err(|error| rule_error("book_info", "title", error))?
+            .unwrap_or_else(|| "未命名书籍".to_string()),
             author: non_empty(
-                extract_document_rule(&document, rules.author.as_ref())
-                    .map_err(|error| rule_error("book_info", "author", error))?,
+                extract_document_rule_with_fallback(
+                    &document,
+                    rules.author.as_ref(),
+                    &[
+                        (".author", None),
+                        (".book-author", None),
+                        (r#"[itemprop="author"]"#, None),
+                    ],
+                )
+                .map_err(|error| rule_error("book_info", "author", error))?,
             ),
             intro: non_empty(
-                extract_document_rule(&document, rules.intro.as_ref())
-                    .map_err(|error| rule_error("book_info", "intro", error))?,
+                extract_document_rule_with_fallback(
+                    &document,
+                    rules.intro.as_ref(),
+                    &[
+                        (".intro", None),
+                        (".book-intro", None),
+                        (".description", None),
+                        (r#"[itemprop="description"]"#, None),
+                    ],
+                )
+                .map_err(|error| rule_error("book_info", "intro", error))?,
             ),
             cover_url: non_empty(
-                extract_document_rule(&document, rules.url.as_ref())
-                    .map_err(|error| rule_error("book_info", "cover", error))?,
+                extract_document_rule_with_fallback(
+                    &document,
+                    rules.url.as_ref(),
+                    &[
+                        ("img.cover", Some("src")),
+                        (".book-cover img", Some("src")),
+                        ("img[data-src]", Some("data-src")),
+                        ("img[data-original]", Some("data-original")),
+                        (r#"[itemprop="image"]"#, Some("content")),
+                    ],
+                )
+                .map_err(|error| rule_error("book_info", "cover", error))?,
             ),
             book_url: book_url.to_string(),
         })
@@ -1613,23 +1650,28 @@ impl SourceEngine {
                 .map(|rule| extract_json_rule_optional(item, Some(rule)))
                 .transpose()?
                 .flatten()
+                .or_else(|| json_object_text(item, &["title", "name", "bookName"]))
                 .unwrap_or_default();
             let author = rules
                 .author
                 .as_ref()
                 .map(|rule| extract_json_rule_optional(item, Some(rule)))
-                .transpose()?;
+                .transpose()?
+                .flatten()
+                .or_else(|| json_object_text(item, &["author", "bookAuthor"]));
             let book_url = rules
                 .url
                 .as_ref()
                 .map(|rule| extract_json_rule_optional(item, Some(rule)))
-                .transpose()?;
+                .transpose()?
+                .flatten()
+                .or_else(|| json_object_text(item, &["url", "href", "link", "bookUrl"]));
 
             if !title.is_empty() || book_url.is_some() {
                 results.push(SearchResult {
                     title,
-                    author: non_empty(author.flatten()),
-                    book_url: non_empty(book_url.flatten()),
+                    author: non_empty(author),
+                    book_url: non_empty(book_url),
                     source_name: source.name.clone(),
                 });
             }
@@ -1652,12 +1694,19 @@ impl SourceEngine {
         let mut results = Vec::new();
 
         for item in document.select(&item_selector).take(MAX_SEARCH_RESULTS) {
+            let fallback_link = fallback_link_from_element(item);
             let title = rules
                 .title
                 .as_ref()
                 .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?
                 .flatten()
+                .or_else(|| {
+                    fallback_link
+                        .as_ref()
+                        .and_then(|(_, title)| non_empty(Some(title.clone())))
+                })
+                .or_else(|| fallback_text_from_element(item))
                 .unwrap_or_default();
             let author = rules
                 .author
@@ -1669,12 +1718,15 @@ impl SourceEngine {
                 .as_ref()
                 .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?;
+            let book_url = book_url
+                .flatten()
+                .or_else(|| fallback_link.as_ref().map(|(url, _)| url.clone()));
 
             if !title.is_empty() || book_url.is_some() {
                 results.push(SearchResult {
                     title,
                     author: non_empty(author.flatten()),
-                    book_url: non_empty(book_url.flatten()),
+                    book_url: non_empty(book_url),
                     source_name: source.name.clone(),
                 });
             }
@@ -1837,6 +1889,82 @@ fn extract_document_rule(
     }
 }
 
+fn extract_document_rule_with_fallback(
+    document: &Html,
+    rule: Option<&SourceRule>,
+    candidates: &[(&str, Option<&str>)],
+) -> Result<Option<String>, SourceError> {
+    if let Some(value) = extract_document_rule(document, rule)? {
+        return Ok(Some(value));
+    }
+
+    for (selector_text, attr) in candidates {
+        let Ok(selector) = parse_selector(selector_text) else {
+            continue;
+        };
+        let Some(element) = document.select(&selector).next() else {
+            continue;
+        };
+        let value = match *attr {
+            Some(attribute) => element
+                .value()
+                .attr(attribute)
+                .unwrap_or_default()
+                .to_string(),
+            None => element.text().collect::<Vec<_>>().join(" "),
+        };
+        if let Some(value) = non_empty(Some(value.trim().to_string())) {
+            return Ok(Some(value));
+        }
+    }
+
+    Ok(None)
+}
+
+fn fallback_link_from_element(element: ElementRef<'_>) -> Option<(String, String)> {
+    let selector = parse_selector("a[href]").ok()?;
+    element.select(&selector).find_map(|link| {
+        let href = link.value().attr("href")?.trim();
+        if !is_navigable_reference(href) {
+            return None;
+        }
+        let title = link.text().collect::<Vec<_>>().join(" ");
+        Some((href.to_string(), title.trim().to_string()))
+    })
+}
+
+fn fallback_text_from_element(element: ElementRef<'_>) -> Option<String> {
+    let text = element
+        .text()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    non_empty(Some(text))
+}
+
+fn json_object_text(value: &Value, keys: &[&str]) -> Option<String> {
+    let object = value.as_object()?;
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .map(json_value_to_text)
+            .and_then(|text| non_empty(Some(text.trim().to_string())))
+    })
+}
+
+fn is_navigable_reference(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('#') {
+        return false;
+    }
+    let lowered = value.to_ascii_lowercase();
+    !["javascript:", "data:", "mailto:", "tel:"]
+        .iter()
+        .any(|prefix| lowered.starts_with(prefix))
+}
+
 fn parse_chapter_list(
     rules: &PageRules,
     body: &str,
@@ -1847,12 +1975,18 @@ fn parse_chapter_list(
     let mut chapters = Vec::new();
 
     for (index, item) in document.select(&item_selector).enumerate() {
-        let Some(title) = extract_document_rule_from_element(item, rules.title.as_ref())? else {
-            continue;
-        };
-        let Some(url) = extract_document_rule_from_element(item, rules.url.as_ref())?
-            .filter(|value| !value.trim().is_empty())
-        else {
+        let fallback_link = fallback_link_from_element(item);
+        let title = extract_document_rule_from_element(item, rules.title.as_ref())?
+            .or_else(|| {
+                fallback_link
+                    .as_ref()
+                    .and_then(|(_, title)| non_empty(Some(title.clone())))
+            })
+            .or_else(|| fallback_text_from_element(item));
+        let url = extract_document_rule_from_element(item, rules.url.as_ref())?
+            .or_else(|| fallback_link.as_ref().map(|(url, _)| url.clone()))
+            .filter(|value| is_navigable_reference(value));
+        let (Some(title), Some(url)) = (title, url) else {
             continue;
         };
         let url = absolutize_url(base_url, &url);
@@ -3261,10 +3395,20 @@ fn parse_book_info_json(
     let context = first_json_context(&value, rules.item.as_deref())?;
     Ok(BookInfo {
         title: extract_json_rule_optional(context, rules.title.as_ref())?
+            .or_else(|| json_object_text(context, &["title", "name", "bookName"]))
             .unwrap_or_else(|| "未命名书籍".to_string()),
-        author: non_empty(extract_json_rule_optional(context, rules.author.as_ref())?),
-        intro: non_empty(extract_json_rule_optional(context, rules.intro.as_ref())?),
-        cover_url: non_empty(extract_json_rule_optional(context, rules.url.as_ref())?),
+        author: non_empty(
+            extract_json_rule_optional(context, rules.author.as_ref())?
+                .or_else(|| json_object_text(context, &["author", "bookAuthor"])),
+        ),
+        intro: non_empty(
+            extract_json_rule_optional(context, rules.intro.as_ref())?
+                .or_else(|| json_object_text(context, &["intro", "description", "desc"])),
+        ),
+        cover_url: non_empty(
+            extract_json_rule_optional(context, rules.url.as_ref())?
+                .or_else(|| json_object_text(context, &["coverUrl", "cover", "image", "img"])),
+        ),
         book_url: book_url.to_string(),
     })
 }
@@ -3280,11 +3424,11 @@ fn parse_chapter_list_json(
     let mut chapters = Vec::new();
 
     for (index, item) in items.into_iter().enumerate() {
-        let Some(title) = extract_json_rule_optional(item, rules.title.as_ref())? else {
-            continue;
-        };
-        let Some(url) = extract_json_rule_optional(item, rules.url.as_ref())?
-            .filter(|value| !value.trim().is_empty())
+        let title = extract_json_rule_optional(item, rules.title.as_ref())?
+            .or_else(|| json_object_text(item, &["title", "name", "chapterName"]));
+        let url = extract_json_rule_optional(item, rules.url.as_ref())?
+            .or_else(|| json_object_text(item, &["url", "href", "link", "chapterUrl"]));
+        let (Some(title), Some(url)) = (title, url.filter(|value| is_navigable_reference(value)))
         else {
             continue;
         };
@@ -3301,6 +3445,7 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn classifies_rule_evaluation_boundaries() {
@@ -4767,6 +4912,117 @@ mod tests {
         assert_eq!(
             extract_from_element_optional(article, &missing).expect("missing item rule"),
             None
+        );
+    }
+
+    #[test]
+    fn html_search_uses_safe_link_fallback_for_legacy_url_rules() {
+        let source: BookSource = serde_json::from_value(json!({
+            "name": "Fallback search",
+            "searchUrl": "https://example.test/search",
+            "search": {
+                "item": "li.book",
+                "title": {"legacy": "//h2", "reason": "XPath"},
+                "url": {"legacy": "//a/@href", "reason": "XPath"}
+            }
+        }))
+        .expect("fallback source");
+        let engine = SourceEngine::default().expect("source engine");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<ul><li class="book"><a href="/book/1">Book one</a><span>Author</span></li></ul>"#,
+            )
+            .expect("fallback search");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Book one");
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn html_toc_uses_safe_link_fallback_for_legacy_rules() {
+        let rules = PageRules {
+            item: Some("li.chapter".to_string()),
+            title: Some(SourceRule::Legacy {
+                legacy: json!("//a/text()"),
+                reason: Some("XPath".to_string()),
+            }),
+            url: Some(SourceRule::Legacy {
+                legacy: json!("//a/@href"),
+                reason: Some("XPath".to_string()),
+            }),
+            ..PageRules::default()
+        };
+        let chapters = parse_chapter_list(
+            &rules,
+            r#"<ul><li class="chapter"><a href="/chapter/1">Chapter one</a></li></ul>"#,
+            "https://example.test/book/",
+        )
+        .expect("fallback toc");
+
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "Chapter one");
+        assert_eq!(chapters[0].url, "https://example.test/chapter/1");
+    }
+
+    #[test]
+    fn json_search_and_book_info_use_common_field_fallbacks() {
+        let search_source: BookSource = serde_json::from_value(json!({
+            "name": "JSON fallback",
+            "searchUrl": "https://example.test/search",
+            "search": {
+                "item": "$.items[*]",
+                "title": {"legacy": "@js:title", "reason": "script"},
+                "url": {"legacy": "@js:url", "reason": "script"}
+            }
+        }))
+        .expect("json search source");
+        let engine = SourceEngine::default().expect("source engine");
+        let results = engine
+            .parse_search_json(
+                &search_source,
+                r#"{"items":[{"name":"Book two","href":"/book/2","author":"Author two"}]}"#,
+            )
+            .expect("json fallback search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Book two");
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/2"));
+
+        let book_rules = PageRules {
+            item: Some("$.book".to_string()),
+            title: Some(SourceRule::Legacy {
+                legacy: json!("@js:title"),
+                reason: Some("script".to_string()),
+            }),
+            author: Some(SourceRule::Legacy {
+                legacy: json!("@js:author"),
+                reason: Some("script".to_string()),
+            }),
+            ..PageRules::default()
+        };
+        let info = parse_book_info_json(
+            &book_rules,
+            r#"{"book":{"name":"Book two","author":"Author two"}}"#,
+            "https://example.test/book/2",
+        )
+        .expect("json fallback book info");
+        assert_eq!(info.title, "Book two");
+        assert_eq!(info.author.as_deref(), Some("Author two"));
+    }
+
+    #[test]
+    fn fallback_ignores_non_navigable_links() {
+        let document = Html::parse_document(
+            r#"<li><a href="javascript:alert(1)">Bad</a><a href="/safe">Safe</a></li>"#,
+        );
+        let item = document
+            .select(&Selector::parse("li").expect("selector"))
+            .next()
+            .expect("list item");
+        assert_eq!(
+            fallback_link_from_element(item),
+            Some(("/safe".to_string(), "Safe".to_string()))
         );
     }
 }

@@ -64,9 +64,12 @@ requireContract(app.includes("rename_book") && app.includes("delete_book"), "本
 // Search results intentionally omit internal scan and parse diagnostics from the user-facing surface.
 requireContract(!app.includes("search-diagnostics") && !app.includes("search-results-summary"), "搜索结果不得展示扫描、解析和分页统计");
 requireContract(app.includes("const bookUrl = item.book_url?.trim();"), "打开远端书籍前必须校验并规范化书籍链接");
+requireContract(app.includes("function retryRemoteBook") && app.includes("forceRefresh"), "远端书籍规则失败必须提供强制刷新重试");
+requireContract(app.includes("remoteFailedItem") && app.includes("重试并刷新"), "远端书籍失败状态和重试按钮必须保留");
 requireContract(sourceView.includes("source-subnav") && sourceView.includes("sourcePanel"), "书源页必须提供已保存、导入、管理的二级导航");
 requireContract(sourceView.includes("sourcePanel === 'library'") && sourceView.includes("sourcePanel === 'manage'"), "书源页必须把书源列表与配置编辑拆分");
 requireContract(sourceView.includes("source-import-workspace") && sourceView.includes("source-import-methods"), "书源导入必须提供独立工作区");
+requireContract(sourceView.includes("可运行") && sourceView.includes("兼容保留") && sourceView.includes("需人工处理"), "书源导入必须分区显示执行能力");
 requireContract(app.includes("settings-layout") && app.includes("settings-nav"), "设置页必须提供分类侧栏");
 requireContract(readerSettingsPanel.includes("reader-preview-card") && readerSettingsPanel.includes("settings-preset-row"), "阅读设置必须提供实时预览与快捷预设");
 
