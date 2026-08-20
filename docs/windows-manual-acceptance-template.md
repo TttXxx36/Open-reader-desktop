@@ -2,13 +2,13 @@
 
 > 本文件是 M7.1d/M8/M9 发布后的目标环境验收模板。未填写的项目均视为“未验证”，不能作为功能已完成的证据。
 >
-> 当前计划：PR10 合并后，以合并 main 的 Windows Release/installer smoke 作为验收基线；PR10 CI 31590842650 仅证明代码检查通过，不是安装包证据。
+> 当前基线：PR10 已合并至 main（`b2ee3d4`）；合并后 CI `32354559064`、Windows Release `32354623024` 和 installer smoke `32355446613` 均通过。以下项目仍需目标 Windows 手工记录。
 >
 > 书源大小边界用例 S-09/S-10 应使用授权、公版或本地受控测试 URL，不要提交私人 Cookie、Authorization 或正文内容。
 >
-> 历史 Windows Release 证据：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31487610713>（仅作历史记录，不能替代 PR10 合并后的产物）
+> Windows Release：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32354623024>（artifact `open-reader-windows-main-b2ee3d4c26423b434036cbc5f646749476e4d91e`，digest `sha256:0e23015c96e687533bb48c4c474d1def29e197e0c17154b0881f37dc69422630`）
 >
-> 历史 installer smoke 证据：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31488344784>（仅作历史记录，不能替代 PR10 合并后的产物）
+> installer smoke：<https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32355446613>（便携版、NSIS、MSI 自动化检查均通过）
 
 ## 测试环境
 
