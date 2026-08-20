@@ -1,8 +1,14 @@
 # ADR 0002：许可证与书源兼容政策
 
-- 状态：已接受（待治理 PR 合并后关闭 Issue #1）
+- 状态：已接受（治理同步 PR 合并后关闭 Issue #1）
 - 日期：2026-08-20
 - 关联：Issue #1「确定许可证与书源兼容政策」
+
+## 当前执行证据（2026-08-20）
+
+- PR11 已记录治理审计；本次治理同步将 README、CONTRIBUTING、SECURITY、product-scope、source-protocol 和 compatibility-matrix 的政策链接统一到本 ADR。
+- 以 main `89185e6` 为基线的 CI `32368235610`、Windows Release `32368262290` 和 installer smoke `32369094467` 均通过。
+- Issue #1 的关闭动作必须在本文件及相关文档进入 main 后执行；这不改变目标 Windows 手工验收和安全运行时评估的独立依赖。
 
 ## 背景
 
