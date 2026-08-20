@@ -6,9 +6,9 @@
 
 | 项目 | 当前证据 | 判定 |
 | --- | --- | --- |
-| main 基线 | 提交 2b5d97314caaed2be119606623c3f4358c721064 | 当前稳定基线，已包含 PR9 的视觉与书源工作区刷新 |
-| PR10「分离搜索工作区并重构书架交互」 | head 2ac53b973d6307adfdf47f9f3f06936c21bcac4f，状态 open、mergeable | 代码已完成候选，尚未进入 main；搜索工作区、书架重构和在线条目点击修复仍不能宣称已发布 |
-| PR10 自动化 | CI run 31590842650：Frontend checks、Rust checks、Rust Windows sampler 均 success | 远程验证通过；不能替代合并后的 Release/smoke 和目标 Windows 手工验收 |
+| main 基线 | 提交 b2ee3d4c26423b434036cbc5f646749476e4d91e（PR10 合并提交） | 已通过合并后 CI、Windows Release 和 installer smoke；目标 Windows 手工验收仍待执行 |
+| PR10「分离搜索工作区并重构书架交互」 | 合并提交 b2ee3d4c26423b434036cbc5f646749476e4d91e，状态 merged | 搜索工作区、书架重构和在线条目点击修复已进入 main；仍需目标 Windows 手工验收 |
+| 合并后自动化 | CI run 32354559064、Windows Release run 32354623024、installer smoke run 32355446613 均 success；artifact `open-reader-windows-main-b2ee3d4c26423b434036cbc5f646749476e4d91e`，digest `sha256:0e23015c96e687533bb48c4c474d1def29e197e0c17154b0881f37dc69422630` | 合并后的发布基线和自动化安装回归已通过；不能替代目标 Windows 手工验收 |
 | Issues | #1/#2/#3 open；#4/#5 closed | 治理和目标 Windows 验收仍未收口；已关闭条目不重新打开 |
 | 本地构建/安装 | 本轮未执行 | 遵守 Windows Release 通过 GitHub Actions、禁止本地安装的项目约束 |
 
@@ -24,7 +24,7 @@
 | M5 多源与可维护性 | 核心代码完成 | 兼容矩阵的人工回归和安全拒绝提示随 M7/P0 一并收口 |
 | M6 Windows 体验与阅读质量 | 代码切片完成 | 安装包回归、中文字体、窄窗口、键盘焦点、高对比度和书源导入体验待人工验收 |
 | M6.5 Windows 发布闸门 | Actions 自动化完成 | 原地升级、WebView2 缺失、离线/网络错误、卸载数据保留和正式发布记录待目标 Windows；签名继续暂缓 |
-| M6.6 阅读工作区视觉系统 | 已合并（PR9） | PR10 的搜索/书架信息架构尚未合并，合并后还需重新跑 Release/smoke |
+| M6.6 阅读工作区视觉系统 | 已合并（PR9、PR10） | 搜索工作区与书架信息架构已进入 main，合并后 Release/smoke 已通过；等待目标 Windows 体验验收 |
 | M7 书源兼容性 v2 | 核心代码完成，收尾待验收 | 快照保留/清理策略、窄窗口与键盘批量操作、明确拒绝 XPath/JavaScript/Cookie/Authorization/音频执行的真实提示回归 |
 | M8 内容格式 v2 | 大部分完成 | EPUB 缺失图片/字体/外部资源的逐项提示与 CSS 白名单；PDF 独立渲染/搜索/目录模型评估；MOBI/AZW/AZW3 只读解析器、许可证、内存与 DRM 拒绝评估 |
 | M9 书架、元数据与历史 | M9.0–M9.3.1-d1 完成 | M9.3.1-d2 的 0016 迁移、可回滚纯文本合并和旧 ID 一跳别名；d3 撤销/冲突/环检测仍未开始 |
@@ -36,7 +36,7 @@
 
 ### P0：必须先完成或明确放行
 
-1. **PR10 审阅与合并**：PR10 的 CI 已通过，但合并 main 是高影响远程操作，当前保持 open，等待仓库维护者明确确认。合并后必须从新的 main 重新运行 CI、Windows Release 和 installer smoke。
+1. **PR10 合并与发布闸门**：已按维护者确认合并到 main（合并提交 `b2ee3d4`），合并后 CI `32354559064`、Windows Release `32354623024` 和 installer smoke `32355446613` 均成功；该项完成。后续仅保留目标 Windows 手工验收。
 2. **目标 Windows 手工验收**：使用合并后的 Release/便携产物，逐项记录安装覆盖升级、卸载数据保留、WebView2 缺失、离线/网络/权限错误、中文字体、窄窗口、Tab 焦点、高对比度、本地 JSON/在线 URL 书源导入、导入预览/冲突策略/快照恢复、图片序列中文/UNC 路径、取消重新关联和 M7.2 追链开关。
 3. **在线搜索与书架验收**：PR10 的搜索工作区、在线结果整行点击、远端详情打开失败提示、本地/书源书籍分区、4 列书架、长按/右键菜单、重命名/删除命令必须在 Windows 产物中逐项验证。
 
@@ -56,7 +56,7 @@
 
 ## 4. 本轮关键决策
 
-- 不自动合并 PR10：合并 main 会改变公开分支，当前只完成审计与文档提交，保留 PR10 open。
+- 已按维护者确认合并 PR10：合并提交为 `b2ee3d4`；合并后 CI、Windows Release 和 installer smoke 全部成功。
 - 不执行 0016 迁移、物理删除或静默重复书合并：BLOCKED.md 和 M9.3.1-d2 评审要求 P0 手工证据先行。
 - 不在本地构建或安装：本轮只通过 GitHub API 提交文档，验证交给 GitHub Actions。
 - 不扩大安全执行边界：XPath、JavaScript、Cookie、Authorization、音频和未授权站点继续按兼容性矩阵拒绝或只导入不执行。
@@ -65,8 +65,8 @@
 ## 5. 遇到的问题与处理
 
 - **目标 Windows 手工证据缺失**：当前连接可以读取 Actions，但不能替代用户目标机的安装器、WebView2、字体、焦点和窄窗口操作；因此这些条目标为待验收，不伪造完成。
-- **主文档基线滞后**：README、PROGRESS、roadmap 原记录停留在 2026-08-12，未反映 main 2b5d973、PR10 和 CI 31590842650；本次变更同步摘要，并保留历史文档作为证据。
-- **最新功能尚未在 main**：PR10 的搜索/书架修复虽通过 CI，但仍是开放 PR；当前不能把已通过 CI 说成已发布。
+- **主文档基线滞后**：PR11 创建时记录的是合并前状态；本次在 PR11 分支同步 main `b2ee3d4`、CI/Release/smoke 证据，并保留历史链接作为审计证据。
+- **目标 Windows 证据仍缺失**：PR10 的搜索/书架修复已进入 main，合并后自动化已通过；真实安装、字体、焦点、窄窗口和书源导入仍需用户目标机记录。
 - **M9.3.1-d2 有不可逆风险**：迁移设计已冻结但缺人工记录；本轮只记录依赖，不修改数据库 schema。
 
 ## 6. 本次产出与下一步
@@ -74,9 +74,9 @@
 本次 PR 将提交：
 
 - 本文件：完整状态矩阵、未完成条目、优先级/依赖、决策和问题记录；
-- PROGRESS.md：更新当前 main、PR10 和 Actions 证据；
-- README.md：增加当前审计入口和 PR10 待合并状态；
+- PROGRESS.md：更新合并后的 main、PR10、Release、installer smoke 和 artifact 证据；
+- README.md：同步 PR10 已合并、Release/smoke 已通过和目标 Windows 手工验收待执行；
 - BLOCKED.md：明确 P0 外部验收与 d2 迁移边界；
 - docs/roadmap.md：更新最新维护基线并链接本审计。
 
-下一步依赖顺序固定为：**维护者确认并合并 PR10 → 合并后 GitHub Actions Release/smoke → 目标 Windows 手工验收记录 → M7/M8 收尾 → M9.3.1-d2 迁移前评审与实现 → M10 备份/恢复**。在外部手工验收未到位前，本代理继续只推进文档、测试夹具和不改变数据库生命周期的安全工作。
+下一步依赖顺序固定为：**目标 Windows 手工验收记录（含 PR10 搜索/书架条目）→ M0 文档治理收口与 M7/M8 横向收尾 → M9.3.1-d2 迁移前评审与实现 → M10 备份/恢复**。在外部手工验收未到位前，本代理继续只推进文档、测试夹具和不改变数据库生命周期的安全工作。
