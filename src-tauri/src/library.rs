@@ -2118,7 +2118,9 @@ fn collect_epub_resource_warnings<R: Read + Seek>(
         let reason = image_status
             .get(&image_path)
             .cloned()
-            .or_else(|| (!zip_entry_exists(archive, &image_path)).then_some("文件不存在".to_string()))
+            .or_else(|| {
+                (!zip_entry_exists(archive, &image_path)).then_some("文件不存在".to_string())
+            })
             .unwrap_or_else(|| "未在 OPF 清单中声明或无法加载".to_string());
         push_epub_warning(
             warnings,
