@@ -1,6 +1,6 @@
 # 开发环境
 
-> 维护状态（2026-08-12）：当前 main 提交 0e73968 已完成阅读工作区视觉刷新；CI run 31574147034、Windows release run 31574767135 和 installer smoke run 31575465554 均通过。自动化检查不替代目标 Windows 环境的升级、WebView2、离线错误、中文字体、窄窗口和键盘焦点验收。
+> 后续维护状态（2026-08-20）：main `89185e6` 已包含 PR10–PR13；CI `32368235610`、Windows Release `32368262290` 和 installer smoke `32369094467` 均通过。自动化检查不替代目标 Windows 环境的升级、WebView2、离线错误、中文字体、窄窗口和键盘焦点验收。
 
 
 ## 必备环境
@@ -122,7 +122,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - CI 已运行非严格预检；GitHub Actions 的版本标签工作流会在严格预检后生成 NSIS/MSI 安装器、便携 ZIP 和 SHA-256 清单，并创建标记为 unsigned 的 Release。
 - `src-tauri/icons/icon.ico` 与 `icon.png` 是实际打包资产；签名仍暂缓，Windows SmartScreen 可能显示警告。
 
-- GitHub Actions 的 `Windows release` 支持手动触发和 `v*` 版本标签；严格预检通过后构建安装器与便携 ZIP，标签触发会自动创建未签名 GitHub Release，并生成 `release-sha256.txt`。当前 main 的 Windows release run [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 与 installer smoke run [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 已通过。
+- GitHub Actions 的 `Windows release` 支持手动触发和 `v*` 版本标签；严格预检通过后构建安装器与便携 ZIP，标签触发会自动创建未签名 GitHub Release，并生成 `release-sha256.txt`。当前 main 的 Windows release run [32368262290](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368262290) 与 installer smoke run [32369094467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32369094467) 已通过。
 
 ## M6.6 视觉系统刷新
 
