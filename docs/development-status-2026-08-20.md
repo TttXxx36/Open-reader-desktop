@@ -8,7 +8,7 @@
 - **合并顺序**：PR11 → PR12 → PR13，均已完成审核、Squash Merge，合并后各自 CI 通过。
 - **发布证据**：CI `32368235610`、Windows Release `32368262290`、installer smoke `32369094467` 均 success；Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16`，digest `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`。
 - **当前结论**：自动化发布和安装冒烟验证已完成；目标 Windows 的手工验收（搜索/书架、安装升级、WebView2、字体、焦点、窄窗口、书源导入等）仍是 P0 外部证据，不由 CI 代替。
-- **治理状态**：PR11 已补齐本次状态与治理记录；本次文档同步 PR 合并后，Issue #1 的许可证/书源兼容政策收口条件满足。Issue #2/#3 继续等待目标 Windows 手工记录。
+- **治理状态**：PR11 已补齐本次状态与治理记录；本次文档同步 PR #14 已合并，Issue #1 的许可证/书源兼容政策已收口并按 completed 关闭。Issue #2/#3 继续等待目标 Windows 手工记录。
 - **边界**：未在本地构建或安装；M9.3.1-d2 的 0016 迁移、物理删除、静默合并和自动选择 canonical 仍禁止。
 
 ## 1. 审计基线与证据
@@ -20,14 +20,14 @@
 | PR12「书源快照保留策略」 | 已合并，提交 3278873372c044446ae430fad208942916e78a31 | 20 条/16 MiB 保留闸门与回归夹具已通过，并已进入 main |
 | PR13「EPUB 资源诊断」 | 已合并，提交 c0ff28d309880aabeccc9074e1e25a81e48010a8 | h1-h6 标题识别、缺失章节/图片/样式提示已通过自动化，并已进入 main |
 | 合并后自动化 | CI run 32354559064、Windows Release run 32354623024、installer smoke run 32355446613 均 success；artifact `open-reader-windows-main-b2ee3d4c26423b434036cbc5f646749476e4d91e`，digest `sha256:0e23015c96e687533bb48c4c474d1def29e197e0c17154b0881f37dc69422630` | 合并后的发布基线和自动化安装回归已通过；不能替代目标 Windows 手工验收 |
-| Issues | #1/#2/#3 open；#4/#5 closed | 治理和目标 Windows 验收仍未收口；已关闭条目不重新打开 |
+| Issues | #1/#4/#5 closed；#2/#3 open | M0 治理已收口；#2/#3 仍等待目标 Windows 验收，已关闭条目不重新打开 |
 | 本地构建/安装 | 本轮未执行 | 遵守 Windows Release 通过 GitHub Actions、禁止本地安装的项目约束 |
 
 ## 2. 里程碑逐项判定
 
 | 里程碑 | 状态 | 尚未完成的具体内容 |
 | --- | --- | --- |
-| M0 范围与治理 | 部分完成 | MIT License 已存在；README、CONTRIBUTING、SECURITY、兼容性矩阵的统一政策记录仍由 Issue #1 跟踪 |
+| M0 范围与治理 | 已完成 | MIT License、ADR 0002 及 README、CONTRIBUTING、SECURITY、product-scope、source-protocol、兼容性矩阵已统一；Issue #1 已关闭 |
 | M1 工程骨架 | 代码与 CI 完成 | 目标 Windows 开发启动、WebView2 缺失和升级行为仍需人工记录（Issue #2） |
 | M2 本地阅读 MVP | 代码与 CI 完成 | TXT/EPUB 导入、重启恢复、离线阅读、中文字体、窄窗口和排版体验仍需目标 Windows 验收（Issue #3） |
 | M3 书源协议 | 已完成 | 保持安全子集边界；不把 XPath/脚本/认证态静默降级为 CSS 或匿名请求 |
@@ -53,7 +53,7 @@
 
 ### P1：P0 证据满足后按依赖推进
 
-4. **M0 文档治理收口（Issue #1）**：统一 README、CONTRIBUTING、SECURITY、compatibility-matrix 的许可证、授权内容和隐私边界，并补独立政策记录。
+4. **M0 文档治理收口（Issue #1，已完成）**：README、CONTRIBUTING、SECURITY、product-scope、source-protocol、compatibility-matrix 已统一链接 ADR 0002，远程 CI 通过，Issue #1 已关闭。
 5. **M7.1 横向收尾**：PR12 的快照数量/大小保留闸门已通过 CI，仍需合并评审、窄窗口和键盘批量操作；保留 XPath、JavaScript、Cookie、Authorization、音频的显式拒绝。
 6. **M8 格式收尾**：PR13 的 EPUB 标题层级与缺失资源诊断已通过 CI，仍需合并评审和 CSS/Windows 回归；完成 PDF/MOBI/AZW 只读评估，不在许可证、供应链、内存和 DRM 拒绝未通过前引入运行时。
 7. **M9.3.1-d2**：仅在 P0 手工记录和迁移评审完成后，加入 0016 schema、旧库夹具、预览二次校验、单事务纯文本无冲突合并、source snapshot、merged 生命周期和一跳 alias；禁止物理删除、静默覆盖和自动选择 canonical。
