@@ -1,7 +1,7 @@
 # 当前阻塞与待裁决
 
 - **P0 目标 Windows 手工验收**：覆盖升级、卸载数据保留、WebView2 缺失、离线/网络/权限错误、中文字体、窄窗口、键盘焦点、高对比度、本地 JSON/在线 URL 书源导入和图片路径恢复；CI 不能替代目标环境记录。
-- **PR10 发布基线**：搜索工作区、书架重构、在线结果点击修复已合并到 main（`b2ee3d4`）；合并后 CI `32354559064`、Windows Release `32354623024` 和 installer smoke `32355446613` 均通过。仍需目标 Windows 手工验收搜索/书架交互和安装体验。
-- **Issue #1 治理收口**：根目录已有 MIT License，但 README、CONTRIBUTING、SECURITY 和兼容性矩阵的统一政策记录尚未完成。
+- **PR10–PR13 发布基线**：搜索/书架重构、文档治理记录、书源快照保留和 EPUB 资源诊断已合并到 main（`89185e6`）；CI `32368235610`、Windows Release `32368262290` 和 installer smoke `32369094467` 均通过。仍需目标 Windows 手工验收搜索/书架交互和安装体验。
+- **Issue #1 治理收口**：治理同步 PR 合并后，README、CONTRIBUTING、SECURITY、product-scope、source-protocol 和兼容性矩阵均链接 ADR 0002；随后关闭 Issue #1。
 - **M9.3.1-d2**：在上述 P0 记录和迁移前评审完成前，不执行 0016 迁移、物理删除、静默覆盖或自动选择 canonical。
 - **签名**：用户暂时无法提供签名方案，继续保持未签名安装器/便携包发布，不把签名缺失误记为代码失败。
