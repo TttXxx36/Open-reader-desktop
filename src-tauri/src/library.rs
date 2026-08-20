@@ -39,6 +39,8 @@ pub struct ParsedBook {
     pub author: Option<String>,
     pub format: String,
     pub chapters: Vec<ParsedChapter>,
+    /// Non-fatal diagnostics collected during parsing and shown in the import preview.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -1115,6 +1117,7 @@ const MAX_EMBEDDED_IMAGE_TOTAL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_EPUB_ARCHIVE_ENTRIES: usize = 2_048;
 const MAX_EPUB_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_EPUB_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_EPUB_RESOURCE_WARNINGS: usize = 32;
 const MAX_TXT_REPLACEMENTS: usize = 32;
 const MAX_TXT_REPLACEMENT_FROM_BYTES: usize = 128;
 const MAX_TXT_REPLACEMENT_TO_BYTES: usize = 256;
@@ -1203,6 +1206,7 @@ pub fn preview_book_bytes(
     if parsed.chapters.len() > 10_000 {
         warnings.push("章节数量较多，导入后建议分批阅读".to_string());
     }
+    warnings.extend(parsed.warnings);
     Ok(BookImportPreview {
         title: parsed.title,
         format: parsed.format,
@@ -1237,6 +1241,7 @@ fn parse_txt_with_options(
         author: None,
         format: "txt".to_string(),
         chapters,
+        warnings: Vec::new(),
     })
 }
 
@@ -1955,6 +1960,7 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
     }
 
     let mut image_sources = HashMap::new();
+    let mut image_status = HashMap::new();
     let mut embedded_image_bytes = 0usize;
     for item in manifest.values() {
         let media_type = item.media_type.to_ascii_lowercase();
@@ -1963,18 +1969,23 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
         }
         let path = join_zip_path(base_path, &item.href);
         let Ok(bytes) = read_zip_bytes(&mut archive, &path) else {
+            image_status.insert(path, "缺失或无法读取".to_string());
             continue;
         };
-        if bytes.len() > MAX_EMBEDDED_IMAGE_BYTES
-            || embedded_image_bytes.saturating_add(bytes.len()) > MAX_EMBEDDED_IMAGE_TOTAL_BYTES
-        {
+        if bytes.len() > MAX_EMBEDDED_IMAGE_BYTES {
+            image_status.insert(path, "超过 2 MiB 单文件上限".to_string());
+            continue;
+        }
+        if embedded_image_bytes.saturating_add(bytes.len()) > MAX_EMBEDDED_IMAGE_TOTAL_BYTES {
+            image_status.insert(path, "超过 8 MiB 图片总量上限".to_string());
             continue;
         }
         embedded_image_bytes = embedded_image_bytes.saturating_add(bytes.len());
         image_sources.insert(
-            path,
+            path.clone(),
             format!("data:{media_type};base64,{}", STANDARD.encode(bytes)),
         );
+        image_status.insert(path, "已加载".to_string());
     }
 
     let spine: Vec<String> = find_tags(&opf, "itemref")
@@ -1982,9 +1993,14 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
         .filter_map(|tag| extract_attribute(&tag, "idref"))
         .collect();
 
+    let mut warnings = Vec::new();
     let mut parsed_chapters: Vec<(String, String, ContentDocument)> = Vec::new();
     for id in spine {
         let Some(item) = manifest.get(&id) else {
+            push_epub_warning(
+                &mut warnings,
+                format!("阅读目录引用了不存在的清单项：{id}"),
+            );
             continue;
         };
         if !item.media_type.contains("html") && !item.media_type.contains("xhtml") {
@@ -1993,15 +2009,29 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
 
         let path = join_zip_path(base_path, &item.href);
         let Ok(html) = read_zip_text(&mut archive, &path) else {
+            push_epub_warning(
+                &mut warnings,
+                format!("章节资源缺失或无法读取：{path}"),
+            );
             continue;
         };
         let mut document = parse_html_document(&html);
+        collect_epub_resource_warnings(
+            &mut warnings,
+            &mut archive,
+            &document,
+            &html,
+            &path,
+            &image_sources,
+            &image_status,
+        );
         resolve_epub_images(&mut document, &path, &image_sources);
         if document.blocks.is_empty() {
+            push_epub_warning(&mut warnings, format!("章节内容为空，已跳过：{path}"));
             continue;
         }
 
-        let chapter_title = ["h1", "h2", "h3"]
+        let chapter_title = ["h1", "h2", "h3", "h4", "h5", "h6"]
             .iter()
             .find_map(|tag| extract_element_text(&html, tag))
             .filter(|value| !value.is_empty())
@@ -2035,7 +2065,96 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
         author,
         format: "epub".to_string(),
         chapters,
+        warnings,
     })
+}
+
+fn push_epub_warning(warnings: &mut Vec<String>, warning: String) {
+    if warnings.len() >= MAX_EPUB_RESOURCE_WARNINGS || warnings.iter().any(|item| item == &warning) {
+        return;
+    }
+    warnings.push(warning);
+}
+
+fn is_external_epub_reference(raw: &str) -> bool {
+    let value = raw.trim();
+    value.is_empty()
+        || value.starts_with('#')
+        || value.starts_with('/')
+        || value.starts_with("//")
+        || value.contains("://")
+        || value.contains(':')
+        || value.to_ascii_lowercase().starts_with("data:")
+}
+
+fn zip_entry_exists<R: Read + Seek>(archive: &mut ZipArchive<R>, path: &str) -> bool {
+    is_safe_zip_entry_path(path) && archive.by_name(path).is_ok()
+}
+
+fn collect_epub_resource_warnings<R: Read + Seek>(
+    warnings: &mut Vec<String>,
+    archive: &mut ZipArchive<R>,
+    document: &ContentDocument,
+    html: &str,
+    chapter_path: &str,
+    image_sources: &HashMap<String, String>,
+    image_status: &HashMap<String, String>,
+) {
+    let chapter_base = chapter_path
+        .rsplit_once('/')
+        .map(|(base, _)| base)
+        .unwrap_or_default();
+
+    for block in &document.blocks {
+        if block.kind != "image" {
+            continue;
+        }
+        let Some(source) = block.src.as_deref() else {
+            continue;
+        };
+        if is_external_epub_reference(source) {
+            continue;
+        }
+
+        let image_path = join_zip_path(chapter_base, source);
+        if image_sources.contains_key(&image_path) {
+            continue;
+        }
+        let reason = image_status
+            .get(&image_path)
+            .cloned()
+            .or_else(|| {
+                (!zip_entry_exists(archive, &image_path))
+                    .then_some("文件不存在".to_string())
+            })
+            .unwrap_or_else(|| "未在 OPF 清单中声明或无法加载".to_string());
+        push_epub_warning(
+            warnings,
+            format!("图片资源{reason}：{image_path}（章节：{chapter_path}）"),
+        );
+    }
+
+    for tag in find_tags(html, "link") {
+        let rel = extract_attribute(&tag, "rel")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !rel.split_whitespace().any(|item| item == "stylesheet") {
+            continue;
+        }
+        let Some(href) = extract_attribute(&tag, "href") else {
+            continue;
+        };
+        if is_external_epub_reference(&href) {
+            continue;
+        }
+        let stylesheet_path = join_zip_path(chapter_base, &href);
+        if !zip_entry_exists(archive, &stylesheet_path) {
+            push_epub_warning(
+                warnings,
+                format!("样式资源缺失：{stylesheet_path}（章节：{chapter_path}）"),
+            );
+        }
+    }
 }
 
 fn validate_epub_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), ImportError> {
@@ -3521,6 +3640,44 @@ mod tests {
         )
         .expect_err("missing OPF should fail");
         assert!(missing_opf.to_string().contains("OPF"));
+    }
+
+    #[test]
+    fn previews_epub_heading_hierarchy_and_missing_resource_warnings() {
+        let bytes = zip_text_entries(&[
+            (
+                "META-INF/container.xml",
+                r#"<container><rootfile full-path="OPS/content.opf"/></container>"#,
+            ),
+            (
+                "OPS/content.opf",
+                r#"<package><metadata><dc:title>诊断演示书</dc:title></metadata><manifest><item id="chapter" href="Text/chapter.xhtml" media-type="application/xhtml+xml"/><item id="css" href="Styles/missing.css" media-type="text/css"/><item id="image" href="Images/missing.png" media-type="image/png"/></manifest><spine><itemref idref="chapter"/></spine></package>"#,
+            ),
+            (
+                "OPS/Text/chapter.xhtml",
+                r#"<h4>细节章节</h4><p>正文</p><img src="../Images/missing.png" alt="缺失图片"><link rel="stylesheet" href="../Styles/missing.css">"#,
+            ),
+        ]);
+
+        let preview = preview_book_bytes(
+            "diagnostics.epub",
+            &bytes,
+            &TxtParseOptions::default(),
+        )
+        .expect("readable EPUB should preview");
+
+        assert_eq!(
+            preview.first_chapter_title.as_deref(),
+            Some("细节章节")
+        );
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("图片资源缺失")));
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("样式资源缺失")));
     }
 
     #[test]

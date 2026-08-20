@@ -20,7 +20,7 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - Rust 夹具覆盖自定义正则、不拆分章节、无效正则、全角空格/替换和 UTF-16LE/BE、GB18030 编码；GitHub Actions run [31325019515](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31325019515)：前端类型检查/构建/UI 合约、Rust fmt/check 和 85 个 Rust 测试通过。
 - 后续在 M8.4 增加 TXT 流式解析和性能阈值。
 
-## M8.3 EPUB 阅读结构完善（跨章节跳转、CSS 白名单与损坏恢复切片已完成）
+## M8.3 EPUB 阅读结构完善（跨章节跳转、CSS 白名单、损坏恢复与导入诊断已完成）
 
 - `ContentDocument` 已增加 `links` 元数据，收集片段链接和相对文档链接的可读文本；只保留安全的相对/片段目标，并解析到可阅读章节索引。
 - `ContentBlock` 已保留经过校验的安全 `anchor` 与有限 `style`，拒绝空白、控制字符、路径分隔符、标记字符和未列入白名单的 CSS；前端再次执行同一组属性和值校验。
@@ -28,7 +28,8 @@ M8 负责本地内容导入与阅读模型，不把 EPUB、TXT、MOBI、PDF 或�
 - 本地阅读器已显示经过同一安全过滤的“本章内部链接”索引；同章片段和安全的跨章节片段链接可加载目标章节并平滑滚动，未解析目标仍只展示索引。
 - 损坏 EPUB 现在区分 ZIP 容器、container.xml、OPF 缺失与单个 spine 章节缺失：前者返回明确导入错误，后者跳过坏章节并保留可读章节，最终无可读章节才拒绝。
 - GitHub Actions runs [31327448497](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31327448497)、[31327671723](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31327671723)、[31327687242](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31327687242) 和 [31328288413](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31328288413)：前端检查、Rust fmt/check 和 92 个 Rust 测试通过。
-- 剩余工作：标题层级/缺失资源提示；M8.3 收尾后转入 M8.4 流式解析和性能阈值。
+- EPUB 导入预览现在保留 h1-h6 标题层级；对缺失或无法读取的 spine 章节、图片与 stylesheet 生成最多 32 条去重提示，并对超出图片单文件/总量配额的资源说明跳过原因；提示只影响预览，不阻止仍可读内容导入。
+- 新增损坏/缺失资源 EPUB 夹具，覆盖 h4 章节标题、图片缺失、stylesheet 缺失和空章节恢复；本切片完成后转入 M8.4 流式解析和性能阈值。
 
 ## M8.4 大文件与性能基线
 
