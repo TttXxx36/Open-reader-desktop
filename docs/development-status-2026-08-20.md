@@ -2,14 +2,23 @@
 
 > 本文是当前仓库的状态基线和执行记录，审计范围为 main、开放/已合并 PR、Issues、路线图、阻塞记录与 GitHub Actions。代码“完成”只表示已提交并通过远程检查；Windows 安装、升级、字体、焦点和真实书源导入仍必须有目标 Windows 手工证据。
 
+## 0. 后续执行结果（2026-08-20）
+
+- **当前 main**：`89185e640cefb2665510fc8b4622d918a9f1ab16`（`89185e6`），已包含 PR10、PR11、PR12、PR13。
+- **合并顺序**：PR11 → PR12 → PR13，均已完成审核、Squash Merge，合并后各自 CI 通过。
+- **发布证据**：CI `32368235610`、Windows Release `32368262290`、installer smoke `32369094467` 均 success；Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16`，digest `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`。
+- **当前结论**：自动化发布和安装冒烟验证已完成；目标 Windows 的手工验收（搜索/书架、安装升级、WebView2、字体、焦点、窄窗口、书源导入等）仍是 P0 外部证据，不由 CI 代替。
+- **治理状态**：PR11 已补齐本次状态与治理记录；本次文档同步 PR 合并后，Issue #1 的许可证/书源兼容政策收口条件满足。Issue #2/#3 继续等待目标 Windows 手工记录。
+- **边界**：未在本地构建或安装；M9.3.1-d2 的 0016 迁移、物理删除、静默合并和自动选择 canonical 仍禁止。
+
 ## 1. 审计基线与证据
 
 | 项目 | 当前证据 | 判定 |
 | --- | --- | --- |
-| main 基线 | 提交 b2ee3d4c26423b434036cbc5f646749476e4d91e（PR10 合并提交） | 已通过合并后 CI、Windows Release 和 installer smoke；目标 Windows 手工验收仍待执行 |
+| main 基线 | 提交 89185e640cefb2665510fc8b4622d918a9f1ab16（PR10–PR13 合并后基线） | CI 32368235610、Windows Release 32368262290、installer smoke 32369094467 均通过；目标 Windows 手工验收仍待执行 |
 | PR10「分离搜索工作区并重构书架交互」 | 合并提交 b2ee3d4c26423b434036cbc5f646749476e4d91e，状态 merged | 搜索工作区、书架重构和在线条目点击修复已进入 main；仍需目标 Windows 手工验收 |
-| PR12「书源快照保留策略」 | Draft，提交 3278873372c044446ae430fad208942916e78a31，CI run 32358152119 success | 20 条/16 MiB 保留闸门与回归夹具已通过，等待合并评审 |
-| PR13「EPUB 资源诊断」 | Draft，提交 c0ff28d309880aabeccc9074e1e25a81e48010a8，CI run 32359528127 success | h1-h6 标题识别、缺失章节/图片/样式提示已通过自动化，等待合并评审 |
+| PR12「书源快照保留策略」 | 已合并，提交 3278873372c044446ae430fad208942916e78a31 | 20 条/16 MiB 保留闸门与回归夹具已通过，并已进入 main |
+| PR13「EPUB 资源诊断」 | 已合并，提交 c0ff28d309880aabeccc9074e1e25a81e48010a8 | h1-h6 标题识别、缺失章节/图片/样式提示已通过自动化，并已进入 main |
 | 合并后自动化 | CI run 32354559064、Windows Release run 32354623024、installer smoke run 32355446613 均 success；artifact `open-reader-windows-main-b2ee3d4c26423b434036cbc5f646749476e4d91e`，digest `sha256:0e23015c96e687533bb48c4c474d1def29e197e0c17154b0881f37dc69422630` | 合并后的发布基线和自动化安装回归已通过；不能替代目标 Windows 手工验收 |
 | Issues | #1/#2/#3 open；#4/#5 closed | 治理和目标 Windows 验收仍未收口；已关闭条目不重新打开 |
 | 本地构建/安装 | 本轮未执行 | 遵守 Windows Release 通过 GitHub Actions、禁止本地安装的项目约束 |
@@ -63,7 +72,7 @@
 - 不在本地构建或安装：本轮只通过 GitHub API 提交文档，验证交给 GitHub Actions。
 - 不扩大安全执行边界：XPath、JavaScript、Cookie、Authorization、音频和未授权站点继续按兼容性矩阵拒绝或只导入不执行。
 - PR10 合并后，最新搜索/书架工作区必须以合并后 main 的 Release/installer smoke 为唯一发布基线。
-- PR12、PR13 先保持 Draft：CI 已通过，但主分支合并与目标 Windows 手工验收分别作为独立决策，不把 Draft 误标为已发布。
+- PR11、PR12、PR13 已按顺序合并；主分支发布和目标 Windows 手工验收仍分别记录，自动化通过不替代外部手工证据。
 
 ## 5. 遇到的问题与处理
 
