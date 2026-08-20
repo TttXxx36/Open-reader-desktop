@@ -37,6 +37,8 @@ pub enum DbError {
     InvalidImageSequence(String),
     #[error("invalid book metadata: {0}")]
     InvalidBookMetadata(String),
+    #[error("invalid source snapshot: {0}")]
+    InvalidSourceSnapshot(String),
 }
 
 pub struct Database {
@@ -329,6 +331,9 @@ pub struct SourceSnapshotSummary {
     pub source_count: i64,
     pub created_at: String,
 }
+
+const SOURCE_SNAPSHOT_RETENTION_COUNT: i64 = 20;
+const MAX_SOURCE_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SourceWrite {
@@ -2076,12 +2081,29 @@ impl Database {
         payload_json: &str,
         source_count: i64,
     ) -> Result<SourceSnapshotSummary, DbError> {
+        let payload_bytes = payload_json.as_bytes().len();
+        if payload_bytes > MAX_SOURCE_SNAPSHOT_BYTES {
+            return Err(DbError::InvalidSourceSnapshot(format!(
+                "快照内容不能超过 {} MiB",
+                MAX_SOURCE_SNAPSHOT_BYTES / (1024 * 1024)
+            )));
+        }
         let id = generated_id("source-snapshot");
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         connection.execute(
             "INSERT INTO source_snapshots (id, label, payload_json, source_count)
              VALUES (?1, ?2, ?3, ?4)",
             params![id, label, payload_json, source_count],
+        )?;
+        connection.execute(
+            "DELETE FROM source_snapshots
+             WHERE id IN (
+                 SELECT id
+                 FROM source_snapshots
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT -1 OFFSET ?1
+             )",
+            params![SOURCE_SNAPSHOT_RETENTION_COUNT],
         )?;
         connection
             .query_row(
@@ -2107,9 +2129,9 @@ impl Database {
             "SELECT id, label, source_count, created_at
              FROM source_snapshots
              ORDER BY created_at DESC, id DESC
-             LIMIT 20",
+             LIMIT ?1",
         )?;
-        let rows = statement.query_map([], |row| {
+        let rows = statement.query_map(params![SOURCE_SNAPSHOT_RETENTION_COUNT], |row| {
             Ok(SourceSnapshotSummary {
                 id: row.get(0)?,
                 label: row.get(1)?,
@@ -4125,6 +4147,44 @@ mod tests {
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }
+    #[test]
+    fn prunes_source_snapshots_to_retention_limit() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-source-snapshot-retention-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        for index in 0..(SOURCE_SNAPSHOT_RETENTION_COUNT as usize + 3) {
+            database
+                .create_source_snapshot(
+                    &format!("snapshot-{index}"),
+                    &format!(r#"{{"version":1,"index":{index}}}"#),
+                    1,
+                )
+                .expect("snapshot should save");
+        }
+        let snapshots = database
+            .list_source_snapshots()
+            .expect("snapshots should list");
+        assert_eq!(
+            snapshots.len() as i64,
+            SOURCE_SNAPSHOT_RETENTION_COUNT,
+            "older snapshots should be pruned after creation"
+        );
+
+        let oversized = "x".repeat(MAX_SOURCE_SNAPSHOT_BYTES + 1);
+        let error = database
+            .create_source_snapshot("oversized", &oversized, 0)
+            .expect_err("oversized snapshot should be rejected");
+        assert!(error.to_string().contains("快照内容不能超过"));
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn persists_book_shelf_metadata_and_filters() {
         let directory = std::env::temp_dir().join(format!(
