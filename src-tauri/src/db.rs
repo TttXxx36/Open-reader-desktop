@@ -1070,6 +1070,7 @@ impl Database {
             author,
             format,
             chapters,
+            warnings: _,
         } = parsed;
 
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
