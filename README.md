@@ -24,7 +24,8 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [开发路线图](docs/roadmap.md)
 - [开发环境](docs/development.md)
 - [Windows 发布验收清单](docs/release-checklist.md)
-- [维护审计与 issue 决策](docs/maintenance-audit-2026-08-12.md)\n- [2026-08-20 开发状态审计与执行记录](docs/development-status-2026-08-20.md)
+- [维护审计与 issue 决策](docs/maintenance-audit-2026-08-12.md)
+- [2026-08-20 开发状态审计与执行记录](docs/development-status-2026-08-20.md)
 
 ## 当前状态
 
@@ -41,6 +42,7 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [x] 完成图片序列 SQLite 书架模型、重启恢复、文件变更检测、重新关联和 stale 复核
 - [x] 完成封面缓存基础和重复书只读合并预览二次校验（M9.3.1-a/b/c/d1）
 - [x] 完成统一的阅读工作区视觉刷新：导航、书架、书源、阅读器和设置面板
+- [ ] PR10 搜索工作区与书架重构：CI 31590842650 已通过，等待审阅/合并后再做 Release/smoke
 - [x] GitHub Actions 已通过前端/Rust CI、Windows Release 和 installer smoke
 - [ ] 目标 Windows 环境人工验收：升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘焦点、高对比度和书源导入体验
 - [ ] M9.3.1-d2 可撤销重复书合并：等待 P0 手工记录和迁移前评审收口
@@ -62,4 +64,3 @@ M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设
 ## License
 
 仓库根目录已提供 MIT License。M0 issue #1 的文档一致性治理仍在维护审计中：README、CONTRIBUTING、SECURITY 和兼容性矩阵需要保持同一口径；在该项同步完成前，项目不会把许可证治理标记为完全收口。
-\n- [ ] PR10 搜索工作区与书架重构：CI 31590842650 已通过，等待审阅/合并后再做 Release/smoke
