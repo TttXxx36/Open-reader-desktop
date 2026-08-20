@@ -55,6 +55,12 @@ pub enum SourceError {
     TimeoutBudget(String),
     #[error("no value matched the source rule")]
     NoMatch,
+    #[error("{stage} 规则 {rule} 失败：{message}")]
+    Rule {
+        stage: String,
+        rule: String,
+        message: String,
+    },
     #[error("invalid JSON path: {0}")]
     InvalidJsonPath(String),
     #[error("invalid JSON response: {0}")]
@@ -1026,6 +1032,9 @@ impl SourceEngine {
             .fetch_book_info(source, book_url, &mut debug_steps)
             .await?;
         let chapters = self.fetch_toc(source, book_url, &mut debug_steps).await?;
+        if chapters.is_empty() {
+            return Err(rule_error("toc", "item", SourceError::NoMatch));
+        }
         rule_evaluations.extend(book_rule_evaluations(source, &book_info));
         rule_evaluations.extend(toc_rule_evaluations(source, &chapters));
 
@@ -1284,16 +1293,27 @@ impl SourceEngine {
             .as_ref()
             .ok_or_else(|| SourceError::InvalidConfig("bookInfo rules are required".to_string()))?;
         if rules.is_json() {
-            return parse_book_info_json(rules, &body, book_url);
+            return parse_book_info_json(rules, &body, book_url)
+                .map_err(|error| rule_error("book_info", "document", error));
         }
         let document = Html::parse_document(&body);
 
         Ok(BookInfo {
-            title: extract_document_rule(&document, rules.title.as_ref())?
+            title: extract_document_rule(&document, rules.title.as_ref())
+                .map_err(|error| rule_error("book_info", "title", error))?
                 .unwrap_or_else(|| "未命名书籍".to_string()),
-            author: non_empty(extract_document_rule(&document, rules.author.as_ref())?),
-            intro: non_empty(extract_document_rule(&document, rules.intro.as_ref())?),
-            cover_url: non_empty(extract_document_rule(&document, rules.url.as_ref())?),
+            author: non_empty(
+                extract_document_rule(&document, rules.author.as_ref())
+                    .map_err(|error| rule_error("book_info", "author", error))?,
+            ),
+            intro: non_empty(
+                extract_document_rule(&document, rules.intro.as_ref())
+                    .map_err(|error| rule_error("book_info", "intro", error))?,
+            ),
+            cover_url: non_empty(
+                extract_document_rule(&document, rules.url.as_ref())
+                    .map_err(|error| rule_error("book_info", "cover", error))?,
+            ),
             book_url: book_url.to_string(),
         })
     }
@@ -1315,9 +1335,10 @@ impl SourceEngine {
             .as_ref()
             .ok_or_else(|| SourceError::InvalidConfig("toc rules are required".to_string()))?;
         if rules.is_json() {
-            return parse_chapter_list_json(rules, &body, &url);
+            return parse_chapter_list_json(rules, &body, &url)
+                .map_err(|error| rule_error("toc", "document", error));
         }
-        parse_chapter_list(rules, &body, &url)
+        parse_chapter_list(rules, &body, &url).map_err(|error| rule_error("toc", "item", error))
     }
 
     pub async fn fetch_chapter_content(
@@ -1341,18 +1362,22 @@ impl SourceEngine {
             .as_ref()
             .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
         let content = if rules.is_json() {
-            parse_json_rule_document(&body, rules.item.as_deref(), rules.content.as_ref())?
+            parse_json_rule_document(&body, rules.item.as_deref(), rules.content.as_ref())
+                .map_err(|error| rule_error("content", "content", error))?
         } else {
             let document = Html::parse_document(&body);
-            extract_document_rule(&document, rules.content.as_ref())?
+            extract_document_rule(&document, rules.content.as_ref())
+                .map_err(|error| rule_error("content", "content", error))?
         }
-        .ok_or(SourceError::NoMatch)?;
+        .ok_or_else(|| rule_error("content", "content", SourceError::NoMatch))?;
         let next_url = if let Some(next_rule) = rules.next.as_ref() {
             let next_value = if rules.is_json() {
-                parse_json_rule_document(&body, rules.item.as_deref(), Some(next_rule))?
+                parse_json_rule_document(&body, rules.item.as_deref(), Some(next_rule))
+                    .map_err(|error| rule_error("content", "next", error))?
             } else {
                 let document = Html::parse_document(&body);
-                extract_document_rule(&document, Some(next_rule))?
+                extract_document_rule(&document, Some(next_rule))
+                    .map_err(|error| rule_error("content", "next", error))?
             };
             next_value
                 .filter(|value| !value.trim().is_empty())
@@ -1585,25 +1610,26 @@ impl SourceEngine {
             let title = rules
                 .title
                 .as_ref()
-                .map(|rule| extract_json_rule(item, rule))
+                .map(|rule| extract_json_rule_optional(item, rule))
                 .transpose()?
+                .flatten()
                 .unwrap_or_default();
             let author = rules
                 .author
                 .as_ref()
-                .map(|rule| extract_json_rule(item, rule))
+                .map(|rule| extract_json_rule_optional(item, rule))
                 .transpose()?;
             let book_url = rules
                 .url
                 .as_ref()
-                .map(|rule| extract_json_rule(item, rule))
+                .map(|rule| extract_json_rule_optional(item, rule))
                 .transpose()?;
 
             if !title.is_empty() || book_url.is_some() {
                 results.push(SearchResult {
                     title,
-                    author: non_empty(author),
-                    book_url: non_empty(book_url),
+                    author: non_empty(author.flatten()),
+                    book_url: non_empty(book_url.flatten()),
                     source_name: source.name.clone(),
                 });
             }
@@ -1629,25 +1655,26 @@ impl SourceEngine {
             let title = rules
                 .title
                 .as_ref()
-                .map(|rule| extract_from_element(item, rule))
+                .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?
+                .flatten()
                 .unwrap_or_default();
             let author = rules
                 .author
                 .as_ref()
-                .map(|rule| extract_from_element(item, rule))
+                .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?;
             let book_url = rules
                 .url
                 .as_ref()
-                .map(|rule| extract_from_element(item, rule))
+                .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?;
 
             if !title.is_empty() || book_url.is_some() {
                 results.push(SearchResult {
                     title,
-                    author: non_empty(author),
-                    book_url: non_empty(book_url),
+                    author: non_empty(author.flatten()),
+                    book_url: non_empty(book_url.flatten()),
                     source_name: source.name.clone(),
                 });
             }
@@ -1663,19 +1690,23 @@ fn parse_chapter_page(
     content_url: &str,
 ) -> Result<(String, Option<String>), SourceError> {
     let content = if rules.is_json() {
-        parse_json_rule_document(body, rules.item.as_deref(), rules.content.as_ref())?
+        parse_json_rule_document(body, rules.item.as_deref(), rules.content.as_ref())
+            .map_err(|error| rule_error("content", "content", error))?
     } else {
         let document = Html::parse_document(body);
-        extract_document_rule(&document, rules.content.as_ref())?
+        extract_document_rule(&document, rules.content.as_ref())
+            .map_err(|error| rule_error("content", "content", error))?
     }
-    .ok_or(SourceError::NoMatch)?;
+    .ok_or_else(|| rule_error("content", "content", SourceError::NoMatch))?;
 
     let next_url = if let Some(next_rule) = rules.next.as_ref() {
         let next_value = if rules.is_json() {
-            parse_json_rule_document(body, rules.item.as_deref(), Some(next_rule))?
+            parse_json_rule_document(body, rules.item.as_deref(), Some(next_rule))
+                .map_err(|error| rule_error("content", "next", error))?
         } else {
             let document = Html::parse_document(body);
-            extract_document_rule(&document, Some(next_rule))?
+            extract_document_rule(&document, Some(next_rule))
+                .map_err(|error| rule_error("content", "next", error))?
         };
         next_value
             .filter(|value| !value.trim().is_empty())
@@ -1738,6 +1769,17 @@ fn pipeline_error(stage: &str, error: SourceError) -> SourceError {
     }
 }
 
+fn rule_error(stage: &str, rule: &str, error: SourceError) -> SourceError {
+    match error {
+        SourceError::Rule { .. } => error,
+        other => SourceError::Rule {
+            stage: stage.to_string(),
+            rule: rule.to_string(),
+            message: other.to_string(),
+        },
+    }
+}
+
 fn redact_url(value: &str) -> String {
     let Ok(mut parsed) = Url::parse(value) else {
         return value.to_string();
@@ -1786,7 +1828,11 @@ fn extract_document_rule(
             let Some(element) = document.select(&selector).next() else {
                 return Ok(None);
             };
-            Ok(Some(extract_selected_element(element, rule)?))
+            match extract_selected_element(element, rule) {
+                Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+                Ok(_) | Err(SourceError::NoMatch) => Ok(None),
+                Err(error) => Err(error),
+            }
         }
     }
 }
@@ -1804,9 +1850,12 @@ fn parse_chapter_list(
         let Some(title) = extract_document_rule_from_element(item, rules.title.as_ref())? else {
             continue;
         };
-        let url = extract_document_rule_from_element(item, rules.url.as_ref())?
-            .map(|value| absolutize_url(base_url, &value))
-            .unwrap_or_else(|| format!("{base_url}#chapter-{index}"));
+        let Some(url) = extract_document_rule_from_element(item, rules.url.as_ref())?
+            .filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        let url = absolutize_url(base_url, &url);
         chapters.push(SourceChapter { title, url, index });
     }
 
@@ -1820,7 +1869,7 @@ fn extract_document_rule_from_element(
     let Some(rule) = rule else {
         return Ok(None);
     };
-    Ok(Some(extract_from_element(element, rule)?))
+    extract_from_element_optional(element, rule)
 }
 
 pub fn chapter_fingerprint(chapters: &[SourceChapter]) -> String {
@@ -3055,6 +3104,17 @@ fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<St
     }
 }
 
+fn extract_from_element_optional(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<Option<String>, SourceError> {
+    match extract_from_element(element, rule) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) | Err(SourceError::NoMatch) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 fn extract_selected_element(
     element: ElementRef<'_>,
     rule: &SourceRule,
@@ -3223,10 +3283,12 @@ fn parse_chapter_list_json(
         let Some(title) = extract_json_rule_optional(item, rules.title.as_ref())? else {
             continue;
         };
-        let url = extract_json_rule_optional(item, rules.url.as_ref())?
+        let Some(url) = extract_json_rule_optional(item, rules.url.as_ref())?
             .filter(|value| !value.trim().is_empty())
-            .map(|value| absolutize_url(base_url, &value))
-            .unwrap_or_else(|| format!("{base_url}#chapter-{index}"));
+        else {
+            continue;
+        };
+        let url = absolutize_url(base_url, &url);
         chapters.push(SourceChapter { title, url, index });
     }
 
@@ -4675,5 +4737,36 @@ mod tests {
             extract_from_element(article, &legacy),
             Err(SourceError::NoMatch)
         ));
+    }
+
+    #[test]
+    fn rule_errors_keep_stage_and_rule_context() {
+        let message = rule_error("toc", "item", SourceError::NoMatch).to_string();
+        assert!(message.contains("toc 规则 item"));
+        assert!(message.contains("no value matched the source rule"));
+        assert_eq!(
+            rule_evaluation_from_error("toc", "item", &message)
+                .expect("rule errors should be classified")
+                .status,
+            SourceRuleEvaluationStatus::NoMatch
+        );
+    }
+
+    #[test]
+    fn optional_rule_mismatch_does_not_abort_html_extraction() {
+        let document = Html::parse_document("<article><h2>safe</h2></article>");
+        let missing = SourceRule::Selector(".missing".to_string());
+        assert_eq!(
+            extract_document_rule(&document, Some(&missing)).expect("missing optional rule"),
+            None
+        );
+        let article = document
+            .select(&Selector::parse("article").expect("selector"))
+            .next()
+            .expect("article");
+        assert_eq!(
+            extract_from_element_optional(article, &missing).expect("missing item rule"),
+            None
+        );
     }
 }

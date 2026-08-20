@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 
-const app = readFileSync(new URL("../src/App.vue", import.meta.url), "utf8");
-const sourceView = readFileSync(new URL("../src/components/SourceView.vue", import.meta.url), "utf8");
-const remoteReaderView = readFileSync(new URL("../src/components/RemoteReaderView.vue", import.meta.url), "utf8");
-const localReaderView = readFileSync(new URL("../src/components/LocalReaderView.vue", import.meta.url), "utf8");
-const libraryOverview = readFileSync(new URL("../src/components/LibraryOverview.vue", import.meta.url), "utf8");
-const readerSettingsPanel = readFileSync(new URL("../src/components/ReaderSettingsPanel.vue", import.meta.url), "utf8");
+const readText = (path) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+const app = readText(new URL("../src/App.vue", import.meta.url));
+const sourceView = readText(new URL("../src/components/SourceView.vue", import.meta.url));
+const remoteReaderView = readText(new URL("../src/components/RemoteReaderView.vue", import.meta.url));
+const localReaderView = readText(new URL("../src/components/LocalReaderView.vue", import.meta.url));
+const libraryOverview = readText(new URL("../src/components/LibraryOverview.vue", import.meta.url));
+const readerSettingsPanel = readText(new URL("../src/components/ReaderSettingsPanel.vue", import.meta.url));
 const failures = [];
 
 function requireContract(condition, message) {

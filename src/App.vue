@@ -824,6 +824,7 @@ const searchBusy = ref(false);
 const searchOperationId = ref<string | null>(null);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
 const searchInlineMessage = ref("");
+const remoteFailedItem = ref<UnifiedSearchItem | null>(null);
 const retryingSourceId = ref<string | null>(null);
 const sourceTransferBusy = ref(false);
 const sourceTransferMessage = ref("");
@@ -2028,6 +2029,7 @@ async function dropSourceDrag(targetId: string) {
 
 async function searchSources() {
   searchInlineMessage.value = "";
+  remoteFailedItem.value = null;
   const keyword = searchKeyword.value.trim();
   if (!keyword || searchBusy.value || retryingSourceId.value) return;
 
@@ -2140,6 +2142,7 @@ function clearSearch() {
   searchResult.value = null;
   searchKeyword.value = "";
   searchInlineMessage.value = "";
+  remoteFailedItem.value = null;
 }
 
 async function finishSourceImport(result: SourceImportResult, label: string) {
@@ -2208,9 +2211,14 @@ function showSourceImportPreview(
   sourceImportPreview.value = preview;
   sourceImportPayload.value = payload;
   sourceImportLabel.value = label;
+  const retainedCount = preview.entries.filter(
+    (entry) => entry.valid && entry.unsupported_rules.length > 0,
+  ).length;
+  const runnableCount = Math.max(preview.valid_count - retainedCount, 0);
   sourceTransferMessage.value =
     "已解析 " + preview.entries.length + " 个书源：" +
-    preview.valid_count + " 个可导入，" +
+    runnableCount + " 个可直接运行，" +
+    retainedCount + " 个兼容保留，" +
     preview.invalid_count + " 个需人工处理；脚本、XPath、模板会保留原文但不执行";
 }
 
@@ -2300,10 +2308,11 @@ async function importSourceFile(event: Event) {
   }
 }
 
-async function openRemoteBook(item: UnifiedSearchItem) {
+async function openRemoteBook(item: UnifiedSearchItem, forceRefresh = false) {
   const bookUrl = item.book_url?.trim();
   view.value = "search";
   if (!bookUrl) {
+    remoteFailedItem.value = item;
     searchInlineMessage.value = "这个结果没有可用的书籍链接，无法打开。请重试该书源或选择其他结果。";
     errorMessage.value = "";
     return;
@@ -2316,6 +2325,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
   const operationId = "remote-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   remoteOperationId.value = operationId;
   remoteBusy.value = true;
+  remoteFailedItem.value = null;
   searchInlineMessage.value = "正在读取书籍详情和目录…";
   errorMessage.value = "";
   remoteBook.value = null;
@@ -2326,7 +2336,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     const loaded = await invoke<RemoteBookDetail>("fetch_source_book", {
       sourceId: item.source_id,
       bookUrl,
-      forceRefresh: false,
+      forceRefresh,
       operationId,
     });
     const firstChapter = loaded.chapters[0];
@@ -2358,6 +2368,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     const displayMessage = message.includes("已取消")
       ? "远端打开已取消"
       : "打开失败：" + message;
+    remoteFailedItem.value = item;
     searchInlineMessage.value = displayMessage;
     errorMessage.value = "";
     remoteBook.value = null;
@@ -2370,6 +2381,12 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     }
     remoteBusy.value = false;
   }
+}
+
+function retryRemoteBook() {
+  const item = remoteFailedItem.value;
+  if (!item || remoteBusy.value) return;
+  void openRemoteBook(item, true);
 }
 
 async function loadRemoteChapter(chapterItem: RemoteChapter, forceRefresh = false) {
@@ -4687,6 +4704,10 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         <p v-if="searchBusy" class="search-inline-status" role="status">正在扫描已启用书源…</p>
         <p v-if="searchInlineMessage" class="search-inline-status search-inline-error" role="alert">{{ searchInlineMessage }}</p>
         <p v-else-if="errorMessage" class="search-inline-status search-inline-error" role="alert">{{ errorMessage }}</p>
+        <div v-if="remoteFailedItem && searchInlineMessage && !remoteBusy" class="search-error-actions">
+          <span>可以重试该书源，或返回结果选择其他来源。</span>
+          <button class="source-link-button" type="button" @click="retryRemoteBook">重试并刷新</button>
+        </div>
         <section v-if="searchResult" class="search-results-panel" aria-live="polite" aria-labelledby="online-search-heading">
           <div class="search-results-heading">
             <div>
@@ -7756,6 +7777,16 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   color: #ffd2d9;
   border: 1px solid rgba(242, 154, 170, 0.3);
   background: rgba(242, 154, 170, 0.08);
+}
+
+.search-error-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .search-results-panel {

@@ -1909,11 +1909,17 @@ fn record_source_rule_error(
     request_stage: &str,
     message: &str,
 ) {
-    let (stage, key) = match request_stage {
-        "book" if message.contains("toc") => ("toc", "item"),
-        "book" => ("book_info", "title"),
-        "chapter" => ("content", "content"),
-        _ => return,
+    let context = message
+        .split_once(" 规则 ")
+        .and_then(|(stage, rest)| rest.split_once(" 失败").map(|(rule, _)| (stage, rule)))
+        .or_else(|| match request_stage {
+            "book" if message.contains("toc") => Some(("toc", "item")),
+            "book" => Some(("book_info", "title")),
+            "chapter" => Some(("content", "content")),
+            _ => None,
+        });
+    let Some((stage, key)) = context else {
+        return;
     };
     if let Some(evaluation) = source::rule_evaluation_from_error(stage, key, message) {
         record_source_rule_evaluations(database, source_id, &[evaluation]);
