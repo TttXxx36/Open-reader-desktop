@@ -16,7 +16,7 @@
 
 ### M0 — 范围与治理（已完成基础版）
 
-确定产品定位、贡献规范、安全报告方式、内容合法性和隐私边界；记录 Legado 3.0 兼容目标与“安全子集优先”原则。仓库根目录已有 MIT License；许可证、内容合法性和安全书源兼容政策已在 [ADR 0002](adr/0002-license-and-source-policy.md) 中统一，README、CONTRIBUTING、SECURITY 和兼容性矩阵按该决策维护。Issue #1 在治理 PR 合并并完成检查后关闭；脚本运行时仍默认拒绝，未来必须单独经过安全闸门。
+确定产品定位、贡献规范、安全报告方式、内容合法性和隐私边界；记录 Legado 3.0 兼容目标与“安全子集优先”原则。仓库根目录已有 MIT License；许可证、内容合法性和安全书源兼容政策已在 [ADR 0002](adr/0002-license-and-source-policy.md) 中统一，README、CONTRIBUTING、SECURITY 和兼容性矩阵按该决策维护。Issue #1 已在治理 PR #14 合并、远程 CI 通过后关闭；脚本运行时仍默认拒绝，未来必须单独经过安全闸门。
 
 ### M1 — 工程骨架（已完成）
 
