@@ -1997,10 +1997,7 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
     let mut parsed_chapters: Vec<(String, String, ContentDocument)> = Vec::new();
     for id in spine {
         let Some(item) = manifest.get(&id) else {
-            push_epub_warning(
-                &mut warnings,
-                format!("阅读目录引用了不存在的清单项：{id}"),
-            );
+            push_epub_warning(&mut warnings, format!("阅读目录引用了不存在的清单项：{id}"));
             continue;
         };
         if !item.media_type.contains("html") && !item.media_type.contains("xhtml") {
@@ -2009,10 +2006,7 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
 
         let path = join_zip_path(base_path, &item.href);
         let Ok(html) = read_zip_text(&mut archive, &path) else {
-            push_epub_warning(
-                &mut warnings,
-                format!("章节资源缺失或无法读取：{path}"),
-            );
+            push_epub_warning(&mut warnings, format!("章节资源缺失或无法读取：{path}"));
             continue;
         };
         let mut document = parse_html_document(&html);
@@ -2070,7 +2064,8 @@ fn parse_epub(bytes: &[u8], file_name: &str) -> Result<ParsedBook, ImportError> 
 }
 
 fn push_epub_warning(warnings: &mut Vec<String>, warning: String) {
-    if warnings.len() >= MAX_EPUB_RESOURCE_WARNINGS || warnings.iter().any(|item| item == &warning) {
+    if warnings.len() >= MAX_EPUB_RESOURCE_WARNINGS || warnings.iter().any(|item| item == &warning)
+    {
         return;
     }
     warnings.push(warning);
@@ -2123,10 +2118,7 @@ fn collect_epub_resource_warnings<R: Read + Seek>(
         let reason = image_status
             .get(&image_path)
             .cloned()
-            .or_else(|| {
-                (!zip_entry_exists(archive, &image_path))
-                    .then_some("文件不存在".to_string())
-            })
+            .or_else(|| (!zip_entry_exists(archive, &image_path)).then_some("文件不存在".to_string()))
             .unwrap_or_else(|| "未在 OPF 清单中声明或无法加载".to_string());
         push_epub_warning(
             warnings,
@@ -3659,17 +3651,10 @@ mod tests {
             ),
         ]);
 
-        let preview = preview_book_bytes(
-            "diagnostics.epub",
-            &bytes,
-            &TxtParseOptions::default(),
-        )
-        .expect("readable EPUB should preview");
+        let preview = preview_book_bytes("diagnostics.epub", &bytes, &TxtParseOptions::default())
+            .expect("readable EPUB should preview");
 
-        assert_eq!(
-            preview.first_chapter_title.as_deref(),
-            Some("细节章节")
-        );
+        assert_eq!(preview.first_chapter_title.as_deref(), Some("细节章节"));
         assert!(preview
             .warnings
             .iter()
