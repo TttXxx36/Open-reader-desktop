@@ -1610,19 +1610,19 @@ impl SourceEngine {
             let title = rules
                 .title
                 .as_ref()
-                .map(|rule| extract_json_rule_optional(item, rule))
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
                 .transpose()?
                 .flatten()
                 .unwrap_or_default();
             let author = rules
                 .author
                 .as_ref()
-                .map(|rule| extract_json_rule_optional(item, rule))
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
                 .transpose()?;
             let book_url = rules
                 .url
                 .as_ref()
-                .map(|rule| extract_json_rule_optional(item, rule))
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
                 .transpose()?;
 
             if !title.is_empty() || book_url.is_some() {
