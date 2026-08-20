@@ -1531,8 +1531,12 @@ function remoteShelfItem(entry: RemoteShelfEntry): UnifiedSearchItem {
     source_name: entry.source_name,
     title: entry.title,
     author: entry.author,
+    intro: null,
     book_url: entry.book_url,
     cover_url: entry.cover_url,
+    can_open: true,
+    can_read: true,
+    unavailable_reason: null,
   };
 }
 
