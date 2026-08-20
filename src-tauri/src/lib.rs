@@ -326,6 +326,24 @@ fn update_book_metadata(
 }
 
 #[tauri::command]
+fn rename_book(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+    title: String,
+) -> Result<BookSummary, String> {
+    database
+        .rename_book(&book_id, &title)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_book(database: tauri::State<'_, Database>, book_id: String) -> Result<(), String> {
+    database
+        .delete_book(&book_id)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn update_books_metadata(
     database: tauri::State<'_, Database>,
     write: BookMetadataBatchWrite,
@@ -2188,6 +2206,8 @@ pub fn run() {
             revalidate_book_merge_preview,
             list_books_with_options,
             update_book_metadata,
+            rename_book,
+            delete_book,
             update_books_metadata,
             import_book,
             import_book_with_options,

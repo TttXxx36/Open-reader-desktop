@@ -1141,6 +1141,41 @@ impl Database {
         self.get_book_summary(&write.book_id)
     }
 
+    pub fn rename_book(&self, book_id: &str, title: &str) -> Result<BookSummary, DbError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(DbError::InvalidBookMetadata("书名不能为空".to_string()));
+        }
+        if title.len() > 512 {
+            return Err(DbError::InvalidBookMetadata(
+                "书名不能超过 512 字节".to_string(),
+            ));
+        }
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let changed = connection.execute(
+            "UPDATE books
+             SET title = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![title, book_id],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        drop(connection);
+        self.get_book_summary(book_id)
+    }
+
+    pub fn delete_book(&self, book_id: &str) -> Result<(), DbError> {
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        let changed = transaction.execute("DELETE FROM books WHERE id = ?1", params![book_id])?;
+        if changed == 0 {
+            return Err(DbError::NotFound);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn update_books_metadata(
         &self,
         write: BookMetadataBatchWrite,
