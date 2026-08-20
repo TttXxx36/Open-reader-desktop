@@ -1,6 +1,6 @@
 # 开发路线图
 
-> 维护复核（2026-08-12）：main 提交 [0e73968](https://github.com/TttXxx36/Open-reader-desktop/commit/0e73968ce14dea5e53f613c9df66d97f32316a72) 完成阅读工作区视觉刷新；CI [31574147034](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574147034)、Windows release [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 和 installer smoke [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 均通过。正式发布仍受目标 Windows 人工验收和签名暂缓约束。
+> 维护复核（2026-08-20）：main 提交 [2b5d973](https://github.com/TttXxx36/Open-reader-desktop/commit/2b5d97314caaed2be119606623c3f4358c721064) 为当前基线；PR10 [分离搜索工作区并重构书架交互](https://github.com/TttXxx36/Open-reader-desktop/pull/10) 的 head 2ac53b9 已通过 CI [31590842650](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31590842650)，但尚未合并。正式发布仍受合并后 Release/smoke、目标 Windows 手工验收和签名暂缓约束。完整未完成清单见 [2026-08-20 开发状态审计](development-status-2026-08-20.md)。
 
 路线图按“可独立验收、可回滚、可持续兼容”的里程碑推进。每个里程碑都必须在 GitHub Issue、PR、自动化检查和变更记录中留下证据；“已实现”只表示代码与远程 CI 通过，不替代 Windows 安装包手工验收。
 

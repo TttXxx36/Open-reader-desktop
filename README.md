@@ -2,7 +2,7 @@
 
 Windows-first open-source desktop reader inspired by the extensible reading experience of Legado/阅读。
 
-> 状态（2026-08-12）：M0–M9.3.1-d1 的代码切片与远程自动化验证持续通过；当前 `main` 已完成阅读工作区视觉刷新。Windows Release 与 installer smoke 也已通过，但正式发布仍需目标 Windows 环境补验升级、WebView2、离线错误、键盘焦点与中文窄窗口体验，签名暂缓。
+> 状态（2026-08-20）：main 基线为 2b5d973；M0–M9.3.1-d1 的代码切片与远程自动化验证持续通过。PR10 已完成搜索工作区/书架重构和在线条目点击修复，CI run 31590842650 全部成功，但 PR10 尚未合并；正式发布仍需合并后 Release/smoke 与目标 Windows 手工验收，签名暂缓。
 
 ## 目标
 
@@ -24,7 +24,7 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [开发路线图](docs/roadmap.md)
 - [开发环境](docs/development.md)
 - [Windows 发布验收清单](docs/release-checklist.md)
-- [维护审计与 issue 决策](docs/maintenance-audit-2026-08-12.md)
+- [维护审计与 issue 决策](docs/maintenance-audit-2026-08-12.md)\n- [2026-08-20 开发状态审计与执行记录](docs/development-status-2026-08-20.md)
 
 ## 当前状态
 
@@ -62,3 +62,4 @@ M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设
 ## License
 
 仓库根目录已提供 MIT License。M0 issue #1 的文档一致性治理仍在维护审计中：README、CONTRIBUTING、SECURITY 和兼容性矩阵需要保持同一口径；在该项同步完成前，项目不会把许可证治理标记为完全收口。
+\n- [ ] PR10 搜索工作区与书架重构：CI 31590842650 已通过，等待审阅/合并后再做 Release/smoke
