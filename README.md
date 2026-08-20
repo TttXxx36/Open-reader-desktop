@@ -63,4 +63,4 @@ M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设
 
 ## License
 
-仓库根目录已提供 MIT License。M0 issue #1 的文档一致性治理仍在维护审计中：README、CONTRIBUTING、SECURITY 和兼容性矩阵需要保持同一口径；在该项同步完成前，项目不会把许可证治理标记为完全收口。
+仓库根目录的原创代码采用 MIT License（见 [LICENSE](LICENSE)）。许可证只覆盖本项目原创代码与文档；第三方依赖、素材和未来引入的代码必须保留其原许可证与归属。书源与内容边界、Legado 兼容安全子集及权限模型见 [ADR 0002](docs/adr/0002-license-and-source-policy.md)；项目不内置未经授权的版权内容，也不绕过登录、付费、验证码、DRM 或访问控制。
