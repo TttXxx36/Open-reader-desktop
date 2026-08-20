@@ -8,6 +8,8 @@
 | --- | --- | --- |
 | main 基线 | 提交 b2ee3d4c26423b434036cbc5f646749476e4d91e（PR10 合并提交） | 已通过合并后 CI、Windows Release 和 installer smoke；目标 Windows 手工验收仍待执行 |
 | PR10「分离搜索工作区并重构书架交互」 | 合并提交 b2ee3d4c26423b434036cbc5f646749476e4d91e，状态 merged | 搜索工作区、书架重构和在线条目点击修复已进入 main；仍需目标 Windows 手工验收 |
+| PR12「书源快照保留策略」 | Draft，提交 3278873372c044446ae430fad208942916e78a31，CI run 32358152119 success | 20 条/16 MiB 保留闸门与回归夹具已通过，等待合并评审 |
+| PR13「EPUB 资源诊断」 | Draft，提交 c0ff28d309880aabeccc9074e1e25a81e48010a8，CI run 32359528127 success | h1-h6 标题识别、缺失章节/图片/样式提示已通过自动化，等待合并评审 |
 | 合并后自动化 | CI run 32354559064、Windows Release run 32354623024、installer smoke run 32355446613 均 success；artifact `open-reader-windows-main-b2ee3d4c26423b434036cbc5f646749476e4d91e`，digest `sha256:0e23015c96e687533bb48c4c474d1def29e197e0c17154b0881f37dc69422630` | 合并后的发布基线和自动化安装回归已通过；不能替代目标 Windows 手工验收 |
 | Issues | #1/#2/#3 open；#4/#5 closed | 治理和目标 Windows 验收仍未收口；已关闭条目不重新打开 |
 | 本地构建/安装 | 本轮未执行 | 遵守 Windows Release 通过 GitHub Actions、禁止本地安装的项目约束 |
@@ -25,8 +27,8 @@
 | M6 Windows 体验与阅读质量 | 代码切片完成 | 安装包回归、中文字体、窄窗口、键盘焦点、高对比度和书源导入体验待人工验收 |
 | M6.5 Windows 发布闸门 | Actions 自动化完成 | 原地升级、WebView2 缺失、离线/网络错误、卸载数据保留和正式发布记录待目标 Windows；签名继续暂缓 |
 | M6.6 阅读工作区视觉系统 | 已合并（PR9、PR10） | 搜索工作区与书架信息架构已进入 main，合并后 Release/smoke 已通过；等待目标 Windows 体验验收 |
-| M7 书源兼容性 v2 | 核心代码完成，收尾待验收 | 快照保留/清理策略、窄窗口与键盘批量操作、明确拒绝 XPath/JavaScript/Cookie/Authorization/音频执行的真实提示回归 |
-| M8 内容格式 v2 | 大部分完成 | EPUB 缺失图片/字体/外部资源的逐项提示与 CSS 白名单；PDF 独立渲染/搜索/目录模型评估；MOBI/AZW/AZW3 只读解析器、许可证、内存与 DRM 拒绝评估 |
+| M7 书源兼容性 v2 | 核心代码完成，收尾待验收 | PR12 已补齐 20 条/16 MiB 快照保留闸门；仍需窄窗口与键盘批量操作、拒绝边界真实提示回归 |
+| M8 内容格式 v2 | 大部分完成，PR13 自动化已通过 | PR13 已补齐 h1-h6 标题和缺失章节/图片/stylesheet 预览提示；PDF 独立渲染/搜索/目录模型评估与 MOBI/AZW/AZW3 只读解析器评估仍待后续
 | M9 书架、元数据与历史 | M9.0–M9.3.1-d1 完成 | M9.3.1-d2 的 0016 迁移、可回滚纯文本合并和旧 ID 一跳别名；d3 撤销/冲突/环检测仍未开始 |
 | M10 备份与恢复 | 未开始 | 版本化 JSON/ZIP、校验和、损坏恢复、导入预览和冲突策略；必须等待 d2 边界稳定 |
 | M11 RSS/Atom/OPDS | 未开始 | 只读目录、授权提示、刷新缓存和去重 |
@@ -43,8 +45,8 @@
 ### P1：P0 证据满足后按依赖推进
 
 4. **M0 文档治理收口（Issue #1）**：统一 README、CONTRIBUTING、SECURITY、compatibility-matrix 的许可证、授权内容和隐私边界，并补独立政策记录。
-5. **M7.1 横向收尾**：确定快照数量/大小/清理/确认策略；补窄窗口和键盘批量操作；保留 XPath、JavaScript、Cookie、Authorization、音频的显式拒绝。
-6. **M8 格式收尾**：补 EPUB 资源缺失提示和 CSS 白名单回归；完成 PDF/MOBI/AZW 只读评估，不在许可证、供应链、内存和 DRM 拒绝未通过前引入运行时。
+5. **M7.1 横向收尾**：PR12 的快照数量/大小保留闸门已通过 CI，仍需合并评审、窄窗口和键盘批量操作；保留 XPath、JavaScript、Cookie、Authorization、音频的显式拒绝。
+6. **M8 格式收尾**：PR13 的 EPUB 标题层级与缺失资源诊断已通过 CI，仍需合并评审和 CSS/Windows 回归；完成 PDF/MOBI/AZW 只读评估，不在许可证、供应链、内存和 DRM 拒绝未通过前引入运行时。
 7. **M9.3.1-d2**：仅在 P0 手工记录和迁移评审完成后，加入 0016 schema、旧库夹具、预览二次校验、单事务纯文本无冲突合并、source snapshot、merged 生命周期和一跳 alias；禁止物理删除、静默覆盖和自动选择 canonical。
 8. **M9.3.1-d3**：在 d2 稳定后再做 7 天撤销、旧 ID 重定向、外部修改冲突和 alias 环检测。
 
@@ -61,6 +63,7 @@
 - 不在本地构建或安装：本轮只通过 GitHub API 提交文档，验证交给 GitHub Actions。
 - 不扩大安全执行边界：XPath、JavaScript、Cookie、Authorization、音频和未授权站点继续按兼容性矩阵拒绝或只导入不执行。
 - PR10 合并后，最新搜索/书架工作区必须以合并后 main 的 Release/installer smoke 为唯一发布基线。
+- PR12、PR13 先保持 Draft：CI 已通过，但主分支合并与目标 Windows 手工验收分别作为独立决策，不把 Draft 误标为已发布。
 
 ## 5. 遇到的问题与处理
 
