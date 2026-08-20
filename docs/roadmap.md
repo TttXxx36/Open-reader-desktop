@@ -1,6 +1,6 @@
 # 开发路线图
 
-> 维护复核（2026-08-20）：main 提交 [2b5d973](https://github.com/TttXxx36/Open-reader-desktop/commit/2b5d97314caaed2be119606623c3f4358c721064) 为当前基线；PR10 [分离搜索工作区并重构书架交互](https://github.com/TttXxx36/Open-reader-desktop/pull/10) 的 head 2ac53b9 已通过 CI [31590842650](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31590842650)，但尚未合并。正式发布仍受合并后 Release/smoke、目标 Windows 手工验收和签名暂缓约束。完整未完成清单见 [2026-08-20 开发状态审计](development-status-2026-08-20.md)。
+> 维护复核（2026-08-20）：main 提交 [b2ee3d4](https://github.com/TttXxx36/Open-reader-desktop/commit/b2ee3d4c26423b434036cbc5f646749476e4d91e) 已合并 PR10；合并后 CI [32354559064](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32354559064)、Windows Release [32354623024](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32354623024) 和 installer smoke [32355446613](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32355446613) 均通过。正式发布仍受目标 Windows 手工验收和签名暂缓约束。完整未完成清单见 [2026-08-20 开发状态审计](development-status-2026-08-20.md)。
 
 路线图按“可独立验收、可回滚、可持续兼容”的里程碑推进。每个里程碑都必须在 GitHub Issue、PR、自动化检查和变更记录中留下证据；“已实现”只表示代码与远程 CI 通过，不替代 Windows 安装包手工验收。
 
@@ -56,8 +56,8 @@
 
 这是发布闸门，不是后续代码开发的硬阻塞项：
 
-- main 上的 Windows release run [31574767135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31574767135) 已完成严格预检、Tauri 安装器构建、便携 ZIP 打包和 SHA-256 清单生成。
-- installer smoke run [31575465554](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31575465554) 已通过产物校验、便携版启动、NSIS/MSI 安装/启动/卸载和数据保留检查。
+- 合并后的 main Windows Release run [32354623024](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32354623024) 已完成严格预检、Tauri 安装器构建、便携 ZIP 打包、SHA-256 清单生成和 workflow artifact 上传；artifact digest 为 `sha256:0e23015c96e687533bb48c4c474d1def29e197e0c17154b0881f37dc69422630`。
+- installer smoke run [32355446613](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32355446613) 已通过产物校验、便携版启动、NSIS/MSI 安装/启动/卸载和数据保留检查。目标 Windows 手工验收仍待执行。
 - 仍需在目标 Windows 环境手工补验：双版本原地升级、WebView2 缺失提示、离线/网络错误、回滚/撤回策略、中文字体、窄窗口、键盘 Tab 焦点、高对比度和书源导入体验。
 - 签名方案在用户可提供证书前继续暂缓；本轮及后续验证不在本地构建或安装。
 
@@ -142,7 +142,7 @@
 
 ## 当前执行顺序
 
-1. **P0 目标 Windows 人工验收**：按模板记录安装器覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘 Tab、高对比度，以及本地 JSON/在线 URL 书源导入、16 MiB 边界、冲突策略和快照恢复。
+1. **P0 目标 Windows 人工验收**：以 Release `32354623024` / smoke `32355446613` 产物为基线，按模板记录安装器覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘 Tab、高对比度，以及 PR10 搜索/书架、在线 URL/本地 JSON 书源导入、16 MiB 边界、冲突策略和快照恢复。
 2. **M9.3.1-d2 迁移前收口**：在 P0 记录完成后冻结 0016 schema、预览二次校验、纯文本/无冲突范围、单事务回滚和旧库夹具；未经确认不执行迁移、物理删除或静默覆盖。
 3. **M7.1/M8 横向收尾**：补快照保留/清理、缺失资源提示、窄窗口/键盘可用性和兼容矩阵回归；继续明确拒绝 XPath、JavaScript、Cookie、Authorization 和音频执行。
 4. **M10 备份/恢复**：在 d2 可回滚边界稳定后，再实现版本化备份、导入预览、校验和、损坏恢复和冲突策略；WebDAV/RSS/OPDS/TTS 继续排在后续阶段。
