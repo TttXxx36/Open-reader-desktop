@@ -1458,6 +1458,7 @@ impl Database {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        drop(item_statement);
         if items.len() != plan.archived_book_ids.len() {
             return Err(DbError::InvalidBookMetadata(
                 "合并来源快照数量已变化，已拒绝撤销".to_string(),
