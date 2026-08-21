@@ -4,7 +4,7 @@ Windows-first open-source desktop reader inspired by the extensible reading expe
 
 > 状态（2026-08-20）：main 基线为 89185e6；PR10、PR11、PR12、PR13 已按顺序合并。合并后 CI run 32368235610、Windows Release run 32368262290、installer smoke run 32369094467 全部成功；Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16` 的摘要为 `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`；目标 Windows 手工验收仍待执行，签名暂缓。
 
-> 当前候选（2026-08-21）：PR18 分支 `fa9a1c0` 已将验收缺陷修复并升级到 `0.2.0`；CI run [32401610084](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32401610084)、Windows Release run [32402250634](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32402250634) 和 installer smoke run [32403363944](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32403363944) 全部成功。候选安装包为未签名构建，目标 Windows 人工验收仍待执行。
+> 当前候选（2026-08-21）：PR18 分支 `fa9a1c0` 的 0.2.0 Windows Release [32402250634](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32402250634) 与 installer smoke [32403363944](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32403363944) 已通过；Computer Use 手工验收记录见 [windows-manual-acceptance-2026-08-21.md](docs/windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 已实现并由 CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 全部验证通过；候选安装包仍未签名。
 
 ## 目标
 
@@ -43,11 +43,12 @@ Tauri v2、Vue 3 + TypeScript + Vite、Rust、SQLite、Windows WebView2。
 - [x] 完成 TXT/EPUB 安全边界、大文件流式解析、图片序列预览、缩略图缓存和位置恢复
 - [x] 完成图片序列 SQLite 书架模型、重启恢复、文件变更检测、重新关联和 stale 复核
 - [x] 完成封面缓存基础和重复书只读合并预览二次校验（M9.3.1-a/b/c/d1）
+- [x] 完成 M9.3.1-d2：0016 生命周期、纯文本无冲突单事务合并、来源快照、单跳 alias、失败回滚和 active 查询过滤
 - [x] 完成统一的阅读工作区视觉刷新：导航、书架、书源、阅读器和设置面板
 - [x] PR10 搜索工作区与书架重构：已合并至 main；搜索工作区、书架分区和在线条目点击修复已进入发布基线
 - [x] PR11 文档状态审计、PR12 书源快照保留策略、PR13 EPUB 资源诊断已按顺序合并至 main；合并后 CI（`32368235610`）、Windows Release（`32368262290`）和 installer smoke（`32369094467`）均通过
 - [ ] 目标 Windows 环境人工验收：升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘焦点、高对比度和书源导入体验
-- [ ] M9.3.1-d2 可撤销重复书合并：等待 P0 手工记录和迁移前评审收口
+- [ ] M9.3.1-d3 撤销与旧 ID 兼容：7 天撤销、外部修改冲突和 alias 环检测
 - [ ] M10 版本化备份/恢复，之后再评估 WebDAV、RSS/OPDS 与 TTS/音频能力
 
 ## 本地开发

@@ -2,7 +2,7 @@
 
 > 后续维护状态（2026-08-20）：main `89185e6` 已包含 PR10–PR13；CI `32368235610`、Windows Release `32368262290` 和 installer smoke `32369094467` 均通过。自动化检查不替代目标 Windows 环境的升级、WebView2、离线错误、中文字体、窄窗口和键盘焦点验收。
 
-> 当前候选（2026-08-21）：PR18 `fa9a1c0` 的 0.2.0 Windows Release `32402250634` 与 installer smoke `32403363944` 均通过；书源配置导入上限为 128 MiB，阅读位置与已读状态已纳入 SQLite。目标 Windows 手工验收仍需按模板记录。
+> 当前候选（2026-08-21）：PR18 `fa9a1c0` 的 0.2.0 Windows Release `32402250634` 与 installer smoke `32403363944` 均通过；Computer Use 手工验收记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 实现提交 `5184451b` 对应 CI `32463202309` 已通过；书源配置导入上限为 128 MiB，阅读位置与已读状态已纳入 SQLite。
 
 
 ## 必备环境
