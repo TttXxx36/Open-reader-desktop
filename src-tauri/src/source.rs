@@ -1,3 +1,4 @@
+use encoding_rs::{GB18030, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use regex::Regex;
 use reqwest::header::CONTENT_TYPE;
 use scraper::{ElementRef, Html, Selector};
@@ -34,6 +35,7 @@ const MAX_SOURCE_CUSTOM_ORDER: i64 = 1_000_000;
 const MAX_REDIRECTS: usize = 5;
 const MAX_STAGE_BUDGET_SECS: u64 = 60;
 const MAX_PIPELINE_BUDGET_SECS: u64 = 120;
+const MAX_CHARSET_SCAN_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -760,6 +762,14 @@ struct FetchedText {
     body: String,
     status: u16,
     bytes: usize,
+    encoding: String,
+    had_decode_errors: bool,
+}
+
+struct DecodedResponse {
+    body: String,
+    encoding: String,
+    had_decode_errors: bool,
 }
 
 #[derive(Clone)]
@@ -820,7 +830,8 @@ impl SourceEngine {
             body.extend_from_slice(&chunk);
         }
 
-        let preview = String::from_utf8_lossy(&body).chars().take(2_000).collect();
+        let decoded = decode_response_body(&body, content_type.as_deref());
+        let preview = decoded.body.chars().take(2_000).collect();
 
         Ok(SourcePreview {
             status,
@@ -1147,6 +1158,14 @@ impl SourceEngine {
         let started = Instant::now();
         match self.fetch_text(url, headers).await {
             Ok(response) => {
+                let mut variables = context.variables();
+                variables.insert("encoding".to_string(), response.encoding.clone());
+                if response.had_decode_errors {
+                    variables.insert(
+                        "encoding_warning".to_string(),
+                        "响应包含无法按声明字符集解码的字节，已使用兼容回退".to_string(),
+                    );
+                }
                 debug_steps.push(SourceDebugStep {
                     stage: stage.to_string(),
                     url: redact_url(url),
@@ -1154,7 +1173,7 @@ impl SourceEngine {
                     status: Some(response.status),
                     bytes: Some(response.bytes),
                     error: None,
-                    variables: context.variables(),
+                    variables,
                     cache_hit: false,
                 });
                 Ok(response.body)
@@ -1262,6 +1281,11 @@ impl SourceEngine {
         }
         let response = request.send().await?;
         let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         let mut response = response.error_for_status()?;
         let mut body = Vec::new();
 
@@ -1272,10 +1296,13 @@ impl SourceEngine {
             body.extend_from_slice(&chunk);
         }
 
+        let decoded = decode_response_body(&body, content_type.as_deref());
         Ok(FetchedText {
             status,
             bytes: body.len(),
-            body: String::from_utf8_lossy(&body).into_owned(),
+            encoding: decoded.encoding,
+            had_decode_errors: decoded.had_decode_errors,
+            body: decoded.body,
         })
     }
 
@@ -1908,6 +1935,139 @@ fn redact_url(value: &str) -> String {
     parsed.to_string()
 }
 
+fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> DecodedResponse {
+    let (payload, bom_encoding) = if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        (&bytes[3..], Some("utf-8"))
+    } else if bytes.starts_with(&[0xff, 0xfe]) {
+        (&bytes[2..], Some("utf-16le"))
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        (&bytes[2..], Some("utf-16be"))
+    } else {
+        (bytes, None)
+    };
+
+    let declared = bom_encoding
+        .map(ToOwned::to_owned)
+        .or_else(|| content_type.and_then(extract_charset_hint))
+        .or_else(|| {
+            let limit = payload.len().min(MAX_CHARSET_SCAN_BYTES);
+            extract_charset_hint(&String::from_utf8_lossy(&payload[..limit]))
+        });
+
+    if let Some(label) = declared.as_deref().and_then(normalize_charset_label) {
+        if let Some(decoded) = decode_with_charset(payload, &label) {
+            if decoded.had_decode_errors {
+                if let Some(mut fallback) = decode_with_charset(payload, "gb18030") {
+                    if replacement_char_count(&fallback.body)
+                        < replacement_char_count(&decoded.body)
+                    {
+                        fallback.encoding = "gb18030-fallback".to_string();
+                        return fallback;
+                    }
+                }
+            }
+            return decoded;
+        }
+    }
+
+    if let Ok(text) = std::str::from_utf8(payload) {
+        return DecodedResponse {
+            body: text.to_string(),
+            encoding: "utf-8".to_string(),
+            had_decode_errors: false,
+        };
+    }
+
+    let (text, _, had_decode_errors) = GB18030.decode(payload);
+    DecodedResponse {
+        body: text.into_owned(),
+        encoding: "gb18030-fallback".to_string(),
+        had_decode_errors,
+    }
+}
+
+fn decode_with_charset(bytes: &[u8], label: &str) -> Option<DecodedResponse> {
+    let (text, encoding, had_decode_errors) = match label {
+        "utf-8" | "utf8" => {
+            let had_decode_errors = std::str::from_utf8(bytes).is_err();
+            (
+                String::from_utf8_lossy(bytes).into_owned(),
+                "utf-8",
+                had_decode_errors,
+            )
+        }
+        "utf-16le" | "utf16le" | "unicode" => {
+            let (text, _, had_decode_errors) = UTF_16LE.decode(bytes);
+            (text.into_owned(), "utf-16le", had_decode_errors)
+        }
+        "utf-16be" | "utf16be" => {
+            let (text, _, had_decode_errors) = UTF_16BE.decode(bytes);
+            (text.into_owned(), "utf-16be", had_decode_errors)
+        }
+        "gbk" | "gb2312" | "gb18030" | "x-gbk" => {
+            let (text, _, had_decode_errors) = GB18030.decode(bytes);
+            (text.into_owned(), "gb18030", had_decode_errors)
+        }
+        "windows-1252" | "cp1252" | "iso-8859-1" | "latin1" => {
+            let (text, _, had_decode_errors) = WINDOWS_1252.decode(bytes);
+            (text.into_owned(), "windows-1252", had_decode_errors)
+        }
+        _ => return None,
+    };
+
+    Some(DecodedResponse {
+        body: text,
+        encoding: encoding.to_string(),
+        had_decode_errors,
+    })
+}
+
+fn extract_charset_hint(value: &str) -> Option<String> {
+    let lowered = value.to_ascii_lowercase();
+    let marker = "charset";
+    let mut cursor = 0;
+    while let Some(relative) = lowered[cursor..].find(marker) {
+        let start = cursor + relative + marker.len();
+        let remainder = &lowered[start..];
+        let Some(equals) = remainder.find('=') else {
+            cursor = start;
+            continue;
+        };
+        let token_start = start + equals + 1;
+        let raw = &value[token_start..];
+        let token = raw
+            .trim_start_matches(|character: char| {
+                character.is_ascii_whitespace() || character == '\'' || character == '"'
+            })
+            .split(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, ';' | '\'' | '"' | '>' | '/')
+            })
+            .next()
+            .unwrap_or_default();
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+        cursor = token_start.min(lowered.len());
+    }
+    None
+}
+
+fn normalize_charset_label(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .trim_matches(|character| character == '\'' || character == '"')
+        .to_ascii_lowercase()
+        .replace('_', "-");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn replacement_char_count(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|character| *character == '\u{fffd}')
+        .count()
+}
+
 fn extract_document_rule(
     document: &Html,
     rule: Option<&SourceRule>,
@@ -1990,14 +2150,17 @@ fn extract_document_rule_with_fallback(
 
 fn fallback_link_from_element(element: ElementRef<'_>) -> Option<(String, String)> {
     let selector = parse_selector("a[href]").ok()?;
-    element.select(&selector).find_map(|link| {
-        let href = link.value().attr("href")?.trim();
-        if !is_navigable_reference(href) {
-            return None;
-        }
-        let title = link.text().collect::<Vec<_>>().join(" ");
-        Some((href.to_string(), title.trim().to_string()))
-    })
+    std::iter::once(element)
+        .filter(|candidate| selector.matches(candidate))
+        .chain(element.select(&selector))
+        .find_map(|link| {
+            let href = link.value().attr("href")?.trim();
+            if !is_navigable_reference(href) {
+                return None;
+            }
+            let title = link.text().collect::<Vec<_>>().join(" ");
+            Some((href.to_string(), title.trim().to_string()))
+        })
 }
 
 fn fallback_text_from_element(element: ElementRef<'_>) -> Option<String> {
@@ -3296,12 +3459,21 @@ fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<St
         }
         _ => {
             let selector = parse_selector(rule.selector())?;
-            let target = element
-                .select(&selector)
-                .next()
-                .ok_or(SourceError::NoMatch)?;
+            let target =
+                select_first_including_self(element, &selector).ok_or(SourceError::NoMatch)?;
             extract_selected_element(target, rule)
         }
+    }
+}
+
+fn select_first_including_self<'a>(
+    element: ElementRef<'a>,
+    selector: &Selector,
+) -> Option<ElementRef<'a>> {
+    if selector.matches(&element) {
+        Some(element)
+    } else {
+        element.select(selector).next()
     }
 }
 
@@ -5127,5 +5299,62 @@ mod tests {
             fallback_link_from_element(item),
             Some(("/safe".to_string(), "Safe".to_string()))
         );
+    }
+
+    #[test]
+    fn html_rules_can_match_the_item_element_itself() {
+        let engine = SourceEngine::default().expect("source engine");
+        let source: BookSource = serde_json::from_value(json!({
+            "name": "Self matching",
+            "searchUrl": "https://example.test/search",
+            "search": {
+                "item": "a.result",
+                "title": "a.result",
+                "url": {"selector": "a.result", "attr": "href"}
+            }
+        }))
+        .expect("self-matching search source");
+        let results = engine
+            .parse_search_html(&source, r#"<a class="result" href="/book/1">Book one</a>"#)
+            .expect("self-matching search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Book one");
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+
+        let rules = PageRules {
+            item: Some("a.chapter".to_string()),
+            title: Some(SourceRule::Selector("a.chapter".to_string())),
+            url: Some(SourceRule::Detailed {
+                selector: "a.chapter".to_string(),
+                attr: Some("href".to_string()),
+                regex: None,
+                replacement: None,
+            }),
+            ..PageRules::default()
+        };
+        let chapters = parse_chapter_list(
+            &rules,
+            r#"<a class="chapter" href="/chapter/1">第一章</a>"#,
+            "https://example.test/book/",
+        )
+        .expect("self-matching toc");
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "第一章");
+        assert_eq!(chapters[0].url, "https://example.test/chapter/1");
+    }
+
+    #[test]
+    fn decodes_declared_non_utf8_source_responses() {
+        let (gbk, _, _) = GB18030.encode("测试书名\n作者甲");
+        let decoded = decode_response_body(gbk.as_ref(), Some("text/html; charset=gbk"));
+        assert_eq!(decoded.body, "测试书名\n作者甲");
+        assert_eq!(decoded.encoding, "gb18030");
+        assert!(!decoded.had_decode_errors);
+
+        let (utf16, _, _) = UTF_16LE.encode("第一章");
+        let decoded = decode_response_body(utf16.as_ref(), Some("text/html; charset=utf-16le"));
+        assert_eq!(decoded.body, "第一章");
+        assert_eq!(decoded.encoding, "utf-16le");
+        assert!(!decoded.had_decode_errors);
     }
 }
