@@ -5351,8 +5351,11 @@ mod tests {
         assert_eq!(decoded.encoding, "gb18030");
         assert!(!decoded.had_decode_errors);
 
-        let (utf16, _, _) = UTF_16LE.encode("第一章");
-        let decoded = decode_response_body(utf16.as_ref(), Some("text/html; charset=utf-16le"));
+        let utf16 = "第一章"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let decoded = decode_response_body(&utf16, Some("text/html; charset=utf-16le"));
         assert_eq!(decoded.body, "第一章");
         assert_eq!(decoded.encoding, "utf-16le");
         assert!(!decoded.had_decode_errors);
