@@ -7,6 +7,16 @@ const formatDebugVariables = (variables: Record<string, string> = {}) =>
   Object.entries(variables)
     .map(([key, value]) => `${key}=${value}`)
     .join(" · ");
+const ruleStatusLabel = (status: string) => ({
+  success: "成功",
+  no_match: "无匹配",
+  failure: "失败",
+  skipped: "跳过",
+}[status] ?? status);
+const retainedImportCount = (preview: any) =>
+  preview.entries.filter((entry: any) => entry.valid && entry.unsupported_rules.length > 0).length;
+const runnableImportCount = (preview: any) =>
+  Math.max(preview.valid_count - retainedImportCount(preview), 0);
 const { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_SETTINGS, readerFontStacks, view, books, recentBooks, continueBook, detail, chapter, fileInput, sourceImportInput, status, errorMessage, isImporting, settings, sourceBusy, sourceValidation, sources, filteredSources, sourceGroupFilter, sourceGroupDraft, sourceWeightDraft, sourceOrderDraft, sourceExploreDraft, sourceCommentDraft, selectedSourceIds, sourceBatchBusy, sourceBatchGroup, sourceBatchWeight, sourceBatchComment, allFilteredSourcesSelected, sourceId, sourceListBusy, sourcePipelineBusy, sourceKeyword, sourcePipeline, searchKeyword, searchBusy, searchResult, sourceTransferBusy, sourceTransferMessage, sourceImportUrl, sourceImportPreview, sourceImportPayload, sourceImportLabel, sourceImportStrategy, sourceSnapshots, sourceImportSnapshotId, sourceAuditBusy, sourceAudit, sourceCacheBusy, sourceCacheStatus, sourceFailureHistory, sourceFailureHistoryBusy, sourceFailureStats, sourceMetrics, sourceRuleMetrics, remoteBusy, remoteBook, remoteChapter, remoteChapterRef, sourceJson, chapterParagraphs, chapterBlocks, remoteChapterParagraphs, readerStyle, themeLabels, parseContentBlocks, contentBlockTag, clampNumber, normalizeHex, isRecord, loadSettings, loadBooks, openSources, openSettings, closeSettings, resetSettings, loadSources, runSourceAudit, refreshSourceCacheStatus, loadSourceFailureHistory, clearSourceFailureHistory, loadSourceFailureStats, loadSourceRequestMetrics, loadSourceRuleMetrics, formatBytes, formatPercent, selectSource, newSourceDraft, saveSource, saveSourceMetadata, toggleSource, toggleSourceExplore, toggleSourceSelection, toggleSelectAllSources, applySourceBatch, reorderSource, beginSourceDrag, dropSourceDrag, clearSourceDrag, deleteSource, searchSources, clearSearch, finishSourceImport, exportSources, openSourceImportPicker, showSourceImportPreview, clearSourceImportPreview, confirmSourceImport, restoreSourceSnapshot, importSourceUrl, importSourceFile, openRemoteBook, loadRemoteChapter, refreshRemoteBook, remoteChapterIndex, goToRemoteChapter, previousRemoteChapter, nextRemoteChapter, runSourcePipeline, cancelSourcePipeline, exportSourceDiagnostics, exportSourceFailureReport, validateSource, openFilePicker, importFile, loadChapter, saveProgress, continueReading, closeReader, cycleTheme, formatProgress, currentChapterIndex, goToChapter, previousChapter, nextChapter } = context;
 
 type SourcePanel = "library" | "import" | "manage";
@@ -72,11 +82,13 @@ function openSourcePanel(panel: SourcePanel) {
             <h2>导入预览 · {{ sourceImportLabel }}</h2>
           </div>
           <span class="source-preview-count">
-            {{ sourceImportPreview.valid_count }}/{{ sourceImportPreview.entries.length }} 可导入（含兼容保留）
+            {{ runnableImportCount(sourceImportPreview) }} 个可运行 ·
+            {{ retainedImportCount(sourceImportPreview) }} 个兼容保留 ·
+            {{ sourceImportPreview.invalid_count }} 个需人工处理
           </span>
         </div>
         <p class="source-import-preview-note">
-          无法解析的结构才会跳过；脚本、XPath、模板和部分 Legado 规则会保留原文，但当前不会执行。
+          “可运行”表示已通过当前安全规则解析；“兼容保留”会保存原文但当前不会执行脚本、XPath、模板和部分 Legado 规则。
         </p>
         <ul class="source-preview-list">
           <li
@@ -122,7 +134,7 @@ function openSourcePanel(panel: SourcePanel) {
             :disabled="sourceTransferBusy || sourceImportPreview.valid_count === 0"
             @click="confirmSourceImport"
           >
-            {{ sourceTransferBusy ? "导入中…" : "导入可导入项" }}
+            {{ sourceTransferBusy ? "导入中…" : "导入可运行与兼容保留项" }}
           </button>
           <button
             class="source-link-button"
@@ -489,6 +501,13 @@ function openSourcePanel(panel: SourcePanel) {
           <div class="source-debug-summary">
             <strong>{{ sourcePipeline.book_info.title }}</strong>
             <span>{{ sourcePipeline.search_results.length }} 个搜索结果 · {{ sourcePipeline.chapters.length }} 个章节</span>
+          </div>
+          <div v-if="sourcePipeline.rule_evaluations?.length" class="source-failure-stats source-rule-diagnostics">
+            <strong>字段级规则诊断</strong>
+            <small v-for="evaluation in sourcePipeline.rule_evaluations" :key="evaluation.stage + '-' + evaluation.rule_key">
+              {{ evaluation.stage }}.{{ evaluation.rule_key }}：{{ ruleStatusLabel(evaluation.status) }}
+              <template v-if="evaluation.detail"> · {{ evaluation.detail }}</template>
+            </small>
           </div>
           <ol class="source-debug-steps">
             <li v-for="step in sourcePipeline.debug_steps" :key="step.stage">

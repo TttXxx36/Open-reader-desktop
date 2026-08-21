@@ -1,3 +1,4 @@
+use encoding_rs::{GB18030, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use regex::Regex;
 use reqwest::header::CONTENT_TYPE;
 use scraper::{ElementRef, Html, Selector};
@@ -34,6 +35,17 @@ const MAX_SOURCE_CUSTOM_ORDER: i64 = 1_000_000;
 const MAX_REDIRECTS: usize = 5;
 const MAX_STAGE_BUDGET_SECS: u64 = 60;
 const MAX_PIPELINE_BUDGET_SECS: u64 = 120;
+const MAX_CHARSET_SCAN_BYTES: usize = 16 * 1024;
+const CONTENT_FALLBACK_SELECTORS: &[(&str, Option<&str>)] = &[
+    (".content", Some("html")),
+    ("#content", Some("html")),
+    ("article.content", Some("html")),
+    (".read-content", Some("html")),
+    (".chapter-content", Some("html")),
+    ("[itemprop=\"articleBody\"]", Some("html")),
+    ("article", Some("html")),
+    ("main", Some("html")),
+];
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -55,6 +67,12 @@ pub enum SourceError {
     TimeoutBudget(String),
     #[error("no value matched the source rule")]
     NoMatch,
+    #[error("{stage} 规则 {rule} 失败：{message}")]
+    Rule {
+        stage: String,
+        rule: String,
+        message: String,
+    },
     #[error("invalid JSON path: {0}")]
     InvalidJsonPath(String),
     #[error("invalid JSON response: {0}")]
@@ -356,6 +374,7 @@ pub struct SourceSecurityAudit {
 pub struct SearchResult {
     pub title: String,
     pub author: Option<String>,
+    pub intro: Option<String>,
     pub book_url: Option<String>,
     pub source_name: String,
 }
@@ -373,7 +392,11 @@ pub struct UnifiedSearchResult {
     pub source_name: String,
     pub title: String,
     pub author: Option<String>,
+    pub intro: Option<String>,
     pub book_url: Option<String>,
+    pub can_open: bool,
+    pub can_read: bool,
+    pub unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -381,11 +404,11 @@ pub struct SourceSearchFailure {
     pub source_id: String,
     pub source_name: String,
     pub message: String,
-    #[serde(skip_serializing)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceRuleEvaluationStatus {
     Success,
@@ -394,11 +417,13 @@ pub enum SourceRuleEvaluationStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceRuleEvaluation {
     pub stage: String,
     pub rule_key: String,
     pub status: SourceRuleEvaluationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -408,7 +433,7 @@ pub struct SourceSearchDiagnostics {
     pub pages_scanned: usize,
     pub parsed_items: usize,
     pub stop_reason: String,
-    #[serde(skip_serializing)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -425,6 +450,7 @@ pub fn rule_evaluation_for_output(
         } else {
             SourceRuleEvaluationStatus::NoMatch
         },
+        detail: None,
     }
 }
 
@@ -439,6 +465,7 @@ fn rule_evaluation_for_rule(
             stage: stage.to_string(),
             rule_key: rule_key.to_string(),
             status: SourceRuleEvaluationStatus::Skipped,
+            detail: None,
         };
     }
     rule_evaluation_for_output(stage, rule_key, has_output)
@@ -585,6 +612,11 @@ pub fn rule_evaluation_from_error(
         stage: stage.to_string(),
         rule_key: rule_key.to_string(),
         status,
+        detail: Some(if status == SourceRuleEvaluationStatus::NoMatch {
+            "no_match".to_string()
+        } else {
+            "rule_error".to_string()
+        }),
     })
 }
 
@@ -635,7 +667,7 @@ pub struct SourceChapterContent {
     pub title: String,
     pub content: String,
     pub next_url: Option<String>,
-    #[serde(skip)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -732,7 +764,7 @@ pub struct SourcePipelineResult {
     pub chapters: Vec<SourceChapter>,
     pub first_chapter: SourceChapterContent,
     pub debug_steps: Vec<SourceDebugStep>,
-    #[serde(skip_serializing)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -741,7 +773,7 @@ pub struct SourceBookDetail {
     pub book_info: BookInfo,
     pub chapters: Vec<SourceChapter>,
     pub debug_steps: Vec<SourceDebugStep>,
-    #[serde(skip)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -749,6 +781,14 @@ struct FetchedText {
     body: String,
     status: u16,
     bytes: usize,
+    encoding: String,
+    had_decode_errors: bool,
+}
+
+struct DecodedResponse {
+    body: String,
+    encoding: String,
+    had_decode_errors: bool,
 }
 
 #[derive(Clone)]
@@ -809,7 +849,8 @@ impl SourceEngine {
             body.extend_from_slice(&chunk);
         }
 
-        let preview = String::from_utf8_lossy(&body).chars().take(2_000).collect();
+        let decoded = decode_response_body(&body, content_type.as_deref());
+        let preview = decoded.body.chars().take(2_000).collect();
 
         Ok(SourcePreview {
             status,
@@ -958,12 +999,20 @@ impl SourceEngine {
                         stop_reason: paged.stop_reason,
                         rule_evaluations: paged.rule_evaluations,
                     });
-                    results.extend(paged.results.into_iter().map(|item| UnifiedSearchResult {
-                        source_id: definition.id.clone(),
-                        source_name: definition.name.clone(),
-                        title: item.title,
-                        author: item.author,
-                        book_url: item.book_url,
+                    results.extend(paged.results.into_iter().map(|item| {
+                        let (can_open, can_read, unavailable_reason) =
+                            source_capabilities(&definition.source, item.book_url.as_deref());
+                        UnifiedSearchResult {
+                            source_id: definition.id.clone(),
+                            source_name: definition.name.clone(),
+                            title: item.title,
+                            author: item.author,
+                            intro: item.intro,
+                            book_url: item.book_url,
+                            can_open,
+                            can_read,
+                            unavailable_reason,
+                        }
                     }));
                 }
                 Ok((definition, Err(error))) => {
@@ -1026,6 +1075,9 @@ impl SourceEngine {
             .fetch_book_info(source, book_url, &mut debug_steps)
             .await?;
         let chapters = self.fetch_toc(source, book_url, &mut debug_steps).await?;
+        if chapters.is_empty() {
+            return Err(rule_error("toc", "item", SourceError::NoMatch));
+        }
         rule_evaluations.extend(book_rule_evaluations(source, &book_info));
         rule_evaluations.extend(toc_rule_evaluations(source, &chapters));
 
@@ -1125,6 +1177,14 @@ impl SourceEngine {
         let started = Instant::now();
         match self.fetch_text(url, headers).await {
             Ok(response) => {
+                let mut variables = context.variables();
+                variables.insert("encoding".to_string(), response.encoding.clone());
+                if response.had_decode_errors {
+                    variables.insert(
+                        "encoding_warning".to_string(),
+                        "响应包含无法按声明字符集解码的字节，已使用兼容回退".to_string(),
+                    );
+                }
                 debug_steps.push(SourceDebugStep {
                     stage: stage.to_string(),
                     url: redact_url(url),
@@ -1132,7 +1192,7 @@ impl SourceEngine {
                     status: Some(response.status),
                     bytes: Some(response.bytes),
                     error: None,
-                    variables: context.variables(),
+                    variables,
                     cache_hit: false,
                 });
                 Ok(response.body)
@@ -1240,6 +1300,11 @@ impl SourceEngine {
         }
         let response = request.send().await?;
         let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
         let mut response = response.error_for_status()?;
         let mut body = Vec::new();
 
@@ -1250,10 +1315,13 @@ impl SourceEngine {
             body.extend_from_slice(&chunk);
         }
 
+        let decoded = decode_response_body(&body, content_type.as_deref());
         Ok(FetchedText {
             status,
             bytes: body.len(),
-            body: String::from_utf8_lossy(&body).into_owned(),
+            encoding: decoded.encoding,
+            had_decode_errors: decoded.had_decode_errors,
+            body: decoded.body,
         })
     }
 
@@ -1263,6 +1331,10 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<BookInfo, SourceError> {
+        let rules = source
+            .book_info
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("bookInfo rules are required".to_string()))?;
         let template = runtime_endpoint_or_fallback(
             source,
             "bookInfoUrl",
@@ -1270,7 +1342,7 @@ impl SourceEngine {
             book_url,
         );
         let context = SourceRequestContext::book(book_url);
-        let (body, _url) = self
+        let (body, fetched_url) = self
             .fetch_stage_chain(
                 "book_info",
                 template,
@@ -1279,23 +1351,73 @@ impl SourceEngine {
                 debug_steps,
             )
             .await?;
-        let rules = source
-            .book_info
-            .as_ref()
-            .ok_or_else(|| SourceError::InvalidConfig("bookInfo rules are required".to_string()))?;
         if rules.is_json() {
-            return parse_book_info_json(rules, &body, book_url);
+            let mut book_info = parse_book_info_json(rules, &body, book_url)
+                .map_err(|error| rule_error("book_info", "document", error))?;
+            let downgraded_fields = downgrade_garbled_book_fields(&mut book_info);
+            append_text_quality_debug_step(debug_steps, &fetched_url, &downgraded_fields);
+            return Ok(book_info);
         }
         let document = Html::parse_document(&body);
 
-        Ok(BookInfo {
-            title: extract_document_rule(&document, rules.title.as_ref())?
-                .unwrap_or_else(|| "未命名书籍".to_string()),
-            author: non_empty(extract_document_rule(&document, rules.author.as_ref())?),
-            intro: non_empty(extract_document_rule(&document, rules.intro.as_ref())?),
-            cover_url: non_empty(extract_document_rule(&document, rules.url.as_ref())?),
+        let mut book_info = BookInfo {
+            title: extract_document_rule_with_fallback(
+                &document,
+                rules.title.as_ref(),
+                &[
+                    ("h1", None),
+                    ("h2", None),
+                    (".book-title", None),
+                    (".bookname", None),
+                    (".title", None),
+                ],
+            )
+            .map_err(|error| rule_error("book_info", "title", error))?
+            .unwrap_or_else(|| "未命名书籍".to_string()),
+            author: non_empty(
+                extract_document_rule_with_fallback(
+                    &document,
+                    rules.author.as_ref(),
+                    &[
+                        (".author", None),
+                        (".book-author", None),
+                        (r#"[itemprop="author"]"#, None),
+                    ],
+                )
+                .map_err(|error| rule_error("book_info", "author", error))?,
+            ),
+            intro: non_empty(
+                extract_document_rule_with_fallback(
+                    &document,
+                    rules.intro.as_ref(),
+                    &[
+                        (".intro", None),
+                        (".book-intro", None),
+                        (".description", None),
+                        (r#"[itemprop="description"]"#, None),
+                    ],
+                )
+                .map_err(|error| rule_error("book_info", "intro", error))?,
+            ),
+            cover_url: non_empty(
+                extract_document_rule_with_fallback(
+                    &document,
+                    rules.url.as_ref(),
+                    &[
+                        ("img.cover", Some("src")),
+                        (".book-cover img", Some("src")),
+                        ("img[data-src]", Some("data-src")),
+                        ("img[data-original]", Some("data-original")),
+                        (r#"[itemprop="image"]"#, Some("content")),
+                    ],
+                )
+                .map_err(|error| rule_error("book_info", "cover", error))?,
+            ),
             book_url: book_url.to_string(),
-        })
+        };
+        let downgraded_fields = downgrade_garbled_book_fields(&mut book_info);
+        append_text_quality_debug_step(debug_steps, &fetched_url, &downgraded_fields);
+        Ok(book_info)
     }
 
     async fn fetch_toc(
@@ -1304,20 +1426,21 @@ impl SourceEngine {
         book_url: &str,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<Vec<SourceChapter>, SourceError> {
+        let rules = source
+            .toc
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("toc rules are required".to_string()))?;
         let template =
             runtime_endpoint_or_fallback(source, "tocUrl", source.toc_url.as_deref(), book_url);
         let context = SourceRequestContext::book(book_url);
         let (body, url) = self
             .fetch_stage_chain("toc", template, &source.headers, &context, debug_steps)
             .await?;
-        let rules = source
-            .toc
-            .as_ref()
-            .ok_or_else(|| SourceError::InvalidConfig("toc rules are required".to_string()))?;
         if rules.is_json() {
-            return parse_chapter_list_json(rules, &body, &url);
+            return parse_chapter_list_json(rules, &body, &url)
+                .map_err(|error| rule_error("toc", "document", error));
         }
-        parse_chapter_list(rules, &body, &url)
+        parse_chapter_list(rules, &body, &url).map_err(|error| rule_error("toc", "item", error))
     }
 
     pub async fn fetch_chapter_content(
@@ -1326,6 +1449,10 @@ impl SourceEngine {
         chapter: &SourceChapter,
         debug_steps: &mut Vec<SourceDebugStep>,
     ) -> Result<SourceChapterContent, SourceError> {
+        let rules = source
+            .content
+            .as_ref()
+            .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
         let template = runtime_endpoint_or_fallback(
             source,
             "contentUrl",
@@ -1336,23 +1463,27 @@ impl SourceEngine {
         let (body, content_url) = self
             .fetch_stage_chain("content", template, &source.headers, &context, debug_steps)
             .await?;
-        let rules = source
-            .content
-            .as_ref()
-            .ok_or_else(|| SourceError::InvalidConfig("content rules are required".to_string()))?;
         let content = if rules.is_json() {
-            parse_json_rule_document(&body, rules.item.as_deref(), rules.content.as_ref())?
+            parse_json_rule_document(&body, rules.item.as_deref(), rules.content.as_ref())
+                .map_err(|error| rule_error("content", "content", error))?
         } else {
             let document = Html::parse_document(&body);
-            extract_document_rule(&document, rules.content.as_ref())?
+            extract_document_rule_with_fallback(
+                &document,
+                rules.content.as_ref(),
+                CONTENT_FALLBACK_SELECTORS,
+            )
+            .map_err(|error| rule_error("content", "content", error))?
         }
-        .ok_or(SourceError::NoMatch)?;
+        .ok_or_else(|| rule_error("content", "content", SourceError::NoMatch))?;
         let next_url = if let Some(next_rule) = rules.next.as_ref() {
             let next_value = if rules.is_json() {
-                parse_json_rule_document(&body, rules.item.as_deref(), Some(next_rule))?
+                parse_json_rule_document(&body, rules.item.as_deref(), Some(next_rule))
+                    .map_err(|error| rule_error("content", "next", error))?
             } else {
                 let document = Html::parse_document(&body);
-                extract_document_rule(&document, Some(next_rule))?
+                extract_document_rule(&document, Some(next_rule))
+                    .map_err(|error| rule_error("content", "next", error))?
             };
             next_value
                 .filter(|value| !value.trim().is_empty())
@@ -1585,24 +1716,38 @@ impl SourceEngine {
             let title = rules
                 .title
                 .as_ref()
-                .map(|rule| extract_json_rule(item, rule))
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
                 .transpose()?
+                .flatten()
+                .or_else(|| json_object_text(item, &["title", "name", "bookName"]))
                 .unwrap_or_default();
             let author = rules
                 .author
                 .as_ref()
-                .map(|rule| extract_json_rule(item, rule))
-                .transpose()?;
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
+                .transpose()?
+                .flatten()
+                .or_else(|| json_object_text(item, &["author", "bookAuthor"]));
+            let intro = rules
+                .intro
+                .as_ref()
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
+                .transpose()?
+                .flatten()
+                .or_else(|| json_object_text(item, &["intro", "description", "desc", "summary"]));
             let book_url = rules
                 .url
                 .as_ref()
-                .map(|rule| extract_json_rule(item, rule))
-                .transpose()?;
+                .map(|rule| extract_json_rule_optional(item, Some(rule)))
+                .transpose()?
+                .flatten()
+                .or_else(|| json_object_text(item, &["url", "href", "link", "bookUrl"]));
 
             if !title.is_empty() || book_url.is_some() {
                 results.push(SearchResult {
                     title,
                     author: non_empty(author),
+                    intro: non_empty(intro),
                     book_url: non_empty(book_url),
                     source_name: source.name.clone(),
                 });
@@ -1626,27 +1771,58 @@ impl SourceEngine {
         let mut results = Vec::new();
 
         for item in document.select(&item_selector).take(MAX_SEARCH_RESULTS) {
+            let fallback_link = fallback_link_from_element(item);
             let title = rules
                 .title
                 .as_ref()
-                .map(|rule| extract_from_element(item, rule))
+                .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?
+                .flatten()
+                .or_else(|| {
+                    fallback_link
+                        .as_ref()
+                        .and_then(|(_, title)| non_empty(Some(title.clone())))
+                })
+                .or_else(|| fallback_text_from_element(item))
                 .unwrap_or_default();
             let author = rules
                 .author
                 .as_ref()
-                .map(|rule| extract_from_element(item, rule))
+                .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?;
+            let intro = rules
+                .intro
+                .as_ref()
+                .map(|rule| extract_from_element_optional(item, rule))
+                .transpose()?
+                .flatten()
+                .or_else(|| {
+                    extract_from_element_optional(item, &SourceRule::Selector(".intro".to_string()))
+                        .ok()
+                        .flatten()
+                })
+                .or_else(|| {
+                    extract_from_element_optional(
+                        item,
+                        &SourceRule::Selector(".description".to_string()),
+                    )
+                    .ok()
+                    .flatten()
+                });
             let book_url = rules
                 .url
                 .as_ref()
-                .map(|rule| extract_from_element(item, rule))
+                .map(|rule| extract_from_element_optional(item, rule))
                 .transpose()?;
+            let book_url = book_url
+                .flatten()
+                .or_else(|| fallback_link.as_ref().map(|(url, _)| url.clone()));
 
             if !title.is_empty() || book_url.is_some() {
                 results.push(SearchResult {
                     title,
-                    author: non_empty(author),
+                    author: non_empty(author.flatten()),
+                    intro: non_empty(intro),
                     book_url: non_empty(book_url),
                     source_name: source.name.clone(),
                 });
@@ -1663,19 +1839,27 @@ fn parse_chapter_page(
     content_url: &str,
 ) -> Result<(String, Option<String>), SourceError> {
     let content = if rules.is_json() {
-        parse_json_rule_document(body, rules.item.as_deref(), rules.content.as_ref())?
+        parse_json_rule_document(body, rules.item.as_deref(), rules.content.as_ref())
+            .map_err(|error| rule_error("content", "content", error))?
     } else {
         let document = Html::parse_document(body);
-        extract_document_rule(&document, rules.content.as_ref())?
+        extract_document_rule_with_fallback(
+            &document,
+            rules.content.as_ref(),
+            CONTENT_FALLBACK_SELECTORS,
+        )
+        .map_err(|error| rule_error("content", "content", error))?
     }
-    .ok_or(SourceError::NoMatch)?;
+    .ok_or_else(|| rule_error("content", "content", SourceError::NoMatch))?;
 
     let next_url = if let Some(next_rule) = rules.next.as_ref() {
         let next_value = if rules.is_json() {
-            parse_json_rule_document(body, rules.item.as_deref(), Some(next_rule))?
+            parse_json_rule_document(body, rules.item.as_deref(), Some(next_rule))
+                .map_err(|error| rule_error("content", "next", error))?
         } else {
             let document = Html::parse_document(body);
-            extract_document_rule(&document, Some(next_rule))?
+            extract_document_rule(&document, Some(next_rule))
+                .map_err(|error| rule_error("content", "next", error))?
         };
         next_value
             .filter(|value| !value.trim().is_empty())
@@ -1697,12 +1881,18 @@ fn dedupe_search_results(mut results: Vec<UnifiedSearchResult>) -> Vec<UnifiedSe
         (
             normalize_search_text(&left.title),
             normalize_search_text(left.author.as_deref().unwrap_or_default()),
+            !left.can_read,
+            !left.can_open,
+            left.book_url.is_none(),
             normalize_search_text(&left.source_name),
             left.source_id.clone(),
         )
             .cmp(&(
                 normalize_search_text(&right.title),
                 normalize_search_text(right.author.as_deref().unwrap_or_default()),
+                !right.can_read,
+                !right.can_open,
+                right.book_url.is_none(),
                 normalize_search_text(&right.source_name),
                 right.source_id.clone(),
             ))
@@ -1713,6 +1903,26 @@ fn dedupe_search_results(mut results: Vec<UnifiedSearchResult>) -> Vec<UnifiedSe
         .into_iter()
         .filter(|item| seen.insert(search_result_key(item)))
         .collect()
+}
+
+fn source_capabilities(
+    source: &BookSource,
+    book_url: Option<&str>,
+) -> (bool, bool, Option<String>) {
+    if book_url.map_or(true, |value| value.trim().is_empty()) {
+        return (false, false, Some("搜索结果没有可用的书籍链接".to_string()));
+    }
+
+    let can_open = source.book_info.is_some() && source.toc.is_some();
+    let can_read = can_open && source.content.is_some();
+    let reason = if !can_open {
+        Some("该书源仅支持搜索，未配置书籍详情或目录规则".to_string())
+    } else if !can_read {
+        Some("该书源缺少正文规则，暂时无法阅读".to_string())
+    } else {
+        None
+    };
+    (can_open, can_read, reason)
 }
 
 fn search_result_key(item: &UnifiedSearchResult) -> String {
@@ -1738,6 +1948,17 @@ fn pipeline_error(stage: &str, error: SourceError) -> SourceError {
     }
 }
 
+fn rule_error(stage: &str, rule: &str, error: SourceError) -> SourceError {
+    match error {
+        SourceError::Rule { .. } => error,
+        other => SourceError::Rule {
+            stage: stage.to_string(),
+            rule: rule.to_string(),
+            message: other.to_string(),
+        },
+    }
+}
+
 fn redact_url(value: &str) -> String {
     let Ok(mut parsed) = Url::parse(value) else {
         return value.to_string();
@@ -1745,6 +1966,205 @@ fn redact_url(value: &str) -> String {
     parsed.set_query(None);
     parsed.set_fragment(None);
     parsed.to_string()
+}
+
+fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> DecodedResponse {
+    let (payload, bom_encoding) = if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        (&bytes[3..], Some("utf-8"))
+    } else if bytes.starts_with(&[0xff, 0xfe]) {
+        (&bytes[2..], Some("utf-16le"))
+    } else if bytes.starts_with(&[0xfe, 0xff]) {
+        (&bytes[2..], Some("utf-16be"))
+    } else {
+        (bytes, None)
+    };
+
+    let declared = bom_encoding
+        .map(ToOwned::to_owned)
+        .or_else(|| content_type.and_then(extract_charset_hint))
+        .or_else(|| {
+            let limit = payload.len().min(MAX_CHARSET_SCAN_BYTES);
+            extract_charset_hint(&String::from_utf8_lossy(&payload[..limit]))
+        });
+
+    if let Some(label) = declared.as_deref().and_then(normalize_charset_label) {
+        if let Some(decoded) = decode_with_charset(payload, &label) {
+            if decoded.had_decode_errors {
+                if let Some(mut fallback) = decode_with_charset(payload, "gb18030") {
+                    if replacement_char_count(&fallback.body)
+                        < replacement_char_count(&decoded.body)
+                    {
+                        fallback.encoding = "gb18030-fallback".to_string();
+                        fallback.had_decode_errors = true;
+                        return fallback;
+                    }
+                }
+            }
+            return decoded;
+        }
+    }
+
+    if let Ok(text) = std::str::from_utf8(payload) {
+        return DecodedResponse {
+            body: text.to_string(),
+            encoding: "utf-8".to_string(),
+            had_decode_errors: false,
+        };
+    }
+
+    let (text, _, _) = GB18030.decode(payload);
+    DecodedResponse {
+        body: text.into_owned(),
+        encoding: "gb18030-fallback".to_string(),
+        had_decode_errors: true,
+    }
+}
+
+fn decode_with_charset(bytes: &[u8], label: &str) -> Option<DecodedResponse> {
+    let (text, encoding, had_decode_errors) = match label {
+        "utf-8" | "utf8" => {
+            let had_decode_errors = std::str::from_utf8(bytes).is_err();
+            (
+                String::from_utf8_lossy(bytes).into_owned(),
+                "utf-8",
+                had_decode_errors,
+            )
+        }
+        "utf-16le" | "utf16le" | "unicode" => {
+            let (text, _, had_decode_errors) = UTF_16LE.decode(bytes);
+            (text.into_owned(), "utf-16le", had_decode_errors)
+        }
+        "utf-16be" | "utf16be" => {
+            let (text, _, had_decode_errors) = UTF_16BE.decode(bytes);
+            (text.into_owned(), "utf-16be", had_decode_errors)
+        }
+        "gbk" | "gb2312" | "gb18030" | "x-gbk" => {
+            let (text, _, had_decode_errors) = GB18030.decode(bytes);
+            (text.into_owned(), "gb18030", had_decode_errors)
+        }
+        "windows-1252" | "cp1252" | "iso-8859-1" | "latin1" => {
+            let (text, _, had_decode_errors) = WINDOWS_1252.decode(bytes);
+            (text.into_owned(), "windows-1252", had_decode_errors)
+        }
+        _ => return None,
+    };
+
+    Some(DecodedResponse {
+        body: text,
+        encoding: encoding.to_string(),
+        had_decode_errors,
+    })
+}
+
+fn extract_charset_hint(value: &str) -> Option<String> {
+    let lowered = value.to_ascii_lowercase();
+    let marker = "charset";
+    let mut cursor = 0;
+    while let Some(relative) = lowered[cursor..].find(marker) {
+        let start = cursor + relative + marker.len();
+        let remainder = &lowered[start..];
+        let Some(equals) = remainder.find('=') else {
+            cursor = start;
+            continue;
+        };
+        let token_start = start + equals + 1;
+        let raw = &value[token_start..];
+        let token = raw
+            .trim_start_matches(|character: char| {
+                character.is_ascii_whitespace() || character == '\'' || character == '"'
+            })
+            .split(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, ';' | '\'' | '"' | '>' | '/')
+            })
+            .next()
+            .unwrap_or_default();
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+        cursor = token_start.min(lowered.len());
+    }
+    None
+}
+
+fn normalize_charset_label(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .trim_matches(|character| character == '\'' || character == '"')
+        .to_ascii_lowercase()
+        .replace('_', "-");
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn replacement_char_count(value: &str) -> usize {
+    value
+        .chars()
+        .filter(|character| *character == '\u{fffd}')
+        .count()
+}
+
+fn is_suspicious_decoded_text(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    if value.contains('\u{fffd}')
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return true;
+    }
+    ["Ã", "Â", "Ð", "Ñ", "â€", "ä¸", "æ–", "ï¿½"]
+        .iter()
+        .any(|marker| value.contains(marker))
+}
+
+fn downgrade_garbled_book_fields(book_info: &mut BookInfo) -> Vec<&'static str> {
+    let mut downgraded = Vec::new();
+    if is_suspicious_decoded_text(&book_info.title) {
+        book_info.title = "未命名书籍".to_string();
+        downgraded.push("title");
+    }
+    if book_info
+        .author
+        .as_deref()
+        .is_some_and(is_suspicious_decoded_text)
+    {
+        book_info.author = None;
+        downgraded.push("author");
+    }
+    if book_info
+        .intro
+        .as_deref()
+        .is_some_and(is_suspicious_decoded_text)
+    {
+        book_info.intro = None;
+        downgraded.push("intro");
+    }
+    downgraded
+}
+
+fn append_text_quality_debug_step(
+    debug_steps: &mut Vec<SourceDebugStep>,
+    url: &str,
+    downgraded_fields: &[&str],
+) {
+    if downgraded_fields.is_empty() {
+        return;
+    }
+    debug_steps.push(SourceDebugStep {
+        stage: "book_info.text_quality".to_string(),
+        url: redact_url(url),
+        duration_ms: 0,
+        status: None,
+        bytes: None,
+        error: None,
+        variables: BTreeMap::from([
+            ("reason".to_string(), "garbled_text_downgraded".to_string()),
+            ("fields".to_string(), downgraded_fields.join(",")),
+        ]),
+        cache_hit: false,
+    });
 }
 
 fn extract_document_rule(
@@ -1786,9 +2206,93 @@ fn extract_document_rule(
             let Some(element) = document.select(&selector).next() else {
                 return Ok(None);
             };
-            Ok(Some(extract_selected_element(element, rule)?))
+            match extract_selected_element(element, rule) {
+                Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+                Ok(_) | Err(SourceError::NoMatch) => Ok(None),
+                Err(error) => Err(error),
+            }
         }
     }
+}
+
+fn extract_document_rule_with_fallback(
+    document: &Html,
+    rule: Option<&SourceRule>,
+    candidates: &[(&str, Option<&str>)],
+) -> Result<Option<String>, SourceError> {
+    if let Some(value) = extract_document_rule(document, rule)? {
+        return Ok(Some(value));
+    }
+
+    for (selector_text, attr) in candidates {
+        let Ok(selector) = parse_selector(selector_text) else {
+            continue;
+        };
+        let Some(element) = document.select(&selector).next() else {
+            continue;
+        };
+        let value = match *attr {
+            Some("html") => element.inner_html(),
+            Some(attribute) => element
+                .value()
+                .attr(attribute)
+                .unwrap_or_default()
+                .to_string(),
+            None => element.text().collect::<Vec<_>>().join(" "),
+        };
+        if let Some(value) = non_empty(Some(value.trim().to_string())) {
+            return Ok(Some(value));
+        }
+    }
+
+    Ok(None)
+}
+
+fn fallback_link_from_element(element: ElementRef<'_>) -> Option<(String, String)> {
+    let selector = parse_selector("a[href]").ok()?;
+    std::iter::once(element)
+        .filter(|candidate| selector.matches(candidate))
+        .chain(element.select(&selector))
+        .find_map(|link| {
+            let href = link.value().attr("href")?.trim();
+            if !is_navigable_reference(href) {
+                return None;
+            }
+            let title = link.text().collect::<Vec<_>>().join(" ");
+            Some((href.to_string(), title.trim().to_string()))
+        })
+}
+
+fn fallback_text_from_element(element: ElementRef<'_>) -> Option<String> {
+    let text = element
+        .text()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    non_empty(Some(text))
+}
+
+fn json_object_text(value: &Value, keys: &[&str]) -> Option<String> {
+    let object = value.as_object()?;
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .map(json_value_to_text)
+            .and_then(|text| non_empty(Some(text.trim().to_string())))
+    })
+}
+
+fn is_navigable_reference(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('#') {
+        return false;
+    }
+    let lowered = value.to_ascii_lowercase();
+    !["javascript:", "data:", "mailto:", "tel:"]
+        .iter()
+        .any(|prefix| lowered.starts_with(prefix))
 }
 
 fn parse_chapter_list(
@@ -1801,16 +2305,79 @@ fn parse_chapter_list(
     let mut chapters = Vec::new();
 
     for (index, item) in document.select(&item_selector).enumerate() {
-        let Some(title) = extract_document_rule_from_element(item, rules.title.as_ref())? else {
+        let fallback_link = fallback_link_from_element(item);
+        let title = extract_document_rule_from_element(item, rules.title.as_ref())?
+            .or_else(|| {
+                fallback_link
+                    .as_ref()
+                    .and_then(|(_, title)| non_empty(Some(title.clone())))
+            })
+            .or_else(|| fallback_text_from_element(item));
+        let url = extract_document_rule_from_element(item, rules.url.as_ref())?
+            .or_else(|| fallback_link.as_ref().map(|(url, _)| url.clone()))
+            .filter(|value| is_navigable_reference(value));
+        let (Some(title), Some(url)) = (title, url) else {
             continue;
         };
-        let url = extract_document_rule_from_element(item, rules.url.as_ref())?
-            .map(|value| absolutize_url(base_url, &value))
-            .unwrap_or_else(|| format!("{base_url}#chapter-{index}"));
+        let url = absolutize_url(base_url, &url);
         chapters.push(SourceChapter { title, url, index });
     }
 
+    if chapters.is_empty() {
+        chapters = fallback_chapters_from_links(&document, base_url);
+    }
+
     Ok(chapters)
+}
+
+fn fallback_chapters_from_links(document: &Html, base_url: &str) -> Vec<SourceChapter> {
+    let Ok(selector) = parse_selector("a[href]") else {
+        return Vec::new();
+    };
+    document
+        .select(&selector)
+        .take(256)
+        .enumerate()
+        .filter_map(|(index, link)| {
+            let href = link.value().attr("href")?.trim();
+            if !is_navigable_reference(href) {
+                return None;
+            }
+            let title = link
+                .text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if title.is_empty() || !is_likely_chapter_link(link, &title, href) {
+                return None;
+            }
+            Some(SourceChapter {
+                title,
+                url: absolutize_url(base_url, href),
+                index,
+            })
+        })
+        .collect()
+}
+
+fn is_likely_chapter_link(link: ElementRef<'_>, title: &str, href: &str) -> bool {
+    let metadata = [
+        href,
+        link.value().attr("class").unwrap_or_default(),
+        link.value().attr("id").unwrap_or_default(),
+    ]
+    .join(" ")
+    .to_ascii_lowercase();
+    let title = title.to_ascii_lowercase();
+    metadata.contains("chapter")
+        || metadata.contains("chap")
+        || metadata.contains("section")
+        || (title.contains('第')
+            && ["章", "节", "回", "卷", "集"]
+                .iter()
+                .any(|marker| title.contains(marker)))
 }
 
 fn extract_document_rule_from_element(
@@ -1820,7 +2387,7 @@ fn extract_document_rule_from_element(
     let Some(rule) = rule else {
         return Ok(None);
     };
-    Ok(Some(extract_from_element(element, rule)?))
+    extract_from_element_optional(element, rule)
 }
 
 pub fn chapter_fingerprint(chapters: &[SourceChapter]) -> String {
@@ -3046,12 +3613,32 @@ fn extract_from_element(element: ElementRef<'_>, rule: &SourceRule) -> Result<St
         }
         _ => {
             let selector = parse_selector(rule.selector())?;
-            let target = element
-                .select(&selector)
-                .next()
-                .ok_or(SourceError::NoMatch)?;
+            let target =
+                select_first_including_self(element, &selector).ok_or(SourceError::NoMatch)?;
             extract_selected_element(target, rule)
         }
+    }
+}
+
+fn select_first_including_self<'a>(
+    element: ElementRef<'a>,
+    selector: &Selector,
+) -> Option<ElementRef<'a>> {
+    if selector.matches(&element) {
+        Some(element)
+    } else {
+        element.select(selector).next()
+    }
+}
+
+fn extract_from_element_optional(
+    element: ElementRef<'_>,
+    rule: &SourceRule,
+) -> Result<Option<String>, SourceError> {
+    match extract_from_element(element, rule) {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) | Err(SourceError::NoMatch) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -3201,10 +3788,20 @@ fn parse_book_info_json(
     let context = first_json_context(&value, rules.item.as_deref())?;
     Ok(BookInfo {
         title: extract_json_rule_optional(context, rules.title.as_ref())?
+            .or_else(|| json_object_text(context, &["title", "name", "bookName"]))
             .unwrap_or_else(|| "未命名书籍".to_string()),
-        author: non_empty(extract_json_rule_optional(context, rules.author.as_ref())?),
-        intro: non_empty(extract_json_rule_optional(context, rules.intro.as_ref())?),
-        cover_url: non_empty(extract_json_rule_optional(context, rules.url.as_ref())?),
+        author: non_empty(
+            extract_json_rule_optional(context, rules.author.as_ref())?
+                .or_else(|| json_object_text(context, &["author", "bookAuthor"])),
+        ),
+        intro: non_empty(
+            extract_json_rule_optional(context, rules.intro.as_ref())?
+                .or_else(|| json_object_text(context, &["intro", "description", "desc"])),
+        ),
+        cover_url: non_empty(
+            extract_json_rule_optional(context, rules.url.as_ref())?
+                .or_else(|| json_object_text(context, &["coverUrl", "cover", "image", "img"])),
+        ),
         book_url: book_url.to_string(),
     })
 }
@@ -3220,13 +3817,15 @@ fn parse_chapter_list_json(
     let mut chapters = Vec::new();
 
     for (index, item) in items.into_iter().enumerate() {
-        let Some(title) = extract_json_rule_optional(item, rules.title.as_ref())? else {
+        let title = extract_json_rule_optional(item, rules.title.as_ref())?
+            .or_else(|| json_object_text(item, &["title", "name", "chapterName"]));
+        let url = extract_json_rule_optional(item, rules.url.as_ref())?
+            .or_else(|| json_object_text(item, &["url", "href", "link", "chapterUrl"]));
+        let (Some(title), Some(url)) = (title, url.filter(|value| is_navigable_reference(value)))
+        else {
             continue;
         };
-        let url = extract_json_rule_optional(item, rules.url.as_ref())?
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| absolutize_url(base_url, &value))
-            .unwrap_or_else(|| format!("{base_url}#chapter-{index}"));
+        let url = absolutize_url(base_url, &url);
         chapters.push(SourceChapter { title, url, index });
     }
 
@@ -3239,6 +3838,7 @@ fn non_empty(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn classifies_rule_evaluation_boundaries() {
@@ -3483,27 +4083,63 @@ mod tests {
                 source_name: "书源 B".to_string(),
                 title: " 测试 书 ".to_string(),
                 author: Some(" 作者甲 ".to_string()),
+                intro: None,
                 book_url: Some("https://b.test/book".to_string()),
+                can_open: true,
+                can_read: true,
+                unavailable_reason: None,
             },
             UnifiedSearchResult {
                 source_id: "source-a".to_string(),
                 source_name: "书源 A".to_string(),
                 title: "测试书".to_string(),
                 author: Some("作者甲".to_string()),
+                intro: None,
                 book_url: Some("https://a.test/book".to_string()),
+                can_open: true,
+                can_read: true,
+                unavailable_reason: None,
             },
             UnifiedSearchResult {
                 source_id: "source-a".to_string(),
                 source_name: "书源 A".to_string(),
                 title: "另一本".to_string(),
                 author: None,
+                intro: None,
                 book_url: None,
+                can_open: false,
+                can_read: false,
+                unavailable_reason: Some("搜索结果没有可用的书籍链接".to_string()),
             },
         ]);
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].title, "另一本");
         assert_eq!(results[1].source_name, "书源 A");
+    }
+
+    #[test]
+    fn exposes_search_result_capabilities_without_blocking_search_only_sources() {
+        let source: BookSource = serde_json::from_str(
+            r#"{
+              "name": "Search only",
+              "searchUrl": "https://example.test/search?q={{keyword}}",
+              "search": { "item": "article", "title": { "selector": "h2" } }
+            }"#,
+        )
+        .expect("source should parse");
+        let (can_open, can_read, reason) =
+            source_capabilities(&source, Some("https://example.test/book/1"));
+        assert!(!can_open);
+        assert!(!can_read);
+        assert_eq!(
+            reason.as_deref(),
+            Some("该书源仅支持搜索，未配置书籍详情或目录规则")
+        );
+
+        let missing_url = source_capabilities(&source, None);
+        assert!(!missing_url.0);
+        assert_eq!(missing_url.2.as_deref(), Some("搜索结果没有可用的书籍链接"));
     }
 
     #[test]
@@ -4675,5 +5311,292 @@ mod tests {
             extract_from_element(article, &legacy),
             Err(SourceError::NoMatch)
         ));
+    }
+
+    #[test]
+    fn rule_errors_keep_stage_and_rule_context() {
+        let message = rule_error("toc", "item", SourceError::NoMatch).to_string();
+        assert!(message.contains("toc 规则 item"));
+        assert!(message.contains("no value matched the source rule"));
+        assert_eq!(
+            rule_evaluation_from_error("toc", "item", &message)
+                .expect("rule errors should be classified")
+                .status,
+            SourceRuleEvaluationStatus::NoMatch
+        );
+    }
+
+    #[test]
+    fn optional_rule_mismatch_does_not_abort_html_extraction() {
+        let document = Html::parse_document("<article><h2>safe</h2></article>");
+        let missing = SourceRule::Selector(".missing".to_string());
+        assert_eq!(
+            extract_document_rule(&document, Some(&missing)).expect("missing optional rule"),
+            None
+        );
+        let article = document
+            .select(&Selector::parse("article").expect("selector"))
+            .next()
+            .expect("article");
+        assert_eq!(
+            extract_from_element_optional(article, &missing).expect("missing item rule"),
+            None
+        );
+    }
+
+    #[test]
+    fn html_search_uses_safe_link_fallback_for_legacy_url_rules() {
+        let source: BookSource = serde_json::from_value(json!({
+            "name": "Fallback search",
+            "searchUrl": "https://example.test/search",
+            "search": {
+                "item": "li.book",
+                "title": {"legacy": "//h2", "reason": "XPath"},
+                "url": {"legacy": "//a/@href", "reason": "XPath"}
+            }
+        }))
+        .expect("fallback source");
+        let engine = SourceEngine::default().expect("source engine");
+        let results = engine
+            .parse_search_html(
+                &source,
+                r#"<ul><li class="book"><a href="/book/1">Book one</a><span>Author</span></li></ul>"#,
+            )
+            .expect("fallback search");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Book one");
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+    }
+
+    #[test]
+    fn html_toc_uses_safe_link_fallback_for_legacy_rules() {
+        let rules = PageRules {
+            item: Some("li.chapter".to_string()),
+            title: Some(SourceRule::Legacy {
+                legacy: json!("//a/text()"),
+                reason: Some("XPath".to_string()),
+            }),
+            url: Some(SourceRule::Legacy {
+                legacy: json!("//a/@href"),
+                reason: Some("XPath".to_string()),
+            }),
+            ..PageRules::default()
+        };
+        let chapters = parse_chapter_list(
+            &rules,
+            r#"<ul><li class="chapter"><a href="/chapter/1">Chapter one</a></li></ul>"#,
+            "https://example.test/book/",
+        )
+        .expect("fallback toc");
+
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "Chapter one");
+        assert_eq!(chapters[0].url, "https://example.test/chapter/1");
+    }
+
+    #[test]
+    fn html_toc_falls_back_to_chapter_links_when_item_rule_misses() {
+        let rules = PageRules {
+            item: Some(".missing-chapter-item".to_string()),
+            title: Some(SourceRule::Selector(".missing-title".to_string())),
+            url: Some(SourceRule::Selector(".missing-url".to_string())),
+            ..PageRules::default()
+        };
+        let chapters = parse_chapter_list(
+            &rules,
+            r#"<nav><a class="chapter-link" href="/chapter/1">第一章 初见</a></nav>"#,
+            "https://example.test/book/",
+        )
+        .expect("fallback chapter links");
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "第一章 初见");
+        assert_eq!(chapters[0].url, "https://example.test/chapter/1");
+    }
+
+    #[test]
+    fn html_content_falls_back_to_safe_content_selectors() {
+        let rules = PageRules {
+            content: Some(SourceRule::Selector(".missing-content".to_string())),
+            ..PageRules::default()
+        };
+        let (content, next_url) = parse_chapter_page(
+            &rules,
+            r#"<article class="content"><p>正文内容</p></article>"#,
+            "https://example.test/chapter/1",
+        )
+        .expect("fallback content");
+        assert_eq!(content, "<p>正文内容</p>");
+        assert_eq!(next_url, None);
+    }
+
+    #[test]
+    fn json_search_and_book_info_use_common_field_fallbacks() {
+        let search_source: BookSource = serde_json::from_value(json!({
+            "name": "JSON fallback",
+            "searchUrl": "https://example.test/search",
+            "search": {
+                "item": "$.items[*]",
+                "title": {"legacy": "@js:title", "reason": "script"},
+                "url": {"legacy": "@js:url", "reason": "script"}
+            }
+        }))
+        .expect("json search source");
+        let engine = SourceEngine::default().expect("source engine");
+        let results = engine
+            .parse_search_json(
+                &search_source,
+                r#"{"items":[{"name":"Book two","href":"/book/2","author":"Author two"}]}"#,
+            )
+            .expect("json fallback search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Book two");
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/2"));
+
+        let book_rules = PageRules {
+            item: Some("$.book".to_string()),
+            title: Some(SourceRule::Legacy {
+                legacy: json!("@js:title"),
+                reason: Some("script".to_string()),
+            }),
+            author: Some(SourceRule::Legacy {
+                legacy: json!("@js:author"),
+                reason: Some("script".to_string()),
+            }),
+            ..PageRules::default()
+        };
+        let info = parse_book_info_json(
+            &book_rules,
+            r#"{"book":{"name":"Book two","author":"Author two"}}"#,
+            "https://example.test/book/2",
+        )
+        .expect("json fallback book info");
+        assert_eq!(info.title, "Book two");
+        assert_eq!(info.author.as_deref(), Some("Author two"));
+    }
+
+    #[test]
+    fn fallback_ignores_non_navigable_links() {
+        let document = Html::parse_document(
+            r#"<li><a href="javascript:alert(1)">Bad</a><a href="/safe">Safe</a></li>"#,
+        );
+        let item = document
+            .select(&Selector::parse("li").expect("selector"))
+            .next()
+            .expect("list item");
+        assert_eq!(
+            fallback_link_from_element(item),
+            Some(("/safe".to_string(), "Safe".to_string()))
+        );
+    }
+
+    #[test]
+    fn html_rules_can_match_the_item_element_itself() {
+        let engine = SourceEngine::default().expect("source engine");
+        let source: BookSource = serde_json::from_value(json!({
+            "name": "Self matching",
+            "searchUrl": "https://example.test/search",
+            "search": {
+                "item": "a.result",
+                "title": "a.result",
+                "url": {"selector": "a.result", "attr": "href"}
+            }
+        }))
+        .expect("self-matching search source");
+        let results = engine
+            .parse_search_html(&source, r#"<a class="result" href="/book/1">Book one</a>"#)
+            .expect("self-matching search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Book one");
+        assert_eq!(results[0].book_url.as_deref(), Some("/book/1"));
+
+        let rules = PageRules {
+            item: Some("a.chapter".to_string()),
+            title: Some(SourceRule::Selector("a.chapter".to_string())),
+            url: Some(SourceRule::Detailed {
+                selector: "a.chapter".to_string(),
+                attr: Some("href".to_string()),
+                regex: None,
+                replacement: None,
+            }),
+            ..PageRules::default()
+        };
+        let chapters = parse_chapter_list(
+            &rules,
+            r#"<a class="chapter" href="/chapter/1">第一章</a>"#,
+            "https://example.test/book/",
+        )
+        .expect("self-matching toc");
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "第一章");
+        assert_eq!(chapters[0].url, "https://example.test/chapter/1");
+    }
+
+    #[test]
+    fn decodes_declared_non_utf8_source_responses() {
+        let (gbk, _, _) = GB18030.encode("测试书名\n作者甲");
+        let decoded = decode_response_body(gbk.as_ref(), Some("text/html; charset=gbk"));
+        assert_eq!(decoded.body, "测试书名\n作者甲");
+        assert_eq!(decoded.encoding, "gb18030");
+        assert!(!decoded.had_decode_errors);
+
+        let utf16 = "第一章"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let decoded = decode_response_body(&utf16, Some("text/html; charset=utf-16le"));
+        assert_eq!(decoded.body, "第一章");
+        assert_eq!(decoded.encoding, "utf-16le");
+        assert!(!decoded.had_decode_errors);
+
+        let invalid_utf8 = vec![0xe4, 0xb8, 0xad, 0xff];
+        let decoded = decode_response_body(&invalid_utf8, None);
+        assert_eq!(decoded.encoding, "gb18030-fallback");
+        assert!(decoded.had_decode_errors);
+    }
+
+    #[test]
+    fn downgrades_garbled_book_fields_and_records_safe_reason() {
+        let mut info = BookInfo {
+            title: "ä¸­æ–‡ä¹¦å".to_string(),
+            author: Some("正常作者".to_string()),
+            intro: Some("���".to_string()),
+            cover_url: None,
+            book_url: "https://example.test/book/1".to_string(),
+        };
+        let downgraded = downgrade_garbled_book_fields(&mut info);
+        assert_eq!(info.title, "未命名书籍");
+        assert_eq!(info.author.as_deref(), Some("正常作者"));
+        assert_eq!(info.intro, None);
+        assert_eq!(downgraded, vec!["title", "intro"]);
+
+        let mut steps = Vec::new();
+        append_text_quality_debug_step(
+            &mut steps,
+            "https://example.test/book/1?token=secret",
+            &downgraded,
+        );
+        assert_eq!(steps[0].stage, "book_info.text_quality");
+        assert_eq!(steps[0].url, "https://example.test/book/1");
+        assert_eq!(
+            steps[0].variables.get("reason").map(String::as_str),
+            Some("garbled_text_downgraded")
+        );
+    }
+
+    #[test]
+    fn serializes_field_level_rule_diagnostics_without_response_body() {
+        let payload = serde_json::to_value(SourceRuleEvaluation {
+            stage: "toc".to_string(),
+            rule_key: "url".to_string(),
+            status: SourceRuleEvaluationStatus::NoMatch,
+            detail: Some("no_match".to_string()),
+        })
+        .expect("rule evaluation should serialize");
+        assert_eq!(payload["stage"], "toc");
+        assert_eq!(payload["rule_key"], "url");
+        assert_eq!(payload["status"], "no_match");
+        assert_eq!(payload["detail"], "no_match");
+        assert!(!payload.to_string().contains("response"));
     }
 }

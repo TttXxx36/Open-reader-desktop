@@ -130,9 +130,17 @@ pub struct ChapterSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ReadingState {
+    pub position: f64,
+    pub read_state: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct BookDetail {
     pub book: BookSummary,
     pub chapters: Vec<ChapterSummary>,
+    pub reading_state: ReadingState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -156,7 +164,51 @@ pub struct BookMergePreviewRevalidateRequest {
     pub input_fingerprint: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct BookMergeCommitRequest {
+    pub preview: BookMergePreviewRequest,
+    pub preview_id: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub input_fingerprint: String,
+    pub progress_book_id: String,
+    #[serde(default)]
+    pub final_shelf_group: Option<String>,
+    #[serde(default)]
+    pub final_tags: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
+pub struct BookMergeCommitResult {
+    pub operation_id: String,
+    pub preview_id: String,
+    pub canonical_book_id: String,
+    pub archived_book_ids: Vec<String>,
+    pub appended_chapter_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BookMergeUndoRequest {
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookMergeUndoResult {
+    pub operation_id: String,
+    pub canonical_book_id: String,
+    pub restored_book_ids: Vec<String>,
+    pub removed_chapter_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BookAliasResolution {
+    pub requested_book_id: String,
+    pub canonical_book_id: String,
+    pub redirected: bool,
+    pub hops: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookMergeBookPreview {
     pub id: String,
     pub title: String,
@@ -218,20 +270,50 @@ pub struct BookMergePreview {
     pub blocked_reasons: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct MergeChapterSnapshot {
     id: String,
     title: String,
     digest: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct MergeBookSnapshot {
     book: BookMergeBookPreview,
     updated_at: String,
     cover_source_kind: Option<String>,
     cover_cache_key: Option<String>,
     chapters: Vec<MergeChapterSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MergeReadingStateSnapshot {
+    position: f64,
+    read_state: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MergeAppendedChapterSnapshot {
+    id: String,
+    title: String,
+    digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MergeUndoPlan {
+    #[serde(default = "default_merge_undo_plan_version")]
+    version: i64,
+    canonical_book_id: String,
+    archived_book_ids: Vec<String>,
+    canonical_before: MergeBookSnapshot,
+    canonical_after: MergeBookSnapshot,
+    canonical_reading_before: Option<MergeReadingStateSnapshot>,
+    canonical_reading_after: Option<MergeReadingStateSnapshot>,
+    appended_chapters: Vec<MergeAppendedChapterSnapshot>,
+}
+
+fn default_merge_undo_plan_version() -> i64 {
+    2
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,7 +415,7 @@ pub struct SourceSnapshotSummary {
 }
 
 const SOURCE_SNAPSHOT_RETENTION_COUNT: i64 = 20;
-const MAX_SOURCE_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SOURCE_SNAPSHOT_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SourceWrite {
@@ -556,7 +638,8 @@ impl Database {
                               WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
              FROM books b
              LEFT JOIN chapters c ON c.book_id = b.id
-             WHERE (?1 = '' OR b.shelf_group = ?1)
+             WHERE b.lifecycle_state = 'active'
+               AND (?1 = '' OR b.shelf_group = ?1)
                AND (?2 = ''
                     OR LOWER(b.title) LIKE '%' || LOWER(?2) || '%'
                     OR LOWER(COALESCE(b.author, '')) LIKE '%' || LOWER(?2) || '%'
@@ -575,6 +658,7 @@ impl Database {
             let mut statement = connection.prepare(
                 "SELECT LOWER(TRIM(b.title)), LOWER(TRIM(COALESCE(b.author, ''))), b.format
                  FROM books b
+                 WHERE b.lifecycle_state = 'active'
                  GROUP BY LOWER(TRIM(b.title)), LOWER(TRIM(COALESCE(b.author, ''))), b.format
                  HAVING COUNT(*) > 1
                  ORDER BY COUNT(*) DESC, LOWER(TRIM(b.title)), b.format
@@ -604,7 +688,8 @@ impl Database {
                                   WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
                  FROM books b
                  LEFT JOIN chapters c ON c.book_id = b.id
-                 WHERE LOWER(TRIM(b.title)) = ?1
+                 WHERE b.lifecycle_state = 'active'
+                   AND LOWER(TRIM(b.title)) = ?1
                    AND LOWER(TRIM(COALESCE(b.author, ''))) = ?2
                    AND b.format = ?3
                  GROUP BY b.id
@@ -676,72 +761,7 @@ impl Database {
         );
 
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
-        let mut snapshots = Vec::with_capacity(ordered_ids.len());
-        for book_id in ordered_ids {
-            let mut snapshot = connection
-                .query_row(
-                    "SELECT b.id, b.title, b.author, b.format, b.content_kind,
-                            b.progress, b.current_chapter, b.shelf_group, b.tags_json,
-                            (SELECT COUNT(*) FROM chapters c WHERE c.book_id = b.id),
-                            (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
-                            (SELECT c.source_kind FROM book_covers c WHERE c.book_id = b.id),
-                            (SELECT c.cache_key FROM book_covers c WHERE c.book_id = b.id),
-                            (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
-                            (SELECT s.root_id FROM image_sequences s WHERE s.book_id = b.id),
-                            (SELECT s.page_count FROM image_sequences s WHERE s.book_id = b.id),
-                            b.updated_at
-                     FROM books b
-                     WHERE b.id = ?1",
-                    params![book_id],
-                    |row| {
-                        let tags_json: String = row.get(8)?;
-                        Ok(MergeBookSnapshot {
-                            book: BookMergeBookPreview {
-                                id: row.get(0)?,
-                                title: row.get(1)?,
-                                author: row.get(2)?,
-                                format: row.get(3)?,
-                                content_kind: row.get(4)?,
-                                progress: row.get(5)?,
-                                current_chapter: row.get(6)?,
-                                shelf_group: row.get(7)?,
-                                tags: serde_json::from_str(&tags_json).unwrap_or_default(),
-                                chapter_count: row.get(9)?,
-                                cover_state: row.get(10)?,
-                                image_sequence_state: row.get(13)?,
-                                image_sequence_root_id: row.get(14)?,
-                                image_sequence_page_count: row.get(15)?,
-                            },
-                            cover_source_kind: row.get(11)?,
-                            cover_cache_key: row.get(12)?,
-                            updated_at: row.get(16)?,
-                            chapters: Vec::new(),
-                        })
-                    },
-                )
-                .optional()?
-                .ok_or(DbError::NotFound)?;
-
-            let mut statement = connection.prepare(
-                "SELECT id, title, content
-                 FROM chapters
-                 WHERE book_id = ?1
-                 ORDER BY chapter_index, id",
-            )?;
-            snapshot.chapters = statement
-                .query_map(params![snapshot.book.id.clone()], |row| {
-                    let id: String = row.get(0)?;
-                    let title: String = row.get(1)?;
-                    let content: String = row.get(2)?;
-                    Ok(MergeChapterSnapshot {
-                        id,
-                        title,
-                        digest: merge_text_digest(&content),
-                    })
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            snapshots.push(snapshot);
-        }
+        let snapshots = load_merge_snapshots(&connection, &ordered_ids)?;
 
         let canonical = snapshots
             .first()
@@ -963,6 +983,646 @@ impl Database {
         Ok(current)
     }
 
+    pub fn commit_book_merge(
+        &self,
+        request: BookMergeCommitRequest,
+    ) -> Result<BookMergeCommitResult, DbError> {
+        let progress_book_id = request.progress_book_id.trim().to_string();
+        if progress_book_id.is_empty() {
+            return Err(DbError::InvalidBookMetadata(
+                "合并提交必须指定阅读进度来源".to_string(),
+            ));
+        }
+
+        let validated = self.revalidate_book_merge_preview(BookMergePreviewRevalidateRequest {
+            preview: request.preview.clone(),
+            preview_id: request.preview_id.clone(),
+            created_at: request.created_at,
+            expires_at: request.expires_at,
+            input_fingerprint: request.input_fingerprint.clone(),
+        })?;
+        if !validated
+            .books
+            .iter()
+            .any(|book| book.id == progress_book_id)
+        {
+            return Err(DbError::InvalidBookMetadata(
+                "阅读进度来源必须属于当前合并预览".to_string(),
+            ));
+        }
+        if !validated.conflicts.is_empty() || !validated.blocked_reasons.is_empty() {
+            let reasons = validated
+                .blocked_reasons
+                .iter()
+                .chain(validated.conflicts.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("；");
+            return Err(DbError::InvalidBookMetadata(format!(
+                "当前合并预览存在阻止项：{reasons}"
+            )));
+        }
+        if validated
+            .books
+            .iter()
+            .any(|book| book.content_kind != "text")
+            || validated
+                .cover_candidates
+                .iter()
+                .any(|cover| cover.source_kind.as_deref() == Some("remote_url"))
+        {
+            return Err(DbError::InvalidBookMetadata(
+                "纯文本合并不支持图片序列或远程封面".to_string(),
+            ));
+        }
+        if validated.append_candidates.len() > 512 {
+            return Err(DbError::InvalidBookMetadata(
+                "单次合并最多追加 512 个章节".to_string(),
+            ));
+        }
+
+        let final_shelf_group = request
+            .final_shelf_group
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(validated.suggested_shelf_group.trim())
+            .to_string();
+        if final_shelf_group.len() > 128 {
+            return Err(DbError::InvalidBookMetadata(
+                "书架分组不能超过 128 字节".to_string(),
+            ));
+        }
+        let final_tags = normalize_book_tags(
+            request
+                .final_tags
+                .as_ref()
+                .unwrap_or(&validated.suggested_tags),
+        )?;
+        let final_tags_json = serde_json::to_string(&final_tags)
+            .map_err(|error| DbError::InvalidBookMetadata(format!("标签序列化失败：{error}")))?;
+
+        let canonical_book_id = validated.canonical_book_id.clone();
+        let archived_book_ids = validated.archived_book_ids.clone();
+        let operation_id = generated_id("merge-operation");
+
+        let mut ordered_ids = request
+            .preview
+            .book_ids
+            .iter()
+            .map(|book_id| book_id.trim().to_string())
+            .collect::<Vec<_>>();
+        ordered_ids.sort();
+        ordered_ids.retain(|book_id| book_id != &canonical_book_id);
+        ordered_ids.insert(0, canonical_book_id.clone());
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        let duplicate_preview: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM book_merge_operations WHERE preview_id = ?1",
+            params![request.preview_id.trim()],
+            |row| row.get(0),
+        )?;
+        if duplicate_preview > 0 {
+            return Err(DbError::InvalidBookMetadata(
+                "该合并预览已经提交过，不能重复执行".to_string(),
+            ));
+        }
+
+        let snapshots = load_merge_snapshots(&transaction, &ordered_ids)?;
+        let current_fingerprint = merge_preview_fingerprint(&snapshots);
+        if current_fingerprint != request.input_fingerprint.trim() {
+            return Err(DbError::InvalidBookMetadata(
+                "书籍数据已变化，请重新生成预览".to_string(),
+            ));
+        }
+        if snapshots
+            .iter()
+            .any(|snapshot| snapshot.book.content_kind != "text")
+        {
+            return Err(DbError::InvalidBookMetadata(
+                "纯文本合并不支持图片序列书籍".to_string(),
+            ));
+        }
+        let canonical_before = snapshots
+            .first()
+            .cloned()
+            .ok_or_else(|| DbError::InvalidBookMetadata("canonical 书籍快照不存在".to_string()))?;
+        let canonical_reading_before =
+            load_reading_state_snapshot(&transaction, &canonical_book_id)?;
+
+        let mut next_chapter_index: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(chapter_index), -1) + 1 FROM chapters WHERE book_id = ?1",
+            params![canonical_book_id],
+            |row| row.get(0),
+        )?;
+        let mut total_body_bytes = 0usize;
+        let mut appended_by_source: HashMap<String, Vec<String>> = HashMap::new();
+        let mut appended_chapter_ids = Vec::new();
+        let mut appended_for_plan = Vec::new();
+        for (append_index, candidate) in validated.append_candidates.iter().enumerate() {
+            let chapter = transaction
+                .query_row(
+                    "SELECT title, content, content_format
+                     FROM chapters
+                     WHERE id = ?1 AND book_id = ?2",
+                    params![candidate.chapter_id, candidate.source_book_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    DbError::InvalidBookMetadata("章节数据已变化，请重新生成预览".to_string())
+                })?;
+            let body_bytes = chapter.1.len();
+            if body_bytes > 8 * 1024 * 1024 {
+                return Err(DbError::InvalidBookMetadata(
+                    "单个追加章节正文不能超过 8 MiB".to_string(),
+                ));
+            }
+            total_body_bytes = total_body_bytes.saturating_add(body_bytes);
+            if total_body_bytes > 64 * 1024 * 1024 {
+                return Err(DbError::InvalidBookMetadata(
+                    "本次追加章节正文总量不能超过 64 MiB".to_string(),
+                ));
+            }
+            let new_chapter_id = format!("{operation_id}-chapter-{append_index}");
+            transaction.execute(
+                "INSERT INTO chapters (id, book_id, chapter_index, title, content, content_format)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    new_chapter_id,
+                    canonical_book_id,
+                    next_chapter_index,
+                    chapter.0,
+                    chapter.1,
+                    chapter.2
+                ],
+            )?;
+            next_chapter_index += 1;
+            appended_by_source
+                .entry(candidate.source_book_id.clone())
+                .or_default()
+                .push(new_chapter_id.clone());
+            appended_for_plan.push(MergeAppendedChapterSnapshot {
+                id: new_chapter_id.clone(),
+                title: chapter.0,
+                digest: merge_text_digest(&chapter.1),
+            });
+            appended_chapter_ids.push(new_chapter_id);
+        }
+
+        let progress = validated
+            .progress_candidates
+            .iter()
+            .find(|candidate| candidate.book_id == progress_book_id)
+            .ok_or_else(|| DbError::InvalidBookMetadata("阅读进度来源不存在".to_string()))?;
+        let canonical_reading_after = if progress_book_id == canonical_book_id {
+            canonical_reading_before.clone()
+        } else {
+            load_reading_state_snapshot(&transaction, &progress_book_id)?
+                .or_else(|| canonical_reading_before.clone())
+        };
+        let mut canonical_after = canonical_before.clone();
+        canonical_after.book.shelf_group = final_shelf_group.clone();
+        canonical_after.book.tags = final_tags.clone();
+        canonical_after.book.progress = progress.progress;
+        canonical_after.book.current_chapter = progress.current_chapter;
+        canonical_after.book.chapter_count +=
+            i64::try_from(appended_for_plan.len()).unwrap_or(i64::MAX);
+        canonical_after
+            .chapters
+            .extend(
+                appended_for_plan
+                    .iter()
+                    .map(|chapter| MergeChapterSnapshot {
+                        id: chapter.id.clone(),
+                        title: chapter.title.clone(),
+                        digest: chapter.digest.clone(),
+                    }),
+            );
+        let plan = MergeUndoPlan {
+            version: 2,
+            canonical_book_id: canonical_book_id.clone(),
+            archived_book_ids: archived_book_ids.clone(),
+            canonical_before,
+            canonical_after,
+            canonical_reading_before,
+            canonical_reading_after,
+            appended_chapters: appended_for_plan,
+        };
+        let plan_json = serde_json::to_string(&plan).map_err(|error| {
+            DbError::InvalidBookMetadata(format!("合并计划序列化失败：{error}"))
+        })?;
+        if plan_json.len() > 64 * 1024 {
+            return Err(DbError::InvalidBookMetadata(
+                "合并计划超过 64 KiB 限制".to_string(),
+            ));
+        }
+        transaction.execute(
+            "INSERT INTO book_merge_operations
+                 (id, preview_id, canonical_book_id, status, plan_json, undo_until)
+             VALUES (?1, ?2, ?3, 'committed', ?4, datetime('now', '+7 days'))",
+            params![
+                operation_id,
+                request.preview_id.trim(),
+                canonical_book_id,
+                plan_json
+            ],
+        )?;
+
+        for snapshot in snapshots.iter().skip(1) {
+            let source_snapshot_json = serde_json::json!({
+                "book": {
+                    "id": &snapshot.book.id,
+                    "title": &snapshot.book.title,
+                    "author": &snapshot.book.author,
+                    "format": &snapshot.book.format,
+                    "content_kind": &snapshot.book.content_kind,
+                    "progress": snapshot.book.progress,
+                    "current_chapter": snapshot.book.current_chapter,
+                    "shelf_group": &snapshot.book.shelf_group,
+                    "tags": &snapshot.book.tags,
+                },
+                "merge_snapshot": snapshot,
+                "updated_at": &snapshot.updated_at,
+                "cover_source_kind": &snapshot.cover_source_kind,
+                "cover_cache_key": &snapshot.cover_cache_key,
+                "chapters": snapshot.chapters.iter().map(|chapter| serde_json::json!({
+                    "id": chapter.id,
+                    "title": chapter.title,
+                    "digest": chapter.digest,
+                })).collect::<Vec<_>>(),
+            })
+            .to_string();
+            if source_snapshot_json.len() > 256 * 1024 {
+                return Err(DbError::InvalidBookMetadata(
+                    "书籍快照超过 256 KiB 限制".to_string(),
+                ));
+            }
+            let appended_ids_json = serde_json::to_string(
+                appended_by_source
+                    .get(&snapshot.book.id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .as_slice(),
+            )
+            .map_err(|error| {
+                DbError::InvalidBookMetadata(format!("追加章节序列化失败：{error}"))
+            })?;
+            transaction.execute(
+                "INSERT INTO book_merge_items
+                     (operation_id, source_book_id, canonical_book_id,
+                      source_snapshot_json, appended_chapter_ids_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    operation_id,
+                    snapshot.book.id,
+                    canonical_book_id,
+                    source_snapshot_json,
+                    appended_ids_json
+                ],
+            )?;
+        }
+
+        transaction.execute(
+            "UPDATE books
+             SET shelf_group = ?1,
+                 tags_json = ?2,
+                 progress = ?3,
+                 current_chapter = ?4,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?5 AND lifecycle_state = 'active'",
+            params![
+                final_shelf_group,
+                final_tags_json,
+                progress.progress,
+                progress.current_chapter,
+                canonical_book_id
+            ],
+        )?;
+        if progress_book_id != canonical_book_id {
+            if let Some((position, read_state)) = transaction
+                .query_row(
+                    "SELECT position, read_state FROM book_reading_state WHERE book_id = ?1",
+                    params![progress_book_id],
+                    |row| Ok((row.get::<_, f64>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?
+            {
+                transaction.execute(
+                    "INSERT INTO book_reading_state (book_id, position, read_state, updated_at)
+                     VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+                     ON CONFLICT(book_id) DO UPDATE SET
+                         position = excluded.position,
+                         read_state = excluded.read_state,
+                         updated_at = CURRENT_TIMESTAMP",
+                    params![canonical_book_id, position, read_state],
+                )?;
+            }
+        }
+
+        for source_book_id in &archived_book_ids {
+            let changed = transaction.execute(
+                "UPDATE books
+                 SET lifecycle_state = 'merged', updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1 AND lifecycle_state = 'active'",
+                params![source_book_id],
+            )?;
+            if changed != 1 {
+                return Err(DbError::InvalidBookMetadata(
+                    "待归档书籍状态已变化，请重新生成预览".to_string(),
+                ));
+            }
+            transaction.execute(
+                "INSERT INTO book_aliases (alias_book_id, canonical_book_id, operation_id)
+                 VALUES (?1, ?2, ?3)",
+                params![source_book_id, canonical_book_id, operation_id],
+            )?;
+        }
+
+        transaction.commit()?;
+        Ok(BookMergeCommitResult {
+            operation_id,
+            preview_id: request.preview_id,
+            canonical_book_id,
+            archived_book_ids,
+            appended_chapter_ids,
+        })
+    }
+
+    pub fn undo_book_merge(
+        &self,
+        request: BookMergeUndoRequest,
+    ) -> Result<BookMergeUndoResult, DbError> {
+        let operation_id = request.operation_id.trim();
+        if operation_id.is_empty()
+            || operation_id.len() > 128
+            || !operation_id.starts_with("merge-operation-")
+        {
+            return Err(DbError::InvalidBookMetadata("合并操作 ID 无效".to_string()));
+        }
+
+        let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let transaction = connection.transaction()?;
+        let operation = transaction
+            .query_row(
+                "SELECT canonical_book_id, status, undo_until, plan_json
+                 FROM book_merge_operations
+                 WHERE id = ?1",
+                params![operation_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(DbError::NotFound)?;
+        if operation.1 != "committed" {
+            return Err(DbError::InvalidBookMetadata(match operation.1.as_str() {
+                "undone" => "该合并操作已经撤销".to_string(),
+                "expired" => "该合并操作已超过 7 天撤销期限".to_string(),
+                _ => "合并操作状态无效".to_string(),
+            }));
+        }
+
+        let expired: i64 = transaction.query_row(
+            "SELECT CASE WHEN unixepoch('now') > unixepoch(?1) THEN 1 ELSE 0 END",
+            params![operation.2],
+            |row| row.get(0),
+        )?;
+        if expired != 0 {
+            transaction.execute(
+                "UPDATE book_merge_operations
+                 SET status = 'expired'
+                 WHERE id = ?1 AND status = 'committed'",
+                params![operation_id],
+            )?;
+            transaction.commit()?;
+            return Err(DbError::InvalidBookMetadata(
+                "该合并操作已超过 7 天撤销期限".to_string(),
+            ));
+        }
+
+        let plan: MergeUndoPlan = serde_json::from_str(&operation.3).map_err(|error| {
+            DbError::InvalidBookMetadata(format!("该合并操作不具备 d3 撤销快照：{error}"))
+        })?;
+        if plan.version < 2 || plan.canonical_book_id != operation.0 {
+            return Err(DbError::InvalidBookMetadata(
+                "该合并操作缺少可安全撤销的完整快照".to_string(),
+            ));
+        }
+
+        let canonical =
+            load_merge_snapshots_any_lifecycle(&transaction, &[plan.canonical_book_id.clone()])?
+                .into_iter()
+                .next()
+                .ok_or(DbError::NotFound)?;
+        if !merge_snapshot_matches(&canonical, &plan.canonical_after) {
+            return Err(DbError::InvalidBookMetadata(
+                "canonical 书籍在合并后发生外部修改，已拒绝撤销".to_string(),
+            ));
+        }
+        let current_reading = load_reading_state_snapshot(&transaction, &plan.canonical_book_id)?;
+        if current_reading
+            .as_ref()
+            .map(|state| (&state.read_state, state.position))
+            != plan
+                .canonical_reading_after
+                .as_ref()
+                .map(|state| (&state.read_state, state.position))
+        {
+            return Err(DbError::InvalidBookMetadata(
+                "canonical 阅读状态在合并后发生外部修改，已拒绝撤销".to_string(),
+            ));
+        }
+
+        let mut source_ids = Vec::new();
+        let mut item_statement = transaction.prepare(
+            "SELECT source_book_id, source_snapshot_json
+             FROM book_merge_items
+             WHERE operation_id = ?1
+             ORDER BY source_book_id",
+        )?;
+        let items = item_statement
+            .query_map(params![operation_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(item_statement);
+        if items.len() != plan.archived_book_ids.len() {
+            return Err(DbError::InvalidBookMetadata(
+                "合并来源快照数量已变化，已拒绝撤销".to_string(),
+            ));
+        }
+        for (source_book_id, source_snapshot_json) in items {
+            if !plan.archived_book_ids.contains(&source_book_id) {
+                return Err(DbError::InvalidBookMetadata(
+                    "合并来源列表已变化，已拒绝撤销".to_string(),
+                ));
+            }
+            let expected_source = parse_stored_merge_snapshot(&source_snapshot_json)?;
+            let current_source = load_merge_snapshots_any_lifecycle(
+                &transaction,
+                std::slice::from_ref(&source_book_id),
+            )?
+            .into_iter()
+            .next()
+            .ok_or(DbError::NotFound)?;
+            if !merge_snapshot_matches(&current_source, &expected_source) {
+                return Err(DbError::InvalidBookMetadata(
+                    "来源书籍在合并后发生外部修改，已拒绝撤销".to_string(),
+                ));
+            }
+            let lifecycle: String = transaction.query_row(
+                "SELECT lifecycle_state FROM books WHERE id = ?1",
+                params![source_book_id],
+                |row| row.get(0),
+            )?;
+            if lifecycle != "merged" {
+                return Err(DbError::InvalidBookMetadata(
+                    "来源书籍生命周期已变化，已拒绝撤销".to_string(),
+                ));
+            }
+            source_ids.push(source_book_id);
+        }
+
+        let alias_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM book_aliases
+             WHERE operation_id = ?1 AND canonical_book_id = ?2",
+            params![operation_id, plan.canonical_book_id],
+            |row| row.get(0),
+        )?;
+        if alias_count != i64::try_from(plan.archived_book_ids.len()).unwrap_or(i64::MAX) {
+            return Err(DbError::InvalidBookMetadata(
+                "合并别名已变化，已拒绝撤销".to_string(),
+            ));
+        }
+
+        for appended in &plan.appended_chapters {
+            let current = transaction
+                .query_row(
+                    "SELECT title, content
+                     FROM chapters
+                     WHERE id = ?1 AND book_id = ?2",
+                    params![appended.id, plan.canonical_book_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    DbError::InvalidBookMetadata("本次追加章节已被删除，已拒绝撤销".to_string())
+                })?;
+            if current.0 != appended.title || merge_text_digest(&current.1) != appended.digest {
+                return Err(DbError::InvalidBookMetadata(
+                    "本次追加章节在合并后发生外部修改，已拒绝撤销".to_string(),
+                ));
+            }
+        }
+
+        let mut removed_chapter_ids = Vec::with_capacity(plan.appended_chapters.len());
+        for appended in &plan.appended_chapters {
+            let changed = transaction.execute(
+                "DELETE FROM chapters WHERE id = ?1 AND book_id = ?2",
+                params![appended.id, plan.canonical_book_id],
+            )?;
+            if changed != 1 {
+                return Err(DbError::InvalidBookMetadata(
+                    "本次追加章节删除数量不一致，已回滚撤销".to_string(),
+                ));
+            }
+            removed_chapter_ids.push(appended.id.clone());
+        }
+
+        let tags_json = serde_json::to_string(&plan.canonical_before.book.tags)
+            .map_err(|error| DbError::InvalidBookMetadata(format!("标签恢复失败：{error}")))?;
+        let changed = transaction.execute(
+            "UPDATE books
+             SET shelf_group = ?1,
+                 tags_json = ?2,
+                 progress = ?3,
+                 current_chapter = ?4,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?5 AND lifecycle_state = 'active'",
+            params![
+                plan.canonical_before.book.shelf_group,
+                tags_json,
+                plan.canonical_before.book.progress,
+                plan.canonical_before.book.current_chapter,
+                plan.canonical_book_id
+            ],
+        )?;
+        if changed != 1 {
+            return Err(DbError::InvalidBookMetadata(
+                "canonical 生命周期已变化，已拒绝撤销".to_string(),
+            ));
+        }
+
+        if let Some(reading) = plan.canonical_reading_before {
+            transaction.execute(
+                "INSERT INTO book_reading_state (book_id, position, read_state, updated_at)
+                 VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+                 ON CONFLICT(book_id) DO UPDATE SET
+                    position = excluded.position,
+                    read_state = excluded.read_state,
+                    updated_at = CURRENT_TIMESTAMP",
+                params![plan.canonical_book_id, reading.position, reading.read_state],
+            )?;
+        } else {
+            transaction.execute(
+                "DELETE FROM book_reading_state WHERE book_id = ?1",
+                params![plan.canonical_book_id],
+            )?;
+        }
+
+        for source_book_id in &source_ids {
+            let changed = transaction.execute(
+                "UPDATE books
+                 SET lifecycle_state = 'active', updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1 AND lifecycle_state = 'merged'",
+                params![source_book_id],
+            )?;
+            if changed != 1 {
+                return Err(DbError::InvalidBookMetadata(
+                    "来源书籍生命周期恢复数量不一致，已回滚撤销".to_string(),
+                ));
+            }
+        }
+        transaction.execute(
+            "DELETE FROM book_aliases WHERE operation_id = ?1",
+            params![operation_id],
+        )?;
+        transaction.execute(
+            "UPDATE book_merge_operations
+             SET status = 'undone', undone_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND status = 'committed'",
+            params![operation_id],
+        )?;
+        transaction.commit()?;
+
+        let mut restored_book_ids = vec![plan.canonical_book_id.clone()];
+        restored_book_ids.extend(source_ids);
+        Ok(BookMergeUndoResult {
+            operation_id: operation_id.to_string(),
+            canonical_book_id: plan.canonical_book_id,
+            restored_book_ids,
+            removed_chapter_ids,
+        })
+    }
+
+    pub fn resolve_book_alias(&self, book_id: &str) -> Result<BookAliasResolution, DbError> {
+        let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        resolve_book_alias_with_connection(&connection, book_id)
+    }
+
     pub fn get_book_cover(&self, book_id: &str) -> Result<Option<BookCoverSummary>, DbError> {
         let book_id = book_id.trim();
         if book_id.is_empty() {
@@ -1013,6 +1673,7 @@ impl Database {
 
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
+        ensure_book_active(&transaction, book_id)?;
         let exists: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM books WHERE id = ?1",
             params![book_id],
@@ -1076,6 +1737,33 @@ impl Database {
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
 
+        let merged_path_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM books WHERE path = ?1 AND lifecycle_state = 'merged'",
+            params![source_name],
+            |row| row.get(0),
+        )?;
+        if merged_path_count > 0 {
+            return Err(DbError::InvalidBookMetadata(
+                "该文件对应的书籍已合并，不能覆盖；请先选择当前书籍或撤销合并".to_string(),
+            ));
+        }
+        let canonical_path_count: i64 = transaction.query_row(
+            "SELECT COUNT(*)
+             FROM books b
+             WHERE b.path = ?1
+               AND EXISTS (
+                   SELECT 1 FROM book_merge_operations op
+                   WHERE op.canonical_book_id = b.id AND op.status = 'committed'
+               )",
+            params![source_name],
+            |row| row.get(0),
+        )?;
+        if canonical_path_count > 0 {
+            return Err(DbError::InvalidBookMetadata(
+                "该文件对应的书籍是合并后的当前书籍，不能覆盖".to_string(),
+            ));
+        }
+
         transaction.execute(
             "DELETE FROM chapters WHERE book_id IN (SELECT id FROM books WHERE path = ?1)",
             params![source_name],
@@ -1124,6 +1812,7 @@ impl Database {
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        ensure_book_active(&connection, &write.book_id)?;
         let changed = connection.execute(
             "UPDATE books
              SET shelf_group = ?1,
@@ -1158,6 +1847,7 @@ impl Database {
             ));
         }
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        ensure_book_active(&connection, book_id)?;
         let changed = connection.execute(
             "UPDATE books
              SET title = ?1, updated_at = CURRENT_TIMESTAMP
@@ -1174,6 +1864,18 @@ impl Database {
     pub fn delete_book(&self, book_id: &str) -> Result<(), DbError> {
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
+        ensure_book_active(&transaction, book_id)?;
+        let merge_reference_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM book_merge_operations
+             WHERE canonical_book_id = ?1 AND status = 'committed'",
+            params![book_id],
+            |row| row.get(0),
+        )?;
+        if merge_reference_count > 0 {
+            return Err(DbError::InvalidBookMetadata(
+                "当前书籍已有合并记录，不能直接删除".to_string(),
+            ));
+        }
         let changed = transaction.execute("DELETE FROM books WHERE id = ?1", params![book_id])?;
         if changed == 0 {
             return Err(DbError::NotFound);
@@ -1231,6 +1933,7 @@ impl Database {
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
         for book_id in &book_ids {
+            ensure_book_active(&transaction, book_id)?;
             let changed = transaction.execute(
                 "UPDATE books
                  SET shelf_group = COALESCE(?1, shelf_group),
@@ -1279,6 +1982,14 @@ impl Database {
 
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
+
+        if write
+            .book_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            ensure_book_active(&transaction, &book_id)?;
+        }
 
         let existing_kind: Option<String> = transaction
             .query_row(
@@ -1413,7 +2124,7 @@ impl Database {
                     s.total_pixels, s.total_decoded_bytes, s.current_page,
                     s.zoom, s.state, b.progress, s.updated_at
              FROM image_sequences s
-             JOIN books b ON b.id = s.book_id
+             JOIN books b ON b.id = s.book_id AND b.lifecycle_state = 'active'
              JOIN library_roots r ON r.id = s.root_id
              ORDER BY s.updated_at DESC, s.book_id DESC",
         )?;
@@ -1430,7 +2141,7 @@ impl Database {
                         s.total_pixels, s.total_decoded_bytes, s.current_page,
                         s.zoom, s.state, b.progress, s.updated_at
                  FROM image_sequences s
-                 JOIN books b ON b.id = s.book_id
+                 JOIN books b ON b.id = s.book_id AND b.lifecycle_state = 'active'
                  JOIN library_roots r ON r.id = s.root_id
                  WHERE s.book_id = ?1",
                 params![book_id],
@@ -1579,6 +2290,7 @@ impl Database {
             .unwrap_or(new_root_path.as_str());
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
+        ensure_book_active(&transaction, book_id)?;
         let root_id: Option<String> = transaction
             .query_row(
                 "SELECT id FROM library_roots WHERE root_path = ?1",
@@ -1729,6 +2441,7 @@ impl Database {
 
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
+        ensure_book_active(&transaction, book_id)?;
         transaction.execute(
             "UPDATE library_roots
              SET state = ?1, updated_at = CURRENT_TIMESTAMP,
@@ -1856,6 +2569,7 @@ impl Database {
 
         let mut connection = self.connection.lock().map_err(|_| DbError::Lock)?;
         let transaction = connection.transaction()?;
+        ensure_book_active(&transaction, book_id)?;
         transaction.execute(
             "UPDATE library_roots
              SET state = 'available', updated_at = CURRENT_TIMESTAMP,
@@ -1904,6 +2618,7 @@ impl Database {
         }
 
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        ensure_book_active(&connection, book_id)?;
         let page_count: i64 = connection
             .query_row(
                 "SELECT page_count FROM image_sequences WHERE book_id = ?1",
@@ -2676,6 +3391,7 @@ impl Database {
 
     pub fn get_book_detail(&self, book_id: &str) -> Result<BookDetail, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let book_id = resolve_book_alias_with_connection(&connection, book_id)?.canonical_book_id;
         let book = connection
             .query_row(
                 "SELECT b.id, b.title, b.author, b.format, b.content_kind, b.cover_path,
@@ -2689,7 +3405,7 @@ impl Database {
                               WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
                  FROM books b
                  LEFT JOIN chapters c ON c.book_id = b.id
-                 WHERE b.id = ?1
+                 WHERE b.id = ?1 AND b.lifecycle_state = 'active'
                  GROUP BY b.id",
                 params![book_id],
                 book_from_row,
@@ -2713,7 +3429,32 @@ impl Database {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(BookDetail { book, chapters })
+        let reading_state = connection
+            .query_row(
+                "SELECT position, read_state, updated_at
+                 FROM book_reading_state
+                 WHERE book_id = ?1",
+                params![book_id],
+                |row| {
+                    Ok(ReadingState {
+                        position: row.get(0)?,
+                        read_state: row.get(1)?,
+                        updated_at: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_else(|| ReadingState {
+                position: 0.0,
+                read_state: "unread".to_string(),
+                updated_at: book.updated_at.clone(),
+            });
+
+        Ok(BookDetail {
+            book,
+            chapters,
+            reading_state,
+        })
     }
 
     pub fn get_chapter_content(
@@ -2722,6 +3463,8 @@ impl Database {
         chapter_id: &str,
     ) -> Result<ChapterContent, DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let book_id = resolve_book_alias_with_connection(&connection, book_id)?.canonical_book_id;
+        ensure_book_active(&connection, &book_id)?;
         let total: i64 = connection.query_row(
             "SELECT COUNT(*) FROM chapters WHERE book_id = ?1",
             params![book_id],
@@ -2754,23 +3497,45 @@ impl Database {
         chapter_id: &str,
         current_chapter: i64,
         progress: f64,
+        position: f64,
+        read_state: Option<&str>,
     ) -> Result<(), DbError> {
         let connection = self.connection.lock().map_err(|_| DbError::Lock)?;
+        let book_id = resolve_book_alias_with_connection(&connection, book_id)?.canonical_book_id;
+        ensure_book_active(&connection, &book_id)?;
+        let progress = progress.clamp(0.0, 1.0);
+        let position = if position.is_finite() {
+            position.max(0.0)
+        } else {
+            0.0
+        };
+        let read_state = match read_state {
+            Some("unread") => "unread",
+            Some("reading") => "reading",
+            Some("finished") => "finished",
+            _ if progress >= 0.999 => "finished",
+            _ if progress > 0.0 || position > 0.0 => "reading",
+            _ => "unread",
+        };
         let changed = connection.execute(
             "UPDATE books
              SET current_chapter = ?1, progress = ?2, updated_at = CURRENT_TIMESTAMP
              WHERE id = ?3
                AND EXISTS (SELECT 1 FROM chapters WHERE id = ?4 AND book_id = ?3)",
-            params![
-                current_chapter,
-                progress.clamp(0.0, 1.0),
-                book_id,
-                chapter_id
-            ],
+            params![current_chapter, progress, book_id, chapter_id],
         )?;
         if changed == 0 {
             return Err(DbError::NotFound);
         }
+        connection.execute(
+            "INSERT INTO book_reading_state (book_id, position, read_state)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(book_id) DO UPDATE SET
+                position = excluded.position,
+                read_state = excluded.read_state,
+                updated_at = CURRENT_TIMESTAMP",
+            params![book_id, position, read_state],
+        )?;
         Ok(())
     }
 
@@ -2789,13 +3554,240 @@ impl Database {
                               WHERE p.sequence_id = b.id AND p.state = 'stale'), 0)
                  FROM books b
                  LEFT JOIN chapters c ON c.book_id = b.id
-                 WHERE b.id = ?1
+                 WHERE b.id = ?1 AND b.lifecycle_state = 'active'
                  GROUP BY b.id",
                 params![book_id],
                 book_from_row,
             )
             .optional()?
             .ok_or(DbError::NotFound)
+    }
+}
+
+fn load_merge_snapshots(
+    connection: &Connection,
+    ordered_ids: &[String],
+) -> Result<Vec<MergeBookSnapshot>, DbError> {
+    load_merge_snapshots_with_lifecycle(connection, ordered_ids, false)
+}
+
+fn load_merge_snapshots_any_lifecycle(
+    connection: &Connection,
+    ordered_ids: &[String],
+) -> Result<Vec<MergeBookSnapshot>, DbError> {
+    load_merge_snapshots_with_lifecycle(connection, ordered_ids, true)
+}
+
+fn load_merge_snapshots_with_lifecycle(
+    connection: &Connection,
+    ordered_ids: &[String],
+    include_merged: bool,
+) -> Result<Vec<MergeBookSnapshot>, DbError> {
+    let mut snapshots = Vec::with_capacity(ordered_ids.len());
+    let book_query = if include_merged {
+        "SELECT b.id, b.title, b.author, b.format, b.content_kind,
+                b.progress, b.current_chapter, b.shelf_group, b.tags_json,
+                (SELECT COUNT(*) FROM chapters c WHERE c.book_id = b.id),
+                (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
+                (SELECT c.source_kind FROM book_covers c WHERE c.book_id = b.id),
+                (SELECT c.cache_key FROM book_covers c WHERE c.book_id = b.id),
+                (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
+                (SELECT s.root_id FROM image_sequences s WHERE s.book_id = b.id),
+                (SELECT s.page_count FROM image_sequences s WHERE s.book_id = b.id),
+                b.updated_at
+         FROM books b
+         WHERE b.id = ?1"
+    } else {
+        "SELECT b.id, b.title, b.author, b.format, b.content_kind,
+                b.progress, b.current_chapter, b.shelf_group, b.tags_json,
+                (SELECT COUNT(*) FROM chapters c WHERE c.book_id = b.id),
+                (SELECT c.state FROM book_covers c WHERE c.book_id = b.id),
+                (SELECT c.source_kind FROM book_covers c WHERE c.book_id = b.id),
+                (SELECT c.cache_key FROM book_covers c WHERE c.book_id = b.id),
+                (SELECT s.state FROM image_sequences s WHERE s.book_id = b.id),
+                (SELECT s.root_id FROM image_sequences s WHERE s.book_id = b.id),
+                (SELECT s.page_count FROM image_sequences s WHERE s.book_id = b.id),
+                b.updated_at
+         FROM books b
+         WHERE b.id = ?1 AND b.lifecycle_state = 'active'"
+    };
+    for book_id in ordered_ids {
+        let mut snapshot = connection
+            .query_row(book_query, params![book_id], |row| {
+                let tags_json: String = row.get(8)?;
+                Ok(MergeBookSnapshot {
+                    book: BookMergeBookPreview {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        author: row.get(2)?,
+                        format: row.get(3)?,
+                        content_kind: row.get(4)?,
+                        progress: row.get(5)?,
+                        current_chapter: row.get(6)?,
+                        shelf_group: row.get(7)?,
+                        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                        chapter_count: row.get(9)?,
+                        cover_state: row.get(10)?,
+                        image_sequence_state: row.get(13)?,
+                        image_sequence_root_id: row.get(14)?,
+                        image_sequence_page_count: row.get(15)?,
+                    },
+                    cover_source_kind: row.get(11)?,
+                    cover_cache_key: row.get(12)?,
+                    updated_at: row.get(16)?,
+                    chapters: Vec::new(),
+                })
+            })
+            .optional()?
+            .ok_or(DbError::NotFound)?;
+
+        let mut statement = connection.prepare(
+            "SELECT id, title, content
+             FROM chapters
+             WHERE book_id = ?1
+             ORDER BY chapter_index, id",
+        )?;
+        snapshot.chapters = statement
+            .query_map(params![snapshot.book.id.clone()], |row| {
+                let id: String = row.get(0)?;
+                let title: String = row.get(1)?;
+                let content: String = row.get(2)?;
+                Ok(MergeChapterSnapshot {
+                    id,
+                    title,
+                    digest: merge_text_digest(&content),
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        snapshots.push(snapshot);
+    }
+    Ok(snapshots)
+}
+
+fn load_reading_state_snapshot(
+    connection: &Connection,
+    book_id: &str,
+) -> Result<Option<MergeReadingStateSnapshot>, DbError> {
+    connection
+        .query_row(
+            "SELECT position, read_state
+             FROM book_reading_state
+             WHERE book_id = ?1",
+            params![book_id],
+            |row| {
+                Ok(MergeReadingStateSnapshot {
+                    position: row.get(0)?,
+                    read_state: row.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(DbError::from)
+}
+
+fn merge_snapshot_matches(current: &MergeBookSnapshot, expected: &MergeBookSnapshot) -> bool {
+    current.book.id == expected.book.id
+        && current.book.title == expected.book.title
+        && current.book.author == expected.book.author
+        && current.book.format == expected.book.format
+        && current.book.content_kind == expected.book.content_kind
+        && current.book.shelf_group == expected.book.shelf_group
+        && current.book.tags == expected.book.tags
+        && current.book.chapter_count == expected.book.chapter_count
+        && (current.book.progress - expected.book.progress).abs() <= 1e-9
+        && current.book.current_chapter == expected.book.current_chapter
+        && current.book.cover_state == expected.book.cover_state
+        && current.book.image_sequence_state == expected.book.image_sequence_state
+        && current.book.image_sequence_root_id == expected.book.image_sequence_root_id
+        && current.book.image_sequence_page_count == expected.book.image_sequence_page_count
+        && current.cover_source_kind == expected.cover_source_kind
+        && current.cover_cache_key == expected.cover_cache_key
+        && current.chapters.len() == expected.chapters.len()
+        && current
+            .chapters
+            .iter()
+            .zip(expected.chapters.iter())
+            .all(|(left, right)| {
+                left.id == right.id && left.title == right.title && left.digest == right.digest
+            })
+}
+
+fn parse_stored_merge_snapshot(value: &str) -> Result<MergeBookSnapshot, DbError> {
+    let root: serde_json::Value = serde_json::from_str(value)
+        .map_err(|error| DbError::InvalidBookMetadata(format!("书籍快照 JSON 无效：{error}")))?;
+    let snapshot = root
+        .get("merge_snapshot")
+        .cloned()
+        .ok_or_else(|| DbError::InvalidBookMetadata("合并记录缺少 d3 快照".to_string()))?;
+    serde_json::from_value(snapshot)
+        .map_err(|error| DbError::InvalidBookMetadata(format!("书籍快照格式无效：{error}")))
+}
+
+fn load_book_alias_target(
+    connection: &Connection,
+    book_id: &str,
+) -> Result<Option<String>, DbError> {
+    connection
+        .query_row(
+            "SELECT canonical_book_id FROM book_aliases WHERE alias_book_id = ?1",
+            params![book_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(DbError::from)
+}
+
+fn resolve_book_alias_with_connection(
+    connection: &Connection,
+    book_id: &str,
+) -> Result<BookAliasResolution, DbError> {
+    let requested_book_id = book_id.trim();
+    if requested_book_id.is_empty() {
+        return Err(DbError::InvalidBookMetadata("书籍 ID 不能为空".to_string()));
+    }
+    let Some(canonical_book_id) = load_book_alias_target(connection, requested_book_id)? else {
+        return Ok(BookAliasResolution {
+            requested_book_id: requested_book_id.to_string(),
+            canonical_book_id: requested_book_id.to_string(),
+            redirected: false,
+            hops: 0,
+        });
+    };
+    if canonical_book_id == requested_book_id {
+        return Err(DbError::InvalidBookMetadata(
+            "检测到书籍别名环路，已拒绝解析".to_string(),
+        ));
+    }
+    if load_book_alias_target(connection, &canonical_book_id)?.is_some() {
+        return Err(DbError::InvalidBookMetadata(
+            "检测到多跳书籍别名或别名环路，已拒绝解析".to_string(),
+        ));
+    }
+    Ok(BookAliasResolution {
+        requested_book_id: requested_book_id.to_string(),
+        canonical_book_id,
+        redirected: true,
+        hops: 1,
+    })
+}
+
+fn ensure_book_active(connection: &Connection, book_id: &str) -> Result<(), DbError> {
+    let lifecycle_state: Option<String> = connection
+        .query_row(
+            "SELECT lifecycle_state FROM books WHERE id = ?1",
+            params![book_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match lifecycle_state.as_deref() {
+        Some("active") => Ok(()),
+        Some("merged") => Err(DbError::InvalidBookMetadata(
+            "书籍已合并，不能直接修改；请先选择当前书籍或撤销合并".to_string(),
+        )),
+        Some(_) => Err(DbError::InvalidBookMetadata(
+            "书籍生命周期状态无效".to_string(),
+        )),
+        None => Err(DbError::NotFound),
     }
 }
 
@@ -2850,6 +3842,12 @@ fn apply_migrations(connection: &mut Connection) -> Result<(), DbError> {
             include_str!("../migrations/0014_book_shelf_metadata.sql"),
         ),
         (15_i64, include_str!("../migrations/0015_book_covers.sql")),
+        (16_i64, include_str!("../migrations/0016_book_merge.sql")),
+        (17_i64, include_str!("../migrations/0017_reading_state.sql")),
+        (
+            18_i64,
+            include_str!("../migrations/0018_book_merge_undo.sql"),
+        ),
     ] {
         let applied: Option<i64> = connection
             .query_row(
@@ -3280,6 +4278,67 @@ fn source_failure_history_from_row(row: &Row<'_>) -> rusqlite::Result<SourceFail
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persists_reading_position_and_explicit_read_state() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-reading-state-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, format) VALUES (?1, ?2, ?3)",
+                    params!["reading-book", "Reading state", "txt"],
+                )
+                .expect("book should insert");
+            connection
+                .execute(
+                    "INSERT INTO chapters (id, book_id, chapter_index, title, content)
+                     VALUES (?1, ?2, 0, ?3, ?4)",
+                    params!["reading-chapter", "reading-book", "第一章", "正文"],
+                )
+                .expect("chapter should insert");
+        }
+
+        database
+            .save_progress(
+                "reading-book",
+                "reading-chapter",
+                0,
+                0.64,
+                812.5,
+                Some("reading"),
+            )
+            .expect("progress should save");
+        let detail = database
+            .get_book_detail("reading-book")
+            .expect("book detail should load");
+        assert!((detail.reading_state.position - 812.5).abs() < f64::EPSILON);
+        assert_eq!(detail.reading_state.read_state, "reading");
+        assert!((detail.book.progress - 0.64).abs() < f64::EPSILON);
+
+        database
+            .save_progress(
+                "reading-book",
+                "reading-chapter",
+                0,
+                1.0,
+                1600.0,
+                Some("finished"),
+            )
+            .expect("finished state should save");
+        let finished = database
+            .get_book_detail("reading-book")
+            .expect("finished detail should load");
+        assert_eq!(finished.reading_state.read_state, "finished");
+        assert_eq!(finished.book.progress, 1.0);
+    }
 
     #[test]
     fn persists_image_sequence_schema_and_enforces_recovery_contract() {
@@ -4556,6 +5615,587 @@ mod tests {
             })
             .is_err());
 
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn commits_pure_text_book_merge_and_hides_archived_source() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-merge-commit-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            for (id, title, progress) in [
+                ("commit-canonical", "事务合并书", 0.2_f64),
+                ("commit-source", "事务合并书", 0.75_f64),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO books (id, title, author, path, format, progress)
+                         VALUES (?1, ?2, '作者', ?3, 'txt', ?4)",
+                        params![id, title, format!("{id}.txt"), progress],
+                    )
+                    .expect("merge book should insert");
+            }
+            connection
+                .execute(
+                    "INSERT INTO chapters
+                     (id, book_id, chapter_index, title, content, content_format)
+                     VALUES ('commit-c1', 'commit-canonical', 0, '第一章', '正文', 'text')",
+                    [],
+                )
+                .expect("canonical chapter should insert");
+            connection
+                .execute(
+                    "INSERT INTO chapters
+                     (id, book_id, chapter_index, title, content, content_format)
+                     VALUES ('commit-s1', 'commit-source', 0, '第一章', '正文', 'text')",
+                    [],
+                )
+                .expect("identical source chapter should insert");
+            connection
+                .execute(
+                    "INSERT INTO chapters
+                     (id, book_id, chapter_index, title, content, content_format)
+                     VALUES ('commit-s2', 'commit-source', 1, '第二章', '新增正文', 'text')",
+                    [],
+                )
+                .expect("append source chapter should insert");
+            connection
+                .execute(
+                    "INSERT INTO book_reading_state (book_id, position, read_state)
+                     VALUES ('commit-source', 0.4, 'reading')",
+                    [],
+                )
+                .expect("source reading state should insert");
+        }
+
+        let preview = database
+            .preview_book_merge(BookMergePreviewRequest {
+                book_ids: vec!["commit-source".to_string(), "commit-canonical".to_string()],
+                canonical_book_id: "commit-canonical".to_string(),
+            })
+            .expect("merge preview should load");
+        assert!(preview.conflicts.is_empty());
+        assert!(preview.blocked_reasons.is_empty());
+        assert_eq!(preview.append_candidates.len(), 1);
+
+        let request = BookMergeCommitRequest {
+            preview: BookMergePreviewRequest {
+                book_ids: vec!["commit-source".to_string(), "commit-canonical".to_string()],
+                canonical_book_id: "commit-canonical".to_string(),
+            },
+            preview_id: preview.preview_id.clone(),
+            created_at: preview.created_at,
+            expires_at: preview.expires_at,
+            input_fingerprint: preview.input_fingerprint.clone(),
+            progress_book_id: "commit-source".to_string(),
+            final_shelf_group: Some("已合并".to_string()),
+            final_tags: Some(vec!["测试".to_string(), "测试".to_string()]),
+        };
+        let result = database
+            .commit_book_merge(request.clone())
+            .expect("merge commit should succeed");
+        assert!(result.operation_id.starts_with("merge-operation-"));
+        assert_eq!(result.canonical_book_id, "commit-canonical");
+        assert_eq!(result.archived_book_ids, vec!["commit-source".to_string()]);
+        assert_eq!(result.appended_chapter_ids.len(), 1);
+        assert!(database.get_book_summary("commit-source").is_err());
+        assert_eq!(database.list_books().expect("shelf should load").len(), 1);
+        let canonical = database
+            .get_book_summary("commit-canonical")
+            .expect("canonical should remain active");
+        assert_eq!(canonical.chapter_count, 2);
+        assert_eq!(canonical.progress, 0.75);
+        assert_eq!(canonical.shelf_group, "已合并");
+        assert_eq!(canonical.tags, vec!["测试".to_string()]);
+        assert!(database.rename_book("commit-source", "不应修改").is_err());
+
+        let connection = database.connection.lock().expect("database lock");
+        let lifecycle: String = connection
+            .query_row(
+                "SELECT lifecycle_state FROM books WHERE id = 'commit-source'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("archived lifecycle should read");
+        assert_eq!(lifecycle, "merged");
+        let item_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM book_merge_items WHERE operation_id = ?1",
+                params![result.operation_id],
+                |row| row.get(0),
+            )
+            .expect("merge item should exist");
+        assert_eq!(item_count, 1);
+        drop(connection);
+
+        assert!(database.commit_book_merge(request).is_err());
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn rejects_changed_merge_preview_and_rolls_back_alias_conflict() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-merge-rollback-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            for id in ["rollback-canonical", "rollback-source"] {
+                connection
+                    .execute(
+                        "INSERT INTO books (id, title, author, path, format)
+                         VALUES (?1, '回滚合并书', '作者', ?2, 'txt')",
+                        params![id, format!("{id}.txt")],
+                    )
+                    .expect("rollback book should insert");
+            }
+            connection
+                .execute(
+                    "INSERT INTO chapters
+                     (id, book_id, chapter_index, title, content, content_format)
+                     VALUES ('rollback-c1', 'rollback-canonical', 0, '第一章', '正文', 'text')",
+                    [],
+                )
+                .expect("rollback canonical chapter should insert");
+            connection
+                .execute(
+                    "INSERT INTO chapters
+                     (id, book_id, chapter_index, title, content, content_format)
+                     VALUES ('rollback-s1', 'rollback-source', 0, '第一章', '正文', 'text')",
+                    [],
+                )
+                .expect("rollback source chapter should insert");
+        }
+        let preview = database
+            .preview_book_merge(BookMergePreviewRequest {
+                book_ids: vec![
+                    "rollback-source".to_string(),
+                    "rollback-canonical".to_string(),
+                ],
+                canonical_book_id: "rollback-canonical".to_string(),
+            })
+            .expect("rollback preview should load");
+        let request = BookMergeCommitRequest {
+            preview: BookMergePreviewRequest {
+                book_ids: vec![
+                    "rollback-source".to_string(),
+                    "rollback-canonical".to_string(),
+                ],
+                canonical_book_id: "rollback-canonical".to_string(),
+            },
+            preview_id: preview.preview_id.clone(),
+            created_at: preview.created_at,
+            expires_at: preview.expires_at,
+            input_fingerprint: preview.input_fingerprint.clone(),
+            progress_book_id: "rollback-canonical".to_string(),
+            final_shelf_group: None,
+            final_tags: None,
+        };
+
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "UPDATE books SET progress = 0.9 WHERE id = 'rollback-source'",
+                    [],
+                )
+                .expect("source mutation should succeed");
+        }
+        assert!(database.commit_book_merge(request.clone()).is_err());
+
+        let fresh_preview = database
+            .preview_book_merge(request.preview.clone())
+            .expect("fresh preview should load");
+        let request = BookMergeCommitRequest {
+            preview: request.preview,
+            preview_id: fresh_preview.preview_id.clone(),
+            created_at: fresh_preview.created_at,
+            expires_at: fresh_preview.expires_at,
+            input_fingerprint: fresh_preview.input_fingerprint.clone(),
+            progress_book_id: "rollback-canonical".to_string(),
+            final_shelf_group: None,
+            final_tags: None,
+        };
+
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "INSERT INTO book_merge_operations
+                     (id, preview_id, canonical_book_id, status, plan_json, undo_until)
+                     VALUES ('merge-operation-conflict', 'merge-preview-conflict',
+                             'rollback-canonical', 'committed', '{}', datetime('now', '+7 days'))",
+                    [],
+                )
+                .expect("conflicting operation should insert");
+            connection
+                .execute(
+                    "INSERT INTO book_aliases (alias_book_id, canonical_book_id, operation_id)
+                     VALUES ('rollback-source', 'rollback-canonical', 'merge-operation-conflict')",
+                    [],
+                )
+                .expect("conflicting alias should insert");
+        }
+        assert!(database.commit_book_merge(request).is_err());
+
+        let connection = database.connection.lock().expect("database lock");
+        let lifecycle: String = connection
+            .query_row(
+                "SELECT lifecycle_state FROM books WHERE id = 'rollback-source'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("source lifecycle should remain active");
+        assert_eq!(lifecycle, "active");
+        let appended_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM chapters WHERE book_id = 'rollback-canonical'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("canonical chapter count should read");
+        assert_eq!(appended_count, 1);
+        drop(connection);
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn undoes_book_merge_and_resolves_old_id() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-merge-undo-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, author, path, format, progress, shelf_group)
+                     VALUES ('undo-canonical', '可撤销合并', '作者', 'undo-canonical.txt', 'txt', 0.2, '原组')",
+                    [],
+                )
+                .expect("canonical should insert");
+            connection
+                .execute(
+                    "INSERT INTO books (id, title, author, path, format, progress)
+                     VALUES ('undo-source', '可撤销合并', '作者', 'undo-source.txt', 'txt', 0.75)",
+                    [],
+                )
+                .expect("source should insert");
+            connection
+                .execute(
+                    "INSERT INTO chapters
+                     (id, book_id, chapter_index, title, content, content_format)
+                     VALUES ('undo-c1', 'undo-canonical', 0, '第一章', '原正文', 'text')",
+                    [],
+                )
+                .expect("canonical chapter should insert");
+            connection
+                .execute(
+                    "INSERT INTO chapters
+                     (id, book_id, chapter_index, title, content, content_format)
+                     VALUES ('undo-s1', 'undo-source', 0, '第二章', '新增正文', 'text')",
+                    [],
+                )
+                .expect("source chapter should insert");
+            connection
+                .execute(
+                    "INSERT INTO book_reading_state (book_id, position, read_state)
+                     VALUES ('undo-canonical', 0.15, 'reading')",
+                    [],
+                )
+                .expect("canonical reading state should insert");
+            connection
+                .execute(
+                    "INSERT INTO book_reading_state (book_id, position, read_state)
+                     VALUES ('undo-source', 0.65, 'reading')",
+                    [],
+                )
+                .expect("source reading state should insert");
+        }
+
+        let preview = database
+            .preview_book_merge(BookMergePreviewRequest {
+                book_ids: vec!["undo-source".to_string(), "undo-canonical".to_string()],
+                canonical_book_id: "undo-canonical".to_string(),
+            })
+            .expect("undo preview should load");
+        let result = database
+            .commit_book_merge(BookMergeCommitRequest {
+                preview: BookMergePreviewRequest {
+                    book_ids: vec!["undo-source".to_string(), "undo-canonical".to_string()],
+                    canonical_book_id: "undo-canonical".to_string(),
+                },
+                preview_id: preview.preview_id,
+                created_at: preview.created_at,
+                expires_at: preview.expires_at,
+                input_fingerprint: preview.input_fingerprint,
+                progress_book_id: "undo-source".to_string(),
+                final_shelf_group: Some("合并后".to_string()),
+                final_tags: Some(vec!["临时".to_string()]),
+            })
+            .expect("undo merge should commit");
+        assert_eq!(
+            database
+                .get_book_detail("undo-source")
+                .expect("old id should redirect")
+                .book
+                .id,
+            "undo-canonical"
+        );
+        let undone = database
+            .undo_book_merge(BookMergeUndoRequest {
+                operation_id: result.operation_id.clone(),
+            })
+            .expect("merge should undo");
+        assert_eq!(undone.canonical_book_id, "undo-canonical");
+        assert_eq!(undone.restored_book_ids.len(), 2);
+        assert_eq!(undone.removed_chapter_ids.len(), 1);
+        assert_eq!(
+            database
+                .get_book_summary("undo-canonical")
+                .expect("canonical should restore")
+                .shelf_group,
+            "原组"
+        );
+        assert_eq!(
+            database
+                .get_book_summary("undo-canonical")
+                .expect("canonical should restore")
+                .chapter_count,
+            1
+        );
+        assert!(
+            database
+                .get_book_summary("undo-source")
+                .expect("source should restore")
+                .id
+                == "undo-source"
+        );
+        assert!(database
+            .undo_book_merge(BookMergeUndoRequest {
+                operation_id: result.operation_id.clone(),
+            })
+            .is_err());
+
+        let connection = database.connection.lock().expect("database lock");
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM book_merge_operations WHERE id = ?1",
+                params![result.operation_id],
+                |row| row.get(0),
+            )
+            .expect("undo status should read");
+        assert_eq!(status, "undone");
+        let alias_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM book_aliases WHERE alias_book_id = 'undo-source'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("alias count should read");
+        assert_eq!(alias_count, 0);
+        drop(connection);
+
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn rejects_merge_undo_after_external_change_or_expiry() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-merge-undo-conflict-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            for (id, progress) in [
+                ("undo-conflict-canonical", 0.2_f64),
+                ("undo-conflict-source", 0.7_f64),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO books (id, title, author, path, format, progress)
+                         VALUES (?1, '外部修改检测', '作者', ?2, 'txt', ?3)",
+                        params![id, format!("{id}.txt"), progress],
+                    )
+                    .expect("conflict book should insert");
+            }
+            for (id, book_id, title) in [
+                ("undo-conflict-c1", "undo-conflict-canonical", "第一章"),
+                ("undo-conflict-s1", "undo-conflict-source", "第二章"),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO chapters
+                         (id, book_id, chapter_index, title, content, content_format)
+                         VALUES (?1, ?2, 0, ?3, '正文', 'text')",
+                        params![id, book_id, title],
+                    )
+                    .expect("conflict chapter should insert");
+            }
+        }
+        let preview = database
+            .preview_book_merge(BookMergePreviewRequest {
+                book_ids: vec![
+                    "undo-conflict-source".to_string(),
+                    "undo-conflict-canonical".to_string(),
+                ],
+                canonical_book_id: "undo-conflict-canonical".to_string(),
+            })
+            .expect("conflict preview should load");
+        let result = database
+            .commit_book_merge(BookMergeCommitRequest {
+                preview: BookMergePreviewRequest {
+                    book_ids: vec![
+                        "undo-conflict-source".to_string(),
+                        "undo-conflict-canonical".to_string(),
+                    ],
+                    canonical_book_id: "undo-conflict-canonical".to_string(),
+                },
+                preview_id: preview.preview_id,
+                created_at: preview.created_at,
+                expires_at: preview.expires_at,
+                input_fingerprint: preview.input_fingerprint,
+                progress_book_id: "undo-conflict-canonical".to_string(),
+                final_shelf_group: None,
+                final_tags: None,
+            })
+            .expect("conflict merge should commit");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "UPDATE books SET progress = 0.99 WHERE id = 'undo-conflict-canonical'",
+                    [],
+                )
+                .expect("external canonical change should succeed");
+        }
+        assert!(database
+            .undo_book_merge(BookMergeUndoRequest {
+                operation_id: result.operation_id.clone(),
+            })
+            .is_err());
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "UPDATE books SET progress = 0.2 WHERE id = 'undo-conflict-canonical'",
+                    [],
+                )
+                .expect("canonical should restore for expiry check");
+            connection
+                .execute(
+                    "UPDATE book_merge_operations
+                     SET undo_until = datetime('now', '-1 second')
+                     WHERE id = ?1",
+                    params![result.operation_id],
+                )
+                .expect("undo window should expire");
+        }
+        assert!(database
+            .undo_book_merge(BookMergeUndoRequest {
+                operation_id: result.operation_id.clone(),
+            })
+            .is_err());
+        let connection = database.connection.lock().expect("database lock");
+        let status: String = connection
+            .query_row(
+                "SELECT status FROM book_merge_operations WHERE id = ?1",
+                params![result.operation_id],
+                |row| row.get(0),
+            )
+            .expect("expired status should read");
+        assert_eq!(status, "expired");
+        drop(connection);
+        drop(database);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn detects_book_alias_cycles_and_multi_hop_redirects() {
+        let directory = std::env::temp_dir().join(format!(
+            "open-reader-book-alias-cycle-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let database = Database::open(&directory).expect("database should open");
+        {
+            let connection = database.connection.lock().expect("database lock");
+            for id in ["alias-a", "alias-b", "alias-c"] {
+                connection
+                    .execute(
+                        "INSERT INTO books (id, title, path, format)
+                         VALUES (?1, ?1, ?2, 'txt')",
+                        params![id, format!("{id}.txt")],
+                    )
+                    .expect("alias book should insert");
+            }
+            connection
+                .execute(
+                    "INSERT INTO book_merge_operations
+                     (id, preview_id, canonical_book_id, plan_json, undo_until)
+                     VALUES ('merge-operation-alias-a', 'merge-preview-alias-a', 'alias-c', '{}', datetime('now', '+7 days'))",
+                    [],
+                )
+                .expect("alias operation should insert");
+            connection
+                .execute(
+                    "INSERT INTO book_aliases (alias_book_id, canonical_book_id, operation_id)
+                     VALUES ('alias-a', 'alias-b', 'merge-operation-alias-a')",
+                    [],
+                )
+                .expect("first alias should insert");
+            connection
+                .execute(
+                    "INSERT INTO book_aliases (alias_book_id, canonical_book_id, operation_id)
+                     VALUES ('alias-b', 'alias-c', 'merge-operation-alias-a')",
+                    [],
+                )
+                .expect("second alias should insert");
+        }
+        assert!(database.resolve_book_alias("alias-a").is_err());
+        {
+            let connection = database.connection.lock().expect("database lock");
+            connection
+                .execute(
+                    "DELETE FROM book_aliases WHERE alias_book_id = 'alias-b'",
+                    [],
+                )
+                .expect("multi-hop alias should remove");
+            connection
+                .execute(
+                    "INSERT INTO book_aliases (alias_book_id, canonical_book_id, operation_id)
+                     VALUES ('alias-b', 'alias-a', 'merge-operation-alias-a')",
+                    [],
+                )
+                .expect("cycle alias should insert");
+        }
+        assert!(database.resolve_book_alias("alias-a").is_err());
         drop(database);
         let _ = fs::remove_dir_all(directory);
     }

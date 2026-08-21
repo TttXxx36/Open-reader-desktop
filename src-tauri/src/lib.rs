@@ -9,12 +9,14 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMergePreview,
-    BookMergePreviewRequest, BookMergePreviewRevalidateRequest, BookMetadataBatchWrite,
-    BookMetadataWrite, BookSummary, ChapterContent, Database, DuplicateBookGroup,
-    ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite, SourceCacheStats,
-    SourceFailureHistory, SourceFailureStats, SourceMetadata, SourceRequestMetrics,
-    SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
+    BookAliasResolution, BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions,
+    BookMergeCommitRequest, BookMergeCommitResult, BookMergePreview, BookMergePreviewRequest,
+    BookMergePreviewRevalidateRequest, BookMergeUndoRequest, BookMergeUndoResult,
+    BookMetadataBatchWrite, BookMetadataWrite, BookSummary, ChapterContent, Database,
+    DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite,
+    SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
+    SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
+    SourceSummary, SourceWrite,
 };
 use image_relink::{ImageRelinkAssignment, ImageRelinkPreview};
 use library::{
@@ -302,6 +304,26 @@ fn revalidate_book_merge_preview(
 ) -> Result<BookMergePreview, String> {
     database
         .revalidate_book_merge_preview(request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn undo_book_merge(
+    database: tauri::State<'_, Database>,
+    request: BookMergeUndoRequest,
+) -> Result<BookMergeUndoResult, String> {
+    database
+        .undo_book_merge(request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resolve_book_alias(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+) -> Result<BookAliasResolution, String> {
+    database
+        .resolve_book_alias(&book_id)
         .map_err(|error| error.to_string())
 }
 
@@ -611,9 +633,28 @@ fn save_progress(
     chapter_id: String,
     current_chapter: i64,
     progress: f64,
+    reading_position: Option<f64>,
+    read_state: Option<String>,
 ) -> Result<(), String> {
     database
-        .save_progress(&book_id, &chapter_id, current_chapter, progress)
+        .save_progress(
+            &book_id,
+            &chapter_id,
+            current_chapter,
+            progress,
+            reading_position.unwrap_or(0.0),
+            read_state.as_deref(),
+        )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn commit_book_merge(
+    database: tauri::State<'_, Database>,
+    request: BookMergeCommitRequest,
+) -> Result<BookMergeCommitResult, String> {
+    database
+        .commit_book_merge(request)
         .map_err(|error| error.to_string())
 }
 
@@ -1007,7 +1048,7 @@ fn audit_sources(database: tauri::State<'_, Database>) -> Result<Vec<SourceAudit
         .collect())
 }
 
-const MAX_SOURCE_BUNDLE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SOURCE_BUNDLE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_SOURCE_IMPORT_TIMEOUT_SECS: u64 = 30;
 const MAX_SOURCE_IMPORT_URL_BYTES: usize = 2 * 1024;
 
@@ -1432,6 +1473,8 @@ struct RemoteBookDetail {
     chapters: Vec<source::SourceChapter>,
     debug_steps: Vec<source::SourceDebugStep>,
     #[serde(default)]
+    rule_evaluations: Vec<source::SourceRuleEvaluation>,
+    #[serde(default)]
     chapter_fingerprint: String,
     #[serde(default)]
     chapter_update: Option<source::ChapterUpdateSummary>,
@@ -1457,6 +1500,8 @@ struct RemoteChapterContent {
     cache_hit: bool,
     #[serde(default)]
     debug_steps: Vec<source::SourceDebugStep>,
+    #[serde(default)]
+    rule_evaluations: Vec<source::SourceRuleEvaluation>,
 }
 
 impl From<source::SourceChapterContent> for RemoteChapterContent {
@@ -1469,6 +1514,7 @@ impl From<source::SourceChapterContent> for RemoteChapterContent {
             refresh_error: None,
             cache_hit: false,
             debug_steps: Vec::new(),
+            rule_evaluations: content.rule_evaluations,
         }
     }
 }
@@ -1655,6 +1701,7 @@ async fn fetch_source_book(
         chapter_fingerprint: source::chapter_fingerprint(&detail.chapters),
         chapters: detail.chapters,
         debug_steps: detail.debug_steps,
+        rule_evaluations: detail.rule_evaluations,
         chapter_update,
         stale: false,
         refresh_error: None,
@@ -1876,7 +1923,7 @@ mod tests {
         assert!(validate_source_bundle_size(MAX_SOURCE_BUNDLE_BYTES).is_ok());
         let error = validate_source_bundle_size(MAX_SOURCE_BUNDLE_BYTES + 1)
             .expect_err("payload over the expanded limit should be rejected");
-        assert_eq!(error, "书源文件超过 16 MB 限制");
+        assert_eq!(error, "书源文件超过 128 MB 限制");
     }
 }
 
@@ -1909,11 +1956,17 @@ fn record_source_rule_error(
     request_stage: &str,
     message: &str,
 ) {
-    let (stage, key) = match request_stage {
-        "book" if message.contains("toc") => ("toc", "item"),
-        "book" => ("book_info", "title"),
-        "chapter" => ("content", "content"),
-        _ => return,
+    let context = message
+        .split_once(" 规则 ")
+        .and_then(|(stage, rest)| rest.split_once(" 失败").map(|(rule, _)| (stage, rule)))
+        .or_else(|| match request_stage {
+            "book" if message.contains("toc") => Some(("toc", "item")),
+            "book" => Some(("book_info", "title")),
+            "chapter" => Some(("content", "content")),
+            _ => None,
+        });
+    let Some((stage, key)) = context else {
+        return;
     };
     if let Some(evaluation) = source::rule_evaluation_from_error(stage, key, message) {
         record_source_rule_evaluations(database, source_id, &[evaluation]);
@@ -2204,6 +2257,9 @@ pub fn run() {
             find_duplicate_books,
             preview_book_merge,
             revalidate_book_merge_preview,
+            commit_book_merge,
+            undo_book_merge,
+            resolve_book_alias,
             list_books_with_options,
             update_book_metadata,
             rename_book,

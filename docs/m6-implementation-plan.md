@@ -127,6 +127,8 @@ M7 交接：
 - CI 验证：运行 [30744789147](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30744789147) 通过 Frontend checks、UI contract check、Rust 格式检查、Cargo check 与 34 个 Rust tests；内容块、图片本地映射、大小上限和外链拒绝回归测试均包含在本次验证中。
 - M6.3/M6.4 验证基线：前端构建必须通过新增组件导入、设置迁移、阅读 CSS 变量和首页契约检查；Windows 安装包需手工确认设置实时生效、重启保持、重置回退、Tab 焦点和 1024px 左右窗口不横向溢出。
 - CI 验证：运行 [30746099373](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30746099373) 通过 Frontend checks（typecheck、Vite build、UI contract）与 Rust checks（fmt、cargo check、Rust tests）；视图组件拆分和设置 v2 契约均已覆盖。
+- 2026-08-20：针对 Windows 验收中“点击在线结果后规则解析失败”完成 P0 修复切片：搜索/详情/目录/正文规则错误保留阶段与字段上下文；非关键详情字段允许降级；搜索和章节项跳过不完整候选；目录为空时不再生成伪造章节 URL；搜索页增加失败重试；导入预览区分可运行、兼容保留和需人工处理。
+- 2026-08-20：补齐 P1 安全兼容回退：搜索/目录条目在 Legacy 或规则无产出时仅回退到普通 `a[href]`、常见标题选择器和固定 JSON 字段；过滤 javascript/data/mailto/tel 链接；详情元数据允许从常见 HTML/JSON 字段补全。补齐 P2 回归夹具和 UI 契约，覆盖 Legacy URL、JSON 常见字段、目录链接回退及危险链接拒绝；不扩大 XPath、JavaScript、Cookie 或 Authorization 的执行边界。
 
 ## 四、测试与验收
 
@@ -140,6 +142,8 @@ M7 交接：
 - 阅读设置修改后实时生效，重启后仍保留
 - 自定义主题颜色、字间距、左右边距、对齐和分页滚动在本地与远端阅读器一致
 - 书源、本地阅读器和远端阅读器视图切换后，导入 input、键盘 Tab 焦点和中文文案仍可用
+- 在线搜索结果整行点击后应显示加载状态；规则失败时显示阶段/规则，并支持强制刷新重试
+- 书源导入预览应区分可运行、兼容保留和需人工处理，不把兼容保留误称为完全可运行
 
 ### Rust
 

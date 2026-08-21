@@ -2,6 +2,8 @@
 
 > 后续维护复核（2026-08-20）：main 提交 [89185e6](https://github.com/TttXxx36/Open-reader-desktop/commit/89185e640cefb2665510fc8b4622d918a9f1ab16) 已按顺序合并 PR11、PR12、PR13；CI [32368235610](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368235610)、Windows Release [32368262290](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368262290) 和 installer smoke [32369094467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32369094467) 均通过。Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16` 的 digest 为 `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`；正式发布仍受目标 Windows 手工验收和签名暂缓约束。
 
+> 当前候选（2026-08-21）：PR18 `0.2.0` Windows Release [32402250634](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32402250634) 与 installer smoke [32403363944](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32403363944) 已通过；Computer Use 手工验收记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 的 `0016` 迁移、纯文本单事务合并已由 CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 验证；M7 P1 两轮安全切片由 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 验证；M9.3.1-d3 的 `0018` 撤销状态、7 天撤销窗口、外部修改冲突保护和旧 ID 单跳解析由 CI [32470836506](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32470836506) 验证。下一步补授权夹具、乱码降级和字段级规则差异诊断，再做 d3-e Windows 手工验收。
+
 路线图按“可独立验收、可回滚、可持续兼容”的里程碑推进。每个里程碑都必须在 GitHub Issue、PR、自动化检查和变更记录中留下证据；“已实现”只表示代码与远程 CI 通过，不替代 Windows 安装包手工验收。
 
 ## 总体原则
@@ -79,6 +81,7 @@
 - **M7.3 XPath 评估（静态识别、离线 PoC、授权夹具与耗时指标预览已完成）**：导入预览在规则上下文中识别 `//`、`xpath:`、`xpath=`、`@xpath` 等表达式，最多保留 8 条、每条 512 字节并展示原始值、不执行原因、静态解析状态、步数和估算工作量；离线 PoC 只解析受限路径/谓词并统计合成 HTML 节点，首轮夹具覆盖 6 条受限语法和 6 条拒绝语法，明确拒绝函数、联合、轴、父节点和超限输入，不翻译为 CSS、不访问网络。授权合成夹具、解析耗时分布和边界/回归夹具已完成（70 个 Rust 测试，run 31307700513）；继续保持不执行真实网络。
 - **M7.4 JavaScript 评估闸门**：设计条件已记录在 [M7.4 JavaScript 评估安全闸门](m7-js-evaluation-gate.md)；许可证/供应链、独立隔离、资源配额、API 白名单、脱敏审计、逐源授权、回滚和 Windows 合成夹具全部通过前，不引入运行时，默认仍拒绝脚本。
 - **M7.5 书源诊断**：单源重试、搜索/书籍/章节失败历史、本地保留与统计、跨请求 `operation_id`、本地失败报告、有限原因分类、旧库升级夹具、报告 schema_version 兼容约定、`source_metrics` 请求/缓存观测摘要和规则执行指标已完成；SQLite 0010 按书源/阶段统计网络请求，SQLite 0011/0012 按来源/阶段/字段规则键统计 attempts、success/no-match/failure/skipped，其中 skipped 不进入分母；书源页和报告展示明确比例、按规则分解与 `observed` 状态。规则指标边界详见 [规则执行指标边界](source-rule-metrics.md)；CI run [31322235077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31322235077) 已通过前端检查、Rust fmt/check 和 76 个 Rust 测试。M7.5j 完成，下一步进入 M8 内容格式 v2。
+- **M7 P1 兼容性安全切片（安全回退、字段诊断与乱码降级代码已完成）**：HTML/CSS 书源的 `item` 规则现在会匹配条目自身节点，再回退到后代节点；普通 HTTP 响应按 BOM、`charset`、HTML 元信息和 UTF-8 有效性识别 UTF-8、UTF-16LE/BE、GB18030/GBK 与 Windows-1252，异常时使用替换字符更少的 GB18030 回退并明确记录 `encoding_warning`。当目录/正文原始规则无结果时，目录使用带章节特征的有限链接回退，正文使用安全 CSS 候选并保留 inner HTML；搜索、书籍和章节响应现在对外提供字段级 `stage/rule_key/status`，诊断页和脱敏快照均可见；标题、作者、简介检测到替换字符、控制字符或常见乱码序列时安全降级并记录 `book_info.text_quality`。自身节点、GB18030、UTF-16LE、目录链接、正文回退、字段诊断和乱码降级夹具待 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 之外的新一轮验证；授权真实响应夹具和 Windows 手工回归仍待推进，继续不执行 XPath/JavaScript。
 
 ### M8 — 阅读内容与本地格式 v2
 
@@ -96,7 +99,7 @@
 - 所有格式都需旧数据库迁移、损坏文件错误恢复和 64 MB 默认导入上限测试。
 ### M9 — 书架、元数据与阅读历史
 
-详细执行清单见 [M9 图片序列数据库化与书架恢复计划](m9-image-sequence-plan.md)。M9.0 SQLite 模型、迁移、路径安全约束和外键恢复已完成；M9.1 已完成图片序列保存到书架、重启恢复、缩略图恢复和页码/缩放/方向/排版进度回写，CI run [31363237878](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31363237878) 通过；M9.2.1/9.2.2 已完成安全路径解析、快速文件指纹、状态判定、数据库回写和书架恢复时的状态提示，CI run [31368081755](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31368081755) 通过；M9.2.3 已加入 Tauri 原生目录选择、受限目录扫描、候选匹配、差异预览和事务化重新关联，CI run [31370651374](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31370651374) 通过；按需 SHA-256 复核与 stale 恢复已完成，CI run [31375034783](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31375034783) 通过；M9.2.4 首轮书架/阅读器状态反馈已完成，CI run [31377102734](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31377102734) 通过；M9.2.5 已加入 15 秒目录扫描超时、区分式错误提示和协作式取消任务令牌，CI run [31380314725](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31380314725) 通过。最新 Windows release run [31410657419](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31410657419) 已在 `main` 生成安装版、便携版和 `release-sha256.txt`，artifact [9071723663](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31410657419#artifacts) 摘要为 `sha256:0055d98696597f5a2c1f0dd17f33a08281bb9c42316b7e9a6361d26df9ad4ddf`；installer smoke run [31411486079](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31411486079) 已通过产物/校验和、便携版启动、NSIS/MSI 安装卸载和数据保留自动化检查。真实 Windows 手工验收仍待在目标环境完成。
+详细执行清单见 [M9 图片序列数据库化与书架恢复计划](m9-image-sequence-plan.md)。M9.0—M9.3.1-d3 代码切片已完成 SQLite 模型、图片序列恢复、元数据、重复预览、纯文本事务合并、7 天撤销和旧 ID 单跳解析；d3 使用 `0018` 撤销状态和快照冲突校验，普通书架与重复查询继续过滤 `active`，来源书籍不物理删除；CI [32470836506](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32470836506) 已通过。d3-e 的目标 Windows 手工验收仍待完成。
 
 - M9.2.3/M9.2.4/M9.2.5（目录恢复、状态反馈、超时边界与取消反馈已完成首切片）：原生目录选择、相对路径/文件名+大小候选、missing/stale/needs_relink 差异预览、事务化重新关联，仅针对 stale 页的有界 SHA-256 复核、书架/阅读器缺页提示，以及 15 秒扫描超时和可取消任务令牌；摘要一致可恢复为 ready，无摘要旧页继续保持 stale。真实 Windows 手工验收仍待完成，不能由 CI 代替。
 - M9.3 查询/单本编辑、批量元数据与重复候选预览首切片均已完成：分组、标签、筛选、排序、单本编辑、多选、批量分组/标签更新和只读重复候选检查，main CI run [31385269180](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31385269180)、[31388184266](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388184266)、[31390991820](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31390991820) 通过；Windows Release/installer smoke run [31388689695](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31388689695)、[31389443472](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31389443472)、[31391524135](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31391524135)、[31392423285](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31392423285) 通过。M9.3.1-a 已完成首个纯只读代码切片：`src-tauri/src/cover.rs` 提供封面来源规范化和版本化缓存键，提交 [91bc285d654568b942fbcc59e779c6efb43ea79d](https://github.com/TttXxx36/Open-reader-desktop/commit/91bc285d654568b942fbcc59e779c6efb43ea79d) 对应 CI run [31394712988](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31394712988) 已通过；9.3.1-b 已完成 `cover_cache` 文件层、`0015_book_covers.sql`、封面状态查询和书架提示；9.3.1-c 已完成 `preview_book_merge` 只读合并预览（2—8 本、显式 canonical、输入指纹、章节/元数据/封面候选与图片序列阻断），提交 [a91d1af7ffb1c5c8ccc91187615550a65cca2647](https://github.com/TttXxx36/Open-reader-desktop/commit/a91d1af7ffb1c5c8ccc91187615550a65cca2647) 对应 CI run [31402819722](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31402819722) 已通过；9.3.1-d1 已完成只读预览二次校验、过期/指纹变化拒绝和前端重新验证入口，最新 d1 提交 [f18f9ccf539a1059544df9657308127a983689ad](https://github.com/TttXxx36/Open-reader-desktop/commit/f18f9ccf539a1059544df9657308127a983689ad) 对应 CI run [31409256256](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31409256256) 已通过前端、Rust fmt/check/tests/TXT 性能证据和 Windows 编译/峰值 RSS 采样。 9.3.1-d1 已完成只读预览二次校验和前端重新验证入口，最新 d1 提交 [f18f9ccf539a1059544df9657308127a983689ad](https://github.com/TttXxx36/Open-reader-desktop/commit/f18f9ccf539a1059544df9657308127a983689ad) 对应 CI run [31409256256](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31409256256) 已通过前端、Rust fmt/check/tests/TXT 性能证据和 Windows 编译/峰值 RSS 采样。 下一步进入 9.3.1-d2 迁移前评审，先冻结 `0016` 字段和撤销冲突策略，确认前不执行不可逆删除。 Windows 发布闸门已由 run [31410657419](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31410657419) 与 installer smoke run [31411486079](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31411486079) 通过；d2 仍保持迁移前评审边界，不执行物理删除或静默覆盖。
@@ -107,7 +110,7 @@
 
 ## 2026-08-12 维护复核
 
-- 书源配置导入本地 JSON/在线 URL 统一使用 16 MiB bundle 上限，在线拉取超时 30 秒；普通书源请求仍维持 15 秒、2 MiB、最多 5 次重定向边界。
+- 书源配置导入本地 JSON/在线 URL 统一使用 128 MiB bundle 上限，在线拉取超时 30 秒；普通书源请求仍维持 15 秒、2 MiB、最多 5 次重定向边界。
 - M7/M8/M9 文档中的“已实现”只表示代码与远程自动化通过；安装升级、WebView2、键盘/字体/窄窗口、书源导入和迁移仍需目标 Windows 记录。
 - 维护决策与 #1–#5 issue 状态见 [2026-08-12 维护审计](maintenance-audit-2026-08-12.md)。
 
@@ -142,10 +145,10 @@
 
 ## 当前执行顺序
 
-1. **P0 目标 Windows 人工验收**：以 Release `32354623024` / smoke `32355446613` 产物为基线，按模板记录安装器覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口、键盘 Tab、高对比度，以及 PR10 搜索/书架、在线 URL/本地 JSON 书源导入、16 MiB 边界、冲突策略和快照恢复。
-2. **M9.3.1-d2 迁移前收口**：在 P0 记录完成后冻结 0016 schema、预览二次校验、纯文本/无冲突范围、单事务回滚和旧库夹具；未经确认不执行迁移、物理删除或静默覆盖。
-3. **M7.1/M8 横向收尾**：补快照保留/清理、缺失资源提示、窄窗口/键盘可用性和兼容矩阵回归；继续明确拒绝 XPath、JavaScript、Cookie、Authorization 和音频执行。
-4. **M10 备份/恢复**：在 d2 可回滚边界稳定后，再实现版本化备份、导入预览、校验和、损坏恢复和冲突策略；WebDAV/RSS/OPDS/TTS 继续排在后续阶段。
+1. **P1 书源兼容性收尾**：编码识别、`item` 自身节点匹配、目录章节链接回退、正文安全 CSS 回退、字段级 `toc/content` 诊断和乱码标题降级代码已完成；下一步只补授权响应夹具与 Windows 手工回归，继续明确拒绝 XPath/脚本执行。
+2. **M9.3.1-e Windows 手工验收**：使用后续 Release/便携产物验证撤销窗口、外部修改冲突提示、旧 ID 打开/进度回写、升级和数据保留；未完成前不把 M9 标记为人工收尾。
+3. **M7.1/M8 横向收尾**：补快照保留/清理、缺失资源提示、窄窗口/键盘可用性和兼容矩阵回归。
+4. **M10 备份/恢复**：在 d3 边界和 Windows 手工证据稳定后，再实现版本化备份、导入预览、校验和、损坏恢复和冲突策略；WebDAV/RSS/OPDS/TTS 继续排在后续阶段。
 
 ### 已完成历史（保留证据）
 

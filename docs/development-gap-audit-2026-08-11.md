@@ -71,20 +71,20 @@ M7.1d 最新代码提交为 [cd144e4e218cd5294d1037eb8f0f567e1a9750f7](https://g
 
 ## 本轮验收问题修复：在线书源大小限制
 
-验收发现在线网址类书源被提示“文件大小超出限制”。根因不是 URL 字符串长度，而是两层 2 MiB 限制叠加：书源 bundle 导入校验固定为 2 MiB，在线 URL 拉取使用 `SourceEngine::default()` 的 2 MiB response body 上限。
+验收发现在线网址类书源被提示“文件大小超出限制”。根因不是 URL 字符串长度，而是前端、后端 bundle 校验和导入前快照仍沿用 16 MiB 上限，导致大型书源集合在进入预览前被拒绝。
 
 本轮已统一调整为：
 
-- 本地 JSON、对象/数组 bundle 与在线 URL 响应体上限统一为 **16 MiB**；
+- 本地 JSON、对象/数组 bundle 与在线 URL 响应体上限统一为 **128 MiB**；
 - 在线 URL 拉取超时由默认 15 秒提高为 **30 秒**；
-- 三个导入入口共用同一个大小校验函数，超限时明确提示“书源文件超过 16 MB 限制”；
+- 三个导入入口共用同一个大小校验函数，超限时明确提示“书源文件超过 128 MB 限制”；
 - URL 本身仍保留 2 KB 长度校验；结构校验、规则安全闸门、脚本/Cookie/Authorization 拒绝和内存/DoS 防护不变。
 
 对应代码已随上述最新提交发布。主 CI、Windows Release（手动 dispatch，`upload_artifacts=true`）和 installer smoke 均通过；Release 产物 artifact [9099996289](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31487610713) 的摘要为 `sha256:f3d2f69e38de063303ebe0fc0c83f75676bfd7da5719a3f5069c07910a97a17e`。
 
-目标 Windows 手工验收时应重新导入原在线书源：16 MiB 以内应进入预览/确认导入；超过 16 MiB 时应显示明确边界。当前不做“无限制”放开，以避免异常响应导致内存和网络资源失控；如后续确有超大可信书源需求，再增加带管理员提示的可配置上限。
+目标 Windows 手工验收时应重新导入原在线书源：128 MiB 以内应进入预览/确认导入；超过 128 MiB 时应显示明确边界。当前不做“无限制”放开，以避免异常响应导致内存和网络资源失控；如后续确有超大可信书源需求，再增加带管理员提示的可配置上限。
 
-验收模板已更新至本轮发布代码和 16 MiB 书源边界（提交 [2d56dcfac55f9c1a9baf65bb3cbfcc4a9c5ed45c](https://github.com/TttXxx36/Open-reader-desktop/commit/2d56dcfac55f9c1a9baf65bb3cbfcc4a9c5ed45c)，CI [31490123210](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31490123210)）。d2 迁移前评审已形成独立记录 [m9.3.1-d2-migration-review.md](m9.3.1-d2-migration-review.md)，设计冻结但仍等待 P0 目标 Windows 手工验收，不执行真实 `0016` 迁移。
+验收模板已更新至本轮发布代码和 128 MiB 书源边界；阅读位置与已读状态使用独立的 `0017_reading_state` 迁移，不占用 d2 评审冻结的 `0016` 编号。d2 迁移前评审仍需在目标 Windows 手工验收后继续。
 
 ## 后续执行顺序
 

@@ -107,11 +107,20 @@ jobs:
               "$($hash.Hash.ToLowerInvariant())  $relative"
             } | Set-Content -LiteralPath $manifest -Encoding utf8
 
+      - name: Normalize artifact label
+        shell: pwsh
+        run: |
+          $label = $env:GITHUB_REF_NAME -replace '[^A-Za-z0-9._-]+', '-'
+          if ([string]::IsNullOrWhiteSpace($label)) {
+            $label = "source"
+          }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "RELEASE_ARTIFACT_LABEL=$label" -Encoding utf8
+
       - name: Upload workflow artifacts
         if: ${{ inputs.upload_artifacts || startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v6
         with:
-          name: open-reader-windows-${{ github.ref_name }}-${{ github.sha }}
+          name: open-reader-windows-${{ env.RELEASE_ARTIFACT_LABEL }}-${{ github.sha }}
           if-no-files-found: error
           path: |
             src-tauri/target/release/bundle

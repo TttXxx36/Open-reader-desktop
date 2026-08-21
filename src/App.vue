@@ -9,7 +9,7 @@ import SourceView from "./components/SourceView.vue";
 import RemoteReaderView from "./components/RemoteReaderView.vue";
 import LocalReaderView from "./components/LocalReaderView.vue";
 
-const MAX_SOURCE_IMPORT_BYTES = 16 * 1024 * 1024;
+const MAX_SOURCE_IMPORT_BYTES = 128 * 1024 * 1024;
 
 type View = "library" | "search" | "reader" | "sources" | "settings";
 type ReaderTheme = "night" | "paper" | "sepia" | "custom";
@@ -37,6 +37,13 @@ interface BookSummary {
   image_sequence_missing_pages: number;
   image_sequence_stale_pages: number;
 }
+
+interface ReadingState {
+  position: number;
+  read_state: "unread" | "reading" | "finished";
+  updated_at: string;
+}
+
 interface DuplicateBookGroup {
   key: string;
   books: BookSummary[];
@@ -273,6 +280,7 @@ interface ChapterSummary {
 interface BookDetail {
   book: BookSummary;
   chapters: ChapterSummary[];
+  reading_state: ReadingState;
 }
 
 interface ChapterContent {
@@ -515,12 +523,22 @@ interface SourceDebugStep {
   cache_hit: boolean;
 }
 
+type SourceRuleEvaluationStatus = "success" | "no_match" | "failure" | "skipped";
+
+interface SourceRuleEvaluation {
+  stage: string;
+  rule_key: string;
+  status: SourceRuleEvaluationStatus;
+  detail?: string | null;
+}
+
 interface SourcePipelineResult {
   search_results: Array<{ title: string; author: string | null; book_url: string | null; source_name: string }>;
   book_info: { title: string; author: string | null; intro: string | null; cover_url: string | null; book_url: string };
   chapters: Array<{ title: string; url: string; index: number }>;
   first_chapter: { title: string; content: string; next_url: string | null };
   debug_steps: SourceDebugStep[];
+  rule_evaluations: SourceRuleEvaluation[];
 }
 
 interface ExportedDiagnosticStep extends SourceDebugStep {
@@ -566,6 +584,7 @@ interface SourceDiagnosticSnapshot {
   } | null;
   cache: SourceCacheStatus | null;
   source_metrics: SourceMetrics;
+  rule_evaluations: SourceRuleEvaluation[];
   steps: ExportedDiagnosticStep[];
   truncated_steps: boolean;
   privacy: string[];
@@ -576,8 +595,12 @@ interface UnifiedSearchItem {
   source_name: string;
   title: string;
   author: string | null;
+  intro: string | null;
   book_url: string | null;
   cover_url?: string | null;
+  can_open: boolean;
+  can_read: boolean;
+  unavailable_reason: string | null;
 }
 
 interface RemoteShelfEntry {
@@ -617,6 +640,7 @@ interface RemoteBookDetail {
   };
   chapters: RemoteChapter[];
   debug_steps: SourceDebugStep[];
+  rule_evaluations: SourceRuleEvaluation[];
   chapter_fingerprint: string;
   chapter_update: ChapterUpdateSummary | null;
   stale: boolean;
@@ -632,6 +656,7 @@ interface RemoteChapterContent {
   refresh_error: string | null;
   cache_hit: boolean;
   debug_steps: SourceDebugStep[];
+  rule_evaluations: SourceRuleEvaluation[];
 }
 
 interface RemoteNextPageStatus {
@@ -646,6 +671,7 @@ interface SourceSearchDiagnostics {
   pages_scanned: number;
   parsed_items: number;
   stop_reason: string;
+  rule_evaluations: SourceRuleEvaluation[];
 }
 
 interface MultiSourceSearchResult {
@@ -654,6 +680,7 @@ interface MultiSourceSearchResult {
     source_id: string;
     source_name: string;
     message: string;
+    rule_evaluations: SourceRuleEvaluation[];
   }>;
   diagnostics: SourceSearchDiagnostics[];
   enabled_sources: number;
@@ -824,6 +851,7 @@ const searchBusy = ref(false);
 const searchOperationId = ref<string | null>(null);
 const searchResult = ref<MultiSourceSearchResult | null>(null);
 const searchInlineMessage = ref("");
+const remoteFailedItem = ref<UnifiedSearchItem | null>(null);
 const retryingSourceId = ref<string | null>(null);
 const sourceTransferBusy = ref(false);
 const sourceTransferMessage = ref("");
@@ -1518,8 +1546,12 @@ function remoteShelfItem(entry: RemoteShelfEntry): UnifiedSearchItem {
     source_name: entry.source_name,
     title: entry.title,
     author: entry.author,
+    intro: null,
     book_url: entry.book_url,
     cover_url: entry.cover_url,
+    can_open: true,
+    can_read: true,
+    unavailable_reason: null,
   };
 }
 
@@ -2028,6 +2060,7 @@ async function dropSourceDrag(targetId: string) {
 
 async function searchSources() {
   searchInlineMessage.value = "";
+  remoteFailedItem.value = null;
   const keyword = searchKeyword.value.trim();
   if (!keyword || searchBusy.value || retryingSourceId.value) return;
 
@@ -2140,6 +2173,7 @@ function clearSearch() {
   searchResult.value = null;
   searchKeyword.value = "";
   searchInlineMessage.value = "";
+  remoteFailedItem.value = null;
 }
 
 async function finishSourceImport(result: SourceImportResult, label: string) {
@@ -2208,9 +2242,14 @@ function showSourceImportPreview(
   sourceImportPreview.value = preview;
   sourceImportPayload.value = payload;
   sourceImportLabel.value = label;
+  const retainedCount = preview.entries.filter(
+    (entry) => entry.valid && entry.unsupported_rules.length > 0,
+  ).length;
+  const runnableCount = Math.max(preview.valid_count - retainedCount, 0);
   sourceTransferMessage.value =
     "已解析 " + preview.entries.length + " 个书源：" +
-    preview.valid_count + " 个可导入，" +
+    runnableCount + " 个可直接运行，" +
+    retainedCount + " 个兼容保留，" +
     preview.invalid_count + " 个需人工处理；脚本、XPath、模板会保留原文但不执行";
 }
 
@@ -2278,7 +2317,7 @@ async function importSourceFile(event: Event) {
   if (!file) return;
 
   if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-    errorMessage.value = "书源文件超过 16 MB 限制";
+    errorMessage.value = "书源文件超过 128 MB 限制";
     input.value = "";
     return;
   }
@@ -2300,11 +2339,14 @@ async function importSourceFile(event: Event) {
   }
 }
 
-async function openRemoteBook(item: UnifiedSearchItem) {
+async function openRemoteBook(item: UnifiedSearchItem, forceRefresh = false) {
   const bookUrl = item.book_url?.trim();
   view.value = "search";
-  if (!bookUrl) {
-    searchInlineMessage.value = "这个结果没有可用的书籍链接，无法打开。请重试该书源或选择其他结果。";
+  if (!bookUrl || !item.can_open || !item.can_read) {
+    remoteFailedItem.value = item;
+    searchInlineMessage.value = item.unavailable_reason
+      ? `暂时无法打开：${item.unavailable_reason}`
+      : "这个结果没有完整的书籍详情或正文规则，无法打开。请选择其他来源。";
     errorMessage.value = "";
     return;
   }
@@ -2316,6 +2358,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
   const operationId = "remote-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
   remoteOperationId.value = operationId;
   remoteBusy.value = true;
+  remoteFailedItem.value = null;
   searchInlineMessage.value = "正在读取书籍详情和目录…";
   errorMessage.value = "";
   remoteBook.value = null;
@@ -2326,7 +2369,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     const loaded = await invoke<RemoteBookDetail>("fetch_source_book", {
       sourceId: item.source_id,
       bookUrl,
-      forceRefresh: false,
+      forceRefresh,
       operationId,
     });
     const firstChapter = loaded.chapters[0];
@@ -2358,6 +2401,7 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     const displayMessage = message.includes("已取消")
       ? "远端打开已取消"
       : "打开失败：" + message;
+    remoteFailedItem.value = item;
     searchInlineMessage.value = displayMessage;
     errorMessage.value = "";
     remoteBook.value = null;
@@ -2370,6 +2414,12 @@ async function openRemoteBook(item: UnifiedSearchItem) {
     }
     remoteBusy.value = false;
   }
+}
+
+function retryRemoteBook() {
+  const item = remoteFailedItem.value;
+  if (!item || remoteBusy.value) return;
+  void openRemoteBook(item, true);
 }
 
 async function loadRemoteChapter(chapterItem: RemoteChapter, forceRefresh = false) {
@@ -2571,6 +2621,15 @@ function sanitizeDiagnosticMessage(value: string) {
   );
 }
 
+function sanitizeRuleEvaluations(values: SourceRuleEvaluation[] = []): SourceRuleEvaluation[] {
+  return values.slice(0, 128).map((evaluation) => ({
+    stage: truncateDiagnostic(evaluation.stage, 64),
+    rule_key: truncateDiagnostic(evaluation.rule_key, 64),
+    status: evaluation.status,
+    detail: evaluation.detail ? truncateDiagnostic(evaluation.detail, 64) : null,
+  }));
+}
+
 function cacheDiagnosticStep(stage: string, url: string, error: string | null): SourceDebugStep {
   return {
     stage,
@@ -2641,6 +2700,13 @@ function exportSourceDiagnostics() {
     ...rawSteps.map(({ step, prefix }) => sanitizeDiagnosticStep(step, prefix)),
     ...cacheEvents,
   ];
+  const ruleEvaluations = sanitizeRuleEvaluations([
+    ...(pipeline?.rule_evaluations ?? []),
+    ...(remoteBook.value?.rule_evaluations ?? []),
+    ...(remoteChapter.value?.rule_evaluations ?? []),
+    ...(searchResult.value?.failures ?? []).flatMap((failure) => failure.rule_evaluations ?? []),
+    ...(searchResult.value?.diagnostics ?? []).flatMap((diagnostic) => diagnostic.rule_evaluations ?? []),
+  ]);
   let elapsedMs = 0;
   const steps: ExportedDiagnosticStep[] = sanitizedSteps
     .slice(0, MAX_DIAGNOSTIC_STEPS)
@@ -2689,6 +2755,7 @@ function exportSourceDiagnostics() {
     } : null,
     cache: sourceCacheStatus.value ? { ...sourceCacheStatus.value } : null,
     source_metrics: { ...sourceMetrics.value },
+    rule_evaluations: ruleEvaluations,
     steps,
     truncated_steps: sanitizedSteps.length > steps.length,
     privacy: [
@@ -3797,6 +3864,10 @@ async function loadChapter(chapterId: string, persist = true) {
     const index = detail.value.chapters.findIndex((item) => item.id === chapterId);
     detail.value.book.current_chapter = Math.max(index, 0);
     if (persist && index >= 0) {
+      detail.value.reading_state = {
+        ...detail.value.reading_state,
+        position: 0,
+      };
       await saveProgress(index, chapterId);
     }
   } catch (error) {
@@ -3804,18 +3875,34 @@ async function loadChapter(chapterId: string, persist = true) {
   }
 }
 
-async function saveProgress(index: number, chapterId: string) {
+async function saveProgress(
+  index: number,
+  chapterId: string,
+  readingPosition = 0,
+  progressOverride?: number,
+  readState?: "unread" | "reading" | "finished",
+) {
   if (!detail.value) return;
 
   const lastIndex = Math.max(detail.value.chapters.length - 1, 1);
-  const progress = index / lastIndex;
+  const progress = Math.max(0, Math.min(1, progressOverride ?? index / lastIndex));
+  const position = Number.isFinite(readingPosition) ? Math.max(0, readingPosition) : 0;
+  const resolvedReadState = readState
+    ?? (progress >= 0.999 ? "finished" : progress > 0 || position > 0 ? "reading" : "unread");
   await invoke("save_progress", {
     bookId: detail.value.book.id,
     chapterId,
     currentChapter: index,
     progress,
+    readingPosition: position,
+    readState: resolvedReadState,
   });
   detail.value.book.progress = progress;
+  detail.value.reading_state = {
+    ...detail.value.reading_state,
+    position,
+    read_state: resolvedReadState,
+  };
   const bookIndex = books.value.findIndex((item) => item.id === detail.value?.book.id);
   if (bookIndex >= 0) {
     books.value[bookIndex] = { ...books.value[bookIndex], current_chapter: index, progress };
@@ -4687,6 +4774,10 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
         <p v-if="searchBusy" class="search-inline-status" role="status">正在扫描已启用书源…</p>
         <p v-if="searchInlineMessage" class="search-inline-status search-inline-error" role="alert">{{ searchInlineMessage }}</p>
         <p v-else-if="errorMessage" class="search-inline-status search-inline-error" role="alert">{{ errorMessage }}</p>
+        <div v-if="remoteFailedItem && searchInlineMessage && !remoteBusy" class="search-error-actions">
+          <span>可以重试该书源，或返回结果选择其他来源。</span>
+          <button class="source-link-button" type="button" @click="retryRemoteBook">重试并刷新</button>
+        </div>
         <section v-if="searchResult" class="search-results-panel" aria-live="polite" aria-labelledby="online-search-heading">
           <div class="search-results-heading">
             <div>
@@ -4702,31 +4793,32 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
               v-for="item in searchResult.results"
               :key="item.source_id + '-' + item.title + '-' + (item.author || '')"
               class="search-result-row"
-              :class="{ clickable: Boolean(item.book_url), loading: remoteBusy && Boolean(item.book_url), unavailable: !item.book_url }"
-              :aria-label="item.book_url ? '打开 ' + (item.title || '未命名书籍') : (item.title || '未命名书籍') + ' 没有可用链接'"
-              :tabindex="item.book_url && !remoteBusy ? 0 : -1"
-              role="button"
-              @click="openRemoteBook(item)"
-              @keydown.enter.prevent="openRemoteBook(item)"
+              :class="{ clickable: item.can_open && item.can_read, loading: remoteBusy && item.can_open && item.can_read, unavailable: !item.can_open || !item.can_read }"
+              :aria-label="item.can_open && item.can_read ? '打开 ' + (item.title || '未命名书籍') : (item.title || '未命名书籍') + ' 暂不可阅读'"
+              :tabindex="item.can_open && item.can_read && !remoteBusy ? 0 : -1"
+              :role="item.can_open && item.can_read ? 'button' : undefined"
+              @click="item.can_open && item.can_read ? openRemoteBook(item) : undefined"
+              @keydown.enter.prevent="item.can_open && item.can_read ? openRemoteBook(item) : undefined"
             >
               <span class="search-result-copy">
                 <strong>{{ item.title || "未命名书籍" }}</strong>
                 <span>{{ item.author || "作者未知" }}</span>
+                <small v-if="item.intro" class="search-result-intro">{{ item.intro }}</small>
               </span>
               <span class="search-result-actions">
                 <span class="search-source-badge">{{ item.source_name }}</span>
                 <button
                   class="search-save-button"
                   type="button"
-                  :disabled="!item.book_url"
+                  :disabled="!item.book_url || !item.can_open"
                   @click.stop="toggleRemoteShelf(item)"
                 >{{ isRemoteShelfSaved(item) ? "已在书架" : "加入书架" }}</button>
                 <button
                   class="search-open-button"
                   type="button"
-                  :disabled="!item.book_url || remoteBusy"
+                  :disabled="!item.book_url || !item.can_open || !item.can_read || remoteBusy"
                   @click.stop="openRemoteBook(item)"
-                >{{ item.book_url ? (remoteBusy ? "加载中…" : "打开") : "无链接" }}</button>
+                >{{ item.can_open && item.can_read ? (remoteBusy ? "加载中…" : "打开") : "仅搜索" }}</button>
               </span>
             </article>
           </div>
@@ -5321,6 +5413,16 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.search-result-intro {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #718096;
+  font-size: 11px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .search-result-actions {
@@ -7756,6 +7858,16 @@ provide("open-reader-context", { SETTINGS_KEY, SETTINGS_VERSION, DEFAULT_READER_
   color: #ffd2d9;
   border: 1px solid rgba(242, 154, 170, 0.3);
   background: rgba(242, 154, 170, 0.08);
+}
+
+.search-error-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .search-results-panel {

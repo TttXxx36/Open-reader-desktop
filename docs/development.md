@@ -2,6 +2,8 @@
 
 > 后续维护状态（2026-08-20）：main `89185e6` 已包含 PR10–PR13；CI `32368235610`、Windows Release `32368262290` 和 installer smoke `32369094467` 均通过。自动化检查不替代目标 Windows 环境的升级、WebView2、离线错误、中文字体、窄窗口和键盘焦点验收。
 
+> 当前候选（2026-08-21）：PR18 `fa9a1c0` 的 0.2.0 Windows Release `32402250634` 与 installer smoke `32403363944` 均通过；Computer Use 手工验收记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 实现提交 `5184451b` 对应 CI `32463202309` 已通过；书源配置导入上限为 128 MiB，阅读位置与已读状态已纳入 SQLite。
+
 
 ## 必备环境
 
@@ -84,8 +86,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## M5.2 配置迁移与章节刷新
 
-- 书源页的“导出 JSON”会生成版本为 1 的书源包，包含书源 ID、启用状态和原始配置 JSON；本地 JSON、对象/数组 bundle 和在线 URL 响应体统一接受不超过 16 MiB 的配置。
-- 在线 URL 拉取超时为 30 秒，URL 本身限制为 2 KiB；超过 16 MiB 时明确提示并拒绝，不取消结构校验、规则安全闸门或敏感请求头拒绝。
+- 书源页的“导出 JSON”会生成版本为 1 的书源包，包含书源 ID、启用状态和原始配置 JSON；本地 JSON、对象/数组 bundle 和在线 URL 响应体统一接受不超过 128 MiB 的配置。
+- 在线 URL 拉取超时为 30 秒，URL 本身限制为 2 KiB；超过 128 MiB 时明确提示并拒绝，不取消结构校验、规则安全闸门或敏感请求头拒绝。
 - 导入会按书源 ID 更新已有配置，并恢复启用/停用状态；Authorization、Cookie 和 Proxy-Authorization 等敏感请求头仍会被拒绝。
 - 远程阅读页的“刷新内容”会同时强制刷新详情、目录和当前章节，绕过 TTL 缓存并写回新的缓存条目；普通打开和章节切换仍优先使用缓存。
 - 导入/导出只迁移书源配置，不迁移远程正文缓存；远程内容不会导入本地书架。
@@ -109,7 +111,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 - 书源可填写 `permission` 权限记录；“安全审计”会检查权限状态、主机范围、敏感请求头和结构错误。
 - “缓存状态”只显示条目数、字节数、过期条目数与容量上限，不展示缓存正文；应用启动和缓存写入后的淘汰会在 Rust stderr 记录实际删除数量。
-- Rust 网络客户端最多跟随 5 次重定向；普通书源请求默认 15 秒/2 MiB 响应体，书源配置导入的本地 JSON/在线 URL 另受 16 MiB bundle 上限和 30 秒拉取超时约束；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
+- Rust 网络客户端最多跟随 5 次重定向；普通书源请求默认 15 秒/2 MiB 响应体，书源配置导入的本地 JSON/在线 URL 另受 128 MiB bundle 上限和 30 秒拉取超时约束；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
 - Windows 图标已加入仓库，`bundle.active=true`；签名证书暂缓，GitHub Actions 发布的安装器和便携 ZIP 会明确标记为未签名。自动化 smoke 已覆盖首次安装、启动、卸载和数据保留，覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口和键盘焦点仍需目标环境回归。
 - 当前可执行验收：`npm run typecheck`、`npm run build`、`npm run test:rust`、`cargo fmt --check --manifest-path src-tauri/Cargo.toml` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
 
@@ -140,4 +142,4 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - WebView2 缺失：安装 Microsoft Edge WebView2 Runtime 后重启应用。
 - Vite 端口被占用：释放 1420 端口，或调整 `vite.config.ts` 与 `tauri.conf.json` 中的端口配置。
 - 浏览器预览模式下，SQLite 和 Tauri 命令不可用是正常现象；请使用 `npm run tauri dev` 验证桌面桥接。
-- 如果本地书籍导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB；书源 JSON 或在线 URL 导入则检查 16 MiB bundle 上限、30 秒拉取超时和 URL 长度边界。
+- 如果本地书籍导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB；书源 JSON 或在线 URL 导入则检查 128 MiB bundle 上限、30 秒拉取超时和 URL 长度边界。

@@ -1,6 +1,6 @@
 # M4 单书源端到端流程
 
-> 维护状态（2026-08-12）：M4/M5 的合成夹具、书源导入和诊断链路仍由 main CI 验证；当前 UI 刷新不改变请求边界。书源配置导入已统一为 16 MiB bundle 上限，在线拉取超时 30 秒。
+> 维护状态（2026-08-21）：M4/M5 的合成夹具、书源导入和诊断链路仍由 main CI 验证；PR18 候选已将书源配置导入统一为 128 MiB bundle 上限，在线拉取超时 30 秒。0.2.0 目标 Windows 手工记录已完成；M7 P1 两轮安全切片已加入 item 自身节点匹配、响应字符集识别、目录章节链接回退和正文安全 CSS 回退，CI [32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 已通过，授权响应夹具、乱码降级和字段差异诊断仍在收尾。
 
 M4 把 M3 的书源协议串成一条可测试的最小链路：
 
@@ -39,9 +39,17 @@ Tauri 命令 `run_source_pipeline` 接收两个参数：
 
 远程章节阅读仍遵守 M3/M4 的限制：只允许 HTTP/HTTPS，不执行 JavaScript，不携带 Cookie/Authorization，不绕过验证码或付费限制。
 
+## M7 P1 书源兼容性首轮
+
+为覆盖常见 Legado CSS 书源形态，HTML/CSS 规则提取会先检查当前 `item` 节点是否匹配字段选择器，再检查后代节点；因此“条目本身就是链接”的搜索结果和目录项不再因 `ElementRef.select` 只遍历后代而丢失。
+
+响应文本解码按以下顺序处理：BOM、HTTP `Content-Type` 的 `charset`、HTML 前 16 KiB 内的 `charset` 元信息、有效 UTF-8，最后使用 GB18030 兼容回退；支持 UTF-8、UTF-16LE/BE、GBK/GB2312/GB18030 和 Windows-1252。声明字符集产生替换字符时，会比较 GB18030 回退结果并选择质量更好的文本。调试步骤只记录 `encoding` 与必要的 `encoding_warning`，不保存或导出响应正文。
+
+该首轮切片由自身节点、GB18030、UTF-16LE 合成夹具和远程 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 验证。第二轮在规则无匹配时提供安全候选：目录最多扫描 256 个可导航链接，并要求章节特征；正文按 `.content`、`#content`、`article.content`、`.read-content`、`.chapter-content`、`articleBody`、`article`、`main` 顺序回退，同时保留正文 HTML。第二轮由 [32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 验证。回退不扩大 XPath/JavaScript 执行边界；下一步继续补充授权响应夹具、乱码标题降级展示和字段级 `toc/content` 差异诊断。
+
 ## M5.2 配置包与强制刷新
 
-书源页提供版本化 JSON 配置包导入/导出。导入前会逐项执行书源协议校验；本地 JSON、对象/数组 bundle 和在线 URL 响应体统一限制为 16 MiB，在线拉取超时为 30 秒，超限或超时不会写入配置；导出内容不包含远程正文缓存。
+书源页提供版本化 JSON 配置包导入/导出。导入前会逐项执行书源协议校验；本地 JSON、对象/数组 bundle 和在线 URL 响应体统一限制为 128 MiB，在线拉取超时为 30 秒，超限或超时不会写入配置；导出内容不包含远程正文缓存。该上限只用于防止失控响应，不再阻断常见的大型书源集合。
 
 远程阅读页的“刷新内容”会为当前书籍详情、目录和章节请求设置 force_refresh，绕过未过期的缓存并重新写入 TTL 缓存。普通读取仍按详情 5 分钟、章节 10 分钟的 TTL 工作。
 
@@ -67,7 +75,7 @@ Tauri 命令 `run_source_pipeline` 接收两个参数：
 
 书源页的“缓存状态”按钮调用 `get_source_cache_status`，只显示条目数、payload 字节数、过期条目数与 256 条/32 MiB 容量上限。应用启动和每次远程内容写入后都会执行过期清理与容量淘汰，并在 Rust 日志中记录实际删除数量。
 
-网络边界继续保持：普通书源请求只允许 HTTP/HTTPS、15 秒超时、2 MiB 响应体上限和最多 5 次重定向；配置导入的在线 URL 单独使用 30 秒、16 MiB 上限；WebView CSP 不开放任意 HTTPS `connect-src`。刷新失败时仍优先返回 stale 本机缓存，安全审计与缓存统计不会读取或展示缓存正文。
+网络边界继续保持：普通书源请求只允许 HTTP/HTTPS、15 秒超时、2 MiB 响应体上限和最多 5 次重定向；配置导入的在线 URL 单独使用 30 秒、128 MiB 上限；WebView CSP 不开放任意 HTTPS `connect-src`。刷新失败时仍优先返回 stale 本机缓存，安全审计与缓存统计不会读取或展示缓存正文。
 
 
 ## 2026-08-12 维护复核
