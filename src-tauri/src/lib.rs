@@ -9,11 +9,12 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMergeCommitRequest,
-    BookMergeCommitResult, BookMergePreview, BookMergePreviewRequest,
-    BookMergePreviewRevalidateRequest, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
-    ChapterContent, Database, DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary,
-    ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
+    BookAliasResolution, BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions,
+    BookMergeCommitRequest, BookMergeCommitResult, BookMergePreview, BookMergePreviewRequest,
+    BookMergePreviewRevalidateRequest, BookMergeUndoRequest, BookMergeUndoResult,
+    BookMetadataBatchWrite, BookMetadataWrite, BookSummary, ChapterContent, Database,
+    DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite,
+    SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
     SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
     SourceSummary, SourceWrite,
 };
@@ -303,6 +304,26 @@ fn revalidate_book_merge_preview(
 ) -> Result<BookMergePreview, String> {
     database
         .revalidate_book_merge_preview(request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn undo_book_merge(
+    database: tauri::State<'_, Database>,
+    request: BookMergeUndoRequest,
+) -> Result<BookMergeUndoResult, String> {
+    database
+        .undo_book_merge(request)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn resolve_book_alias(
+    database: tauri::State<'_, Database>,
+    book_id: String,
+) -> Result<BookAliasResolution, String> {
+    database
+        .resolve_book_alias(&book_id)
         .map_err(|error| error.to_string())
 }
 
@@ -2231,6 +2252,8 @@ pub fn run() {
             preview_book_merge,
             revalidate_book_merge_preview,
             commit_book_merge,
+            undo_book_merge,
+            resolve_book_alias,
             list_books_with_options,
             update_book_metadata,
             rename_book,
