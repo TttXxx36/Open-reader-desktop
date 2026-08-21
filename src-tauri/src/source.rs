@@ -2151,6 +2151,7 @@ fn extract_document_rule_with_fallback(
             continue;
         };
         let value = match *attr {
+            Some("html") => element.inner_html(),
             Some(attribute) => element
                 .value()
                 .attr(attribute)
