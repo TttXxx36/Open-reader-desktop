@@ -30,7 +30,7 @@
 
 1. Rust 与前端检查全部通过，且没有新的编译或类型错误。
 2. 安装、升级、卸载流程在干净 Windows 环境可重复执行。
-3. 普通书源网络请求仍受 HTTP/HTTPS、15 秒超时、2 MiB 响应体和 5 次重定向限制；书源配置的本地 JSON/在线 URL 导入另受 16 MiB bundle 上限、30 秒拉取超时和 2 KiB URL 长度限制。
+3. 普通书源网络请求仍受 HTTP/HTTPS、15 秒超时、2 MiB 响应体和 5 次重定向限制；书源配置的本地 JSON/在线 URL 导入另受 128 MiB bundle 上限、30 秒拉取超时和 2 KiB URL 长度限制。
 4. WebView CSP 不允许任意 HTTPS `connect-src`；敏感请求头会在保存前被拒绝。
 5. 签名暂缓时，Release 必须明确标记 unsigned；安装器、便携 ZIP 和 SHA-256 清单与 Release 记录一致。
 6. 发布说明明确：用户只能读取自己有权访问的内容，项目不绕过登录、付费或验证码。
@@ -69,12 +69,12 @@ npm run verify:release:strict
 - 两个版本之间的覆盖升级；
 - 缺少 WebView2 Runtime、离线、网络错误和权限不足提示；
 - Release 回滚、撤回和签名/SmartScreen 行为。
-- 书源页的本地 JSON、在线 URL、16 MiB 边界、导入预览/冲突策略/快照恢复，以及视觉刷新后的设置控件、键盘 Tab、中文窄窗口和高对比度表现。
+- 书源页的本地 JSON、在线 URL、128 MiB 边界、导入预览/冲突策略/快照恢复，以及视觉刷新后的设置控件、键盘 Tab、中文窄窗口和高对比度表现。
 
 要手动重跑：
 
 1. 打开 Actions → Windows installer smoke → Run workflow。
-2. 在 `release_run_id` 填写成功的 Windows release run ID（当前候选为 `32368262290`）。
+2. 在 `release_run_id` 填写成功的 Windows release run ID（当前候选为 `32402250634`）。
 3. 等待 smoke job 完成；失败时先查看失败步骤，再决定是否修复 workflow 或记录环境差异。
 
 ## 手动 Windows 发布候选工作流

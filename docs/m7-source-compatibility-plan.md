@@ -1,214 +1,145 @@
-# M7 书源兼容性 v2 实施计划
+# 开发环境
 
-本计划承接 M6.1 的安全导入层，目标是让 Legado 常用书源“导入信息不丢、能力边界可见、执行行为可测试”。本计划不承诺一次性复制 Android 端全部规则和脚本能力。
+> 后续维护状态（2026-08-20）：main `89185e6` 已包含 PR10–PR13；CI `32368235610`、Windows Release `32368262290` 和 installer smoke `32369094467` 均通过。自动化检查不替代目标 Windows 环境的升级、WebView2、离线错误、中文字体、窄窗口和键盘焦点验收。
 
-> 维护复核（2026-08-20）：PR10 已合并到 main `b2ee3d4`，合并后 CI、Windows Release 和 installer smoke 均通过；书源配置本地/在线导入上限为 16 MiB，在线拉取超时 30 秒。M7.1 已固化快照单体 16 MiB、最多保留 20 个并在创建成功后自动清理旧快照；真实 Windows 窄窗口/键盘回归和 M7.2 追链开关人工验收仍待执行。当前视觉刷新不改变书源兼容等级。
+> 当前候选（2026-08-21）：PR18 `fa9a1c0` 的 0.2.0 Windows Release `32402250634` 与 installer smoke `32403363944` 均通过；书源配置导入上限为 128 MiB，阅读位置与已读状态已纳入 SQLite。目标 Windows 手工验收仍需按模板记录。
 
-## 设计决策（Grill 结论）
 
-1. M6.5 Windows 发布闸门不阻塞 M7 代码开发，但在安装/升级/卸载/WebView2 回归完成前不宣称正式发布完成。
-2. 兼容性采用三档：可执行、可导入但不执行、明确拒绝；不允许静默丢弃 XPath、JavaScript、Cookie 或认证信息。
-3. 先补元数据和内部模型，再做规则执行；脚本运行时必须经过许可证、沙箱、配额和权限审查。
-4. 借鉴 Android 项目的数据流、测试思路和交互，不直接复制受许可证约束的代码；本项目许可证仍需单独确定。
-5. UI 借鉴 MD3 的层次、色彩和动态反馈，但采用 Windows 的信息架构、键盘和窗口行为。
+## 必备环境
 
-## M7.0 元数据保真（已完成）
+- Windows 10 1809 或更高版本。
+- Node.js 20 LTS 与 npm。
+- Rust stable toolchain、cargo 和 rustfmt。
+- WebView2 Runtime（Windows 11 通常已内置）。
+- Git。
 
-### 代码范围
+## 安装与启动
 
-- BookSource 增加来源 URL、分组、类型、书籍 URL 模式、发现 URL、发现开关、自定义顺序、权重和备注字段。
-- 外部 JSON 支持 Legado 常见别名：bookSourceUrl、bookSourceGroup、bookSourceType、bookUrlPattern、exploreUrl、enabledExplore、customOrder、weight、bookSourceComment。
-- bookSourceUrl 可作为导入条目的稳定 ID；仍优先使用显式 id/sourceId。
-- 只支持文本书源（bookSourceType=0）；音频类型明确报错，不静默当成文本。
-- 来源 URL、发现 URL、分组、备注、模式和排序数值均有长度/范围校验；来源主机进入安全审计。
+在仓库根目录执行：
 
-### 验收证据
+```powershell
+npm install
+npm run tauri dev
+```
 
-- Rust 元数据解析、别名映射、音频类型拒绝和来源 URL ID 回归测试。
-- GitHub Actions CI：Frontend checks、UI contract、Rust fmt、Cargo check、Rust tests 均通过；本轮 Rust tests 为 38 passed（新增 M7.1 元数据重启持久化测试）。
-- 本地不构建、不安装；真实网络只使用授权或合成夹具。
+仅预览前端：
 
-## M7.1 书源管理基础（已完成 M7.1a + M7.1b + M7.1c）
+```powershell
+npm run dev
+```
 
-本轮已完成 SQLite 元数据迁移、旧配置回填、按分组/自定义顺序/权重排序，以及书源列表的分组筛选、发现开关和元数据编辑。M7.1b 补齐多选、批量启停/发现开关/删除、同分组上移下移，以及导入预览的新增/更新/无变化和变更字段提示；M7.1c 又补齐批量分组移动、导入冲突策略、导入前快照、快照恢复和失败时的原子替换；M7.1d 已补齐同组拖拽排序与批量备注/权重编辑，后端使用预校验后的原子批量写入。最新 CI、Windows Release 和 installer smoke 均通过；快照保留/清理策略和 Windows 手工体验仍属于后续收尾。
+## 检查命令
 
-### 数据库
+```powershell
+npm run typecheck
+npm run build
+npm run test:rust
+cargo fmt --check --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
+```
 
-新增迁移，给 book_sources 增加：
+## M2 本地阅读
 
-- source_url：稳定来源标识/主页 URL；
-- group_name：用户分组；
-- source_type：当前固定文本类型 0；
-- weight：搜索排序权重；
-- enabled_explore：是否进入发现；
-- custom_order：用户自定义顺序；
-- comment：来源备注；
-- book_url_pattern、explore_url：后续发现和详情链路使用。
+- 点击“导入 TXT / EPUB”选择本地文件，单文件限制为 64 MB。
+- TXT 会尝试识别 UTF-8、UTF-16LE/BE 和 GB18030，并按“第 X 章/节/回/卷”等标题拆分。
+- EPUB 首先读取标准 container.xml、OPF manifest/spine 和 XHTML 正文；复杂脚本、DRM 和特殊布局暂不保证。
+- 书籍、章节正文和阅读进度写入本机 SQLite；阅读设置保存在应用本地存储。
+- 当前不会联网上传导入文件，也不会内置版权书源。
 
-迁移必须保留旧配置 JSON，旧数据库默认值必须与当前行为一致；升级失败必须可诊断，不得删除原有书源。
+## M3 书源协议
 
-### Rust 命令
+- 在“书源”页粘贴 JSON，点击“校验 JSON”。
+- 校验包括 URL scheme、CSS 选择器、正则表达式、字段别名和缺失阶段提示。
+- fetch_source_preview 只允许 HTTP/HTTPS，默认超时 15 秒、响应上限 2 MiB，且只返回前 2,000 个字符。
+- 不执行 JavaScript，不自动携带 Cookie/Authorization，不绕过验证码或付费限制。
+- 书源协议与示例见 [docs/source-protocol.md](source-protocol.md)。
 
-已完成：
+## M4 单书源端到端
 
-- list_sources：返回元数据并按“分组 → customOrder → weight → name”排序。
-- save_source：从校验后的 BookSource 一次性写入 JSON 与元数据，避免两套状态漂移。
-- set_source_enabled、set_source_explore_enabled：分别控制搜索和发现开关。
-- update_source_metadata：以一次事务式更新同步 JSON 别名和 SQLite 元数据。
-- export_sources：导出配置时携带元数据字段。
-- set_sources_group：批量移动书源分组，并同步 JSON 与 SQLite 元数据。
-- list_source_snapshots、restore_source_snapshot：列出最近快照并以原子事务恢复完整书源集合。
+- `run_source_pipeline` 接收书源 JSON 和搜索关键词，按“搜索 → 详情 → 目录 → 第一章正文”执行。
+- URL 模板支持 `{{keyword}}`、`{{bookId}}` 和 `{{chapterId}}` 等占位符；搜索结果中的相对链接会解析为绝对 URL。
+- 端到端测试使用本机临时 TCP 服务和合成 HTML，不连接真实版权站点。测试范围与后续授权要求见 [docs/source-pipeline.md](source-pipeline.md)。
+- Rust 协议层可使用 `cargo test --manifest-path src-tauri/Cargo.toml` 验证；完整 CI 还会执行前端类型检查、构建和 Rust 检查。
 
-已完成本轮：
+## M4.1 书源管理与调试
 
-- set_sources_enabled、set_sources_explore_enabled、delete_sources：批量启停、发现开关和删除。
-- reorder_sources：同分组上移/下移并回写 custom_order。
-- update_sources_metadata：预校验批量备注/权重并通过单个 SQLite 事务同步 JSON 与元数据。
-- 导入预览：显示新增/更新/无变化和变更字段；仍由用户确认后才写入。
-- 导入冲突策略：更新已有、跳过已有、全部新建；写入前自动保存当前配置快照。
-- 快照恢复：恢复前校验完整 bundle，使用 replace-all 事务，失败时保留原数据和快照。
+- 书源配置保存到 SQLite 的 `book_sources` 表，迁移文件为 `0003_sources.sql`。
+- `list_sources`、`save_source`、`set_source_enabled` 和 `delete_source` 提供保存、启用/停用和删除能力。
+- 书源调试面板调用 `run_source_pipeline`，显示搜索、详情、目录、正文四个阶段的状态、耗时、响应大小和脱敏 URL。
+- 配置中的 `Authorization`、`Cookie` 和 `Proxy-Authorization` 请求头会被拒绝；不要把私人账号或令牌提交到仓库。
+- 前端检查命令为 `npm run typecheck` 和 `npm run build`。
 
-后续收尾：快照保留/清理策略已由本次代码切片固化并补充 Rust 回归夹具；
+## M5 多源搜索
 
-- 快照清理/保留策略已固化：单个快照最多 16 MiB，最多保留 20 个，成功创建后按创建时间和 ID 清理更旧快照；超限快照明确拒绝。真实 Windows 窄窗口下的批量操作和恢复流程仍待手工验收。
-- 本地 JSON 与 HTTPS URL 书源导入统一使用 16 MiB bundle 上限；在线拉取使用 30 秒超时和同一响应体上限，超过后明确提示，不取消结构、规则和安全校验。
-- 真实 Windows 窄窗口下的批量操作、冲突提示和恢复流程手工验收。
+- 书架顶部的“搜索书源”会调用 search_sources，只查询 SQLite 中已启用的书源。
+- 每个书源在独立异步任务中执行；请求、规则缺失或解析错误只会记录为该书源失败，不会阻断其他结果。
+- 统一结果按“标题 + 作者”归一化去重（折叠空白并转小写）；无标题且无作者时退回使用书籍链接作为去重键。
+- 当前前端支持点击有链接的结果进入详情、目录和正文阅读；无链接结果仍只展示元数据。测试仍只使用本机合成夹具，不连接真实版权站点。
 
-### Vue 界面
+## M5.1 远程详情与章节阅读
 
-- 书源列表增加分组、类型、权重、发现开关和备注摘要。
-- 增加按分组筛选、启用/停用、同组拖拽或上下移动排序、批量启停/分组/备注/权重操作。
-- 编辑器显示“可执行/可导入但不执行/拒绝”能力徽标；保存前显示元数据与规则 diff。
-- 不把认证头、Cookie 或脚本原文展示到诊断日志中。
+- 搜索结果带有书源 ID 和书籍链接时，可以打开远程详情；应用随后读取目录并加载第一章正文。
+- Tauri 命令 fetch_source_book 负责详情/目录，fetch_source_chapter 负责章节正文；书源停用、配置损坏、缺少规则或网络错误都会返回明确错误，不会修改本地书架。
+- 远程详情缓存 5 分钟，章节正文缓存 10 分钟；缓存键包含书源 ID、书源更新时间和请求 URL，避免书源配置更新后继续复用旧结果。
+- 应用启动时调用缓存清理逻辑删除过期条目。当前缓存只服务远程阅读，不把远程内容导入本地书架，也不保存 Cookie/Authorization。
+- 测试使用本机合成 HTTP 夹具；真实站点接入前仍需确认授权和服务条款。
 
-### 验收
+## M5.2 配置迁移与章节刷新
 
-已完成本轮：
+- 书源页的“导出 JSON”会生成版本为 1 的书源包，包含书源 ID、启用状态和原始配置 JSON；本地 JSON、对象/数组 bundle 和在线 URL 响应体统一接受不超过 128 MiB 的配置。
+- 在线 URL 拉取超时为 30 秒，URL 本身限制为 2 KiB；超过 128 MiB 时明确提示并拒绝，不取消结构校验、规则安全闸门或敏感请求头拒绝。
+- 导入会按书源 ID 更新已有配置，并恢复启用/停用状态；Authorization、Cookie 和 Proxy-Authorization 等敏感请求头仍会被拒绝。
+- 远程阅读页的“刷新内容”会同时强制刷新详情、目录和当前章节，绕过 TTL 缓存并写回新的缓存条目；普通打开和章节切换仍优先使用缓存。
+- 导入/导出只迁移书源配置，不迁移远程正文缓存；远程内容不会导入本地书架。
 
-- SQLite 0006/0007 迁移、默认值和旧 JSON 元数据回填。
-- 列表排序、分组筛选、搜索/发现开关、权重/顺序/备注编辑和批量分组移动。
-- 导入冲突策略、导入前快照、快照列表/恢复和 replace-all 原子事务。
-- 保存后重启仍保持元数据；前端 typecheck/build/UI contract、Rust fmt/check/test 全部通过。
+## M5.3 内容替换与缓存容量
 
-远程证据：[GitHub Actions run 30755061447](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30755061447)（M7.1a）；[GitHub Actions run 30755644977](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30755644977)（M7.1b 首个切片）；[GitHub Actions run 30757528534](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30757528534)（M7.1c，前端与 Rust 39 tests）。 最新 M7.1d 提交 [60564de2151738f91e9b953ff44ad0e42496fb2b](https://github.com/TttXxx36/Open-reader-desktop/commit/60564de2151738f91e9b953ff44ad0e42496fb2b) 对应 CI run [31475264033](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475264033)、Windows Release [31475774771](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31475774771) 和 installer smoke [31476524993](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31476524993) 均通过。
+- 书源可选配置 `replaceRules`，正文提取后按顺序执行 Rust regex 替换；`replacement` 支持 `$1` 等捕获组，`enabled` 默认开启。
+- 校验阶段限制单书源最多 32 条规则、pattern 最多 512 字节、replacement 最多 4 KiB；无效正则会阻止保存，停用规则会给出警告。
+- 远程详情与章节缓存仍分别使用 5 分钟和 10 分钟 TTL；应用启动清理过期条目，并在每次写入后保留最新的最多 256 条、总 payload 不超过 32 MiB。
+- 容量淘汰按 `fetched_at` 倒序执行；超出条目数或字节预算的旧条目会删除，缓存只用于远程阅读，不会写入本地书架。
 
-后续验收：
+## M5.4 章节更新与失败回退
 
-- 空库/旧 M5 数据库升级失败回滚、重复来源 URL 冲突和非法枚举专项夹具。
-- 跨分组拖拽、批量元数据编辑、快照清理策略和 Windows 手工恢复流程。
+- 远程阅读页的“刷新内容”会重新获取目录并计算目录指纹，比较章节 URL 集合并计算包含标题/顺序的目录指纹，显示新增、移除和保留数量。
+- 当前章节优先按 URL 保留；如果来源移除了当前章节，则选择刷新后最接近的索引，避免刷新后跳回第一章。
+- 普通打开与章节切换继续使用详情/章节 TTL 缓存，不启动后台轮询；只有用户点击“刷新内容”才发起强制网络请求。
+- 强制刷新失败时优先返回本机缓存并标记 `stale`，同时显示 `refresh_error`；没有可用缓存时才向前端返回错误。
+- 目录指纹是变化检测信号，不是版权、授权或内容完整性证明；真实来源仍需单独确认授权和服务条款。
 
-## M7.2 规则执行增强（分页诊断、安全回退链、缓存诊断与有限 JSONPath 已完成）
+## M5.5 安全审计与发布前验收
 
-分页/模板变量首个切片已接入真实 pipeline：支持 page、pageNum、pageIndex、page+1、page-1、keyword/key、bookUrl/bookId、chapterId；多页搜索有 20 页硬上限，并在空页或无新增结果时停止。随后补齐了统一的每源诊断模型（扫描页数、解析数量、终止原因、请求失败）和前端展示；调试步骤携带变量名快照（关键词、URL 和 ID 脱敏）与 cache_hit 字段。
+- 书源可填写 `permission` 权限记录；“安全审计”会检查权限状态、主机范围、敏感请求头和结构错误。
+- “缓存状态”只显示条目数、字节数、过期条目数与容量上限，不展示缓存正文；应用启动和缓存写入后的淘汰会在 Rust stderr 记录实际删除数量。
+- Rust 网络客户端最多跟随 5 次重定向；普通书源请求默认 15 秒/2 MiB 响应体，书源配置导入的本地 JSON/在线 URL 另受 128 MiB bundle 上限和 30 秒拉取超时约束；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
+- Windows 图标已加入仓库，`bundle.active=true`；签名证书暂缓，GitHub Actions 发布的安装器和便携 ZIP 会明确标记为未签名。自动化 smoke 已覆盖首次安装、启动、卸载和数据保留，覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口和键盘焦点仍需目标环境回归。
+- 当前可执行验收：`npm run typecheck`、`npm run build`、`npm run test:rust`、`cargo fmt --check --manifest-path src-tauri/Cargo.toml` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
 
-当前已完成安全回退链子集：导入器保留 `||` 候选，CSS 链和 JSONPath 链分别最多 8 项，按顺序尝试直到得到结果；混合 CSS/JSONPath、XPath、JavaScript 和不受支持的表达式会明确拒绝，不静默丢弃。字符串规则与对象规则的兼容形态也保持不变。
+- 完整的安装包、签名和回滚验收项见 [Windows 发布验收清单](release-checklist.md)。
 
-请求 URL 也支持每个阶段最多 8 个 `||` 候选；失败候选会进入诊断步骤，首个成功 URL 作为后续相对章节链接的基准。URL 链仅做模板渲染和请求重试，不执行脚本。每个阶段共享受限时间预算（最多 60 秒，按客户端请求超时和候选数量计算）；预算耗尽会取消当前请求、记录超时诊断并停止继续尝试。端到端书源调试、远端书籍/章节刷新和多源搜索均支持显式用户取消，整个搜索→详情→目录→正文 pipeline 另有总预算（最多 120 秒）。正文规则已支持受限 `nextUrl/nextPage` 中间结果：只解析一个绝对 HTTP(S) 链接并提示用户；自动追链仍不接入默认流程，但显式 opt-in 请求链已通过受限策略、取消和边界夹具验证。
+## M5.6 发布候选预检
 
-书籍/章节缓存响应现在返回 cache_hit；过期刷新失败时保留 stale 与错误原因，阅读器明确提示缓存来源并可手动刷新。基础缓存可见化与脱敏诊断快照导出已完成；统一的书籍/章节请求步骤和缓存回退事件已纳入快照，并带有稳定的相对顺序与单调 start_ms，可排序时间线已完成；跨请求关联 ID 已补齐并进入本地失败历史，仍需继续细化重试原因和导出版本兼容。
+- `npm run verify:release` 检查 package/Tauri 版本一致性、产品名、图标路径和 `bundle.active`，当前会报告但不放行外部阻塞项。
+- `npm run verify:release:strict` 额外要求真实图标、`bundle.active=true` 和已生成的 `dist/index.html`，用于发布前最终门禁。
+- CI 已运行非严格预检；GitHub Actions 的版本标签工作流会在严格预检后生成 NSIS/MSI 安装器、便携 ZIP 和 SHA-256 清单，并创建标记为 unsigned 的 Release。
+- `src-tauri/icons/icon.ico` 与 `icon.png` 是实际打包资产；签名仍暂缓，Windows SmartScreen 可能显示警告。
 
-有限 JSONPath 已扩展为安全子集：支持对象字段、数组下标、数组/对象通配、连续括号字段别名（`['title']`/`["title"]`）和单字段等值过滤（`[?(@.kind == 'novel')]`）。路径最多 512 字节，字段最多 128 字节，过滤值最多 256 字节，单段最多产生 256 个节点；不等式、逻辑组合、函数、脚本和转义表达式继续拒绝。
+- GitHub Actions 的 `Windows release` 支持手动触发和 `v*` 版本标签；严格预检通过后构建安装器与便携 ZIP，标签触发会自动创建未签名 GitHub Release，并生成 `release-sha256.txt`。当前 main 的 Windows release run [32368262290](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368262290) 与 installer smoke run [32369094467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32369094467) 已通过。
 
-书源调试页提供脱敏诊断快照导出：只写入阶段名、脱敏 URL、状态、耗时、响应大小、失败原因、变量名和 cache_hit 汇总，不写入正文、关键词、书籍/章节 ID、Cookie 或请求头；快照最多 256 个步骤且文件不超过 256 KB。远端章节响应也保留请求步骤，导出时按 pipeline、书籍、章节顺序合并，并追加缓存命中或 stale 回退事件；每个步骤带有 order 和相对单调 start_ms，便于离线排序且不暴露系统绝对时间。多源搜索的失败消息、扫描页数、解析数量和停止原因也会按上限合并，形成跨请求失败摘要。开启或关闭追链时，快照还会追加 `next_page_policy` 安全元数据（不含后续 URL、正文、Cookie 或认证头）。
+## M6.6 视觉系统刷新
 
-远程证据：[GitHub Actions run 30760475594](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30760475594)（分页诊断，40 tests）；[GitHub Actions run 30761456593](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761456593)（安全回退链，42 tests）；[GitHub Actions run 30761886043](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30761886043)（缓存命中诊断，42 tests）；[GitHub Actions run 30763032154](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30763032154)（有限 JSONPath，44 tests）；[GitHub Actions run 30764314398](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30764314398)（URL 回退链，47 tests）；[GitHub Actions run 30764884266](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30764884266)（脱敏诊断快照导出，47 tests）；[GitHub Actions run 30765352024](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30765352024)（书籍/章节统一请求时间线，47 tests）；[GitHub Actions run 30765823280](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30765823280)（URL 阶段超时预算，48 tests）；[GitHub Actions run 30766330200](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30766330200)（相对可排序时间线与调试取消，48 tests）；[GitHub Actions run 30766847254](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30766847254)（pipeline 总耗时预算，49 tests）；[GitHub Actions run 30767351427](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30767351427)（多源失败聚合，49 tests）；[GitHub Actions run 30767940334](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30767940334)（远端/多源取消，49 tests）；[GitHub Actions run 30768670672](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30768670672)（受限 next URL 中间模型，50 tests）；[run 31302984553](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31302984553)（诊断导出追链策略元数据，前端与 Rust 检查通过）。
+- 当前 main 已统一导航、书架、书源工作区、阅读工具栏、阅读页面和设置面板的墨色/暖金视觉语言。
+- 设置页增加个性化引导，控件统一了边框、焦点、滑块、颜色选择和响应式窄窗口表现。
+- 本次只改变展示层和交互反馈，不改变书源解析、阅读进度、缓存或 SQLite 数据模型。
+- 前端 typecheck/build、UI contract、Rust checks、Windows release 和 installer smoke 已由 GitHub Actions 验证；目标 Windows 的键盘 Tab、高对比度和中文字体仍属于人工验收。
 
-后续切片：
+## 本地数据
 
-1. 为已合并的书籍/章节诊断事件补充跨请求失败聚合、重试原因分类和导出版本兼容。
-2. 保持复杂 JSONPath（函数、脚本、逻辑组合）拒绝，并根据授权夹具补充有限数字/布尔值过滤。
-3. 自动追踪受限 next URL 仍未接入默认流程；纯策略闸门已固定候选校验、同源、深度/页面/响应体/总耗时、环路和稳定 stop reason，并用 60 个 Rust 测试覆盖停止原因和无限配额裁剪（run 30772265421）；累计多页夹具又证明预算不会按页重置、深度优先级稳定（61 个 Rust 测试，run 30772819136）。后端已提供仅在 `NextPagePolicy.enabled=true` 时生效的三页合成 HTTP 请求夹具（62 个 Rust 测试，run 30773702655），默认单页路径和 Tauri 命令保持不变。下一步补齐部分成功、环路、跨源、取消、超时和超体积夹具，再评估是否接入可见的用户开关。
-4. next URL opt-in 请求链的部分成功、环路、跨源、超时和超体积合成夹具已完成（67 个 Rust 测试，run 30774860219），`fetch_source_chapter` 通过可选 `next_page_policy` 接入并复用取消 token（run 30775360305）。设置页首轮用户开关、配额控件、同源限制、远端状态/停止原因展示、缓存绕过和脱敏诊断中的策略元数据已完成（runs 31302166671、31302984553）；下一步进行 Windows 手工验收。
-5. 为书籍/章节和多源请求在 UI 中展示候选命中说明，并将取消状态纳入失败聚合。
+开发运行时，SQLite 数据库位于系统应用数据目录下的 `open-reader.db`。数据库迁移脚本位于 `src-tauri/migrations`，后续每次结构变更都新增一个按序号命名的迁移文件。
 
-## M7.3 XPath 评估闸门（静态识别、离线 PoC、授权夹具与耗时指标已完成）
+## 常见问题
 
-本轮先落地导入侧的静态只读闸门，而不是引入 XPath 执行器：
-
-- 导入预览只在规则上下文中识别 `//`、`xpath:`、`xpath=` 和 `@xpath` 等表达式，最多保留 8 条发现、每条最多 512 字节，并展示原始表达式、路径上下文和“仅用于只读兼容性评估，当前不执行”的原因。
-- 预览阶段复用真正导入使用的 `validate_source_json`，避免出现“预览可导入、实际导入才失败”的不一致；XPath 条目当前仍标记为不可执行并跳过，不会降级成 CSS。
-- 远程证据：[GitHub Actions run 30769462298](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30769462298)（M7.3a 静态识别与预览契约，51 个 Rust 测试、前端检查通过）。
-
-M7.3b 已加入离线只读解析 PoC（xpath_poc.rs 与 analyze_xpath_offline 命令）：
-
-- 仅接受以 \`/\` 或 \`//\` 开头的路径，支持元素/通配符、子级/后代分隔、单个属性等值谓词、位置谓词和末端属性读取。
-- 明确拒绝函数、联合、轴、父节点、复杂逻辑与超出 1,024 字节表达式、16 步、256 字节谓词、64 KiB 合成 HTML、4,096 节点或 65,536 工作量上限的输入。
-- 解析器只统计 AST 步数、谓词、节点数、估算工作量和耗时；不把 XPath 翻译为 CSS、不发起网络请求、不接入真实书源执行链。
-- 远程证据：[GitHub Actions run 30770030409](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30770030409)（M7.3b PoC，55 个 Rust 测试、前端检查通过）。
-
-M7.3c 已补充合成 HTML 夹具矩阵：覆盖 6 条受限语法（元素、绝对/相对路径、属性谓词、位置谓词、通配符、末端属性）和 6 条明确拒绝语法（函数、复杂属性谓词、联合、轴、父节点），并断言密集节点输入的估算工作量仍受上限约束。
-- 远程证据：[GitHub Actions run 30770432561](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30770432561)（M7.3c，56 个 Rust 测试、前端检查通过）。
-
-M7.3d 已把离线指标接入导入预览：每条发现同时展示受限语法是否可静态解析、步数和估算工作量；即使静态解析成功，仍明确保持“不执行”状态。
-- 远程证据：[GitHub Actions run 30770921591](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/30770921591)（M7.3d，56 个 Rust 测试、前端检查通过）。
-
-M7.3e 已补充授权合成 XPath 夹具和耗时分布：导入预览透传 `offline_elapsed_us`，界面显示每条规则的微秒级离线解析耗时；测试覆盖受限语法、函数/联合/轴/父节点等拒绝语法，并断言 p95 解析耗时处于 2 秒上限内。所有输入仍只使用合成 HTML，不翻译为 CSS、不访问网络。
-- 远程证据：[GitHub Actions run 31303684736](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31303684736)（68 个 Rust 测试、前端 typecheck/build/UI contract/release preflight 通过）。
-
-M7.3f 已补充边界/回归夹具：尾部分隔符、空/零位置谓词、组合属性谓词、属性读取非末端、无效规则和合成 HTML 节点预算均明确拒绝；修复了尾部分隔符被误接受、同引号组合谓词被误解析的风险。节点预算断言只检查超过阈值，不依赖 scraper 隐式 html/head/body 节点数量。
-- 远程证据：[GitHub Actions run 31307700513](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31307700513)（70 个 Rust 测试、前端 typecheck/build/UI contract/release preflight 通过）。
-
-下一步记录跨版本结果并继续保持安全拒绝边界；任何失败都不得静默改写为 CSS，只有固定节点数、表达式长度、执行时间和网络权限后，才决定是否进入可执行档。
-
-## M7.4 JavaScript 评估闸门
-
-当前仅完成设计闸门，详细条件见 [M7.4 JavaScript 评估安全闸门](m7-js-evaluation-gate.md)。必须先完成许可证与供应链审计、独立 worker/进程隔离、超时/CPU/堆/输出配额、API 白名单、禁止文件/进程/系统命令、日志脱敏、用户逐源授权、feature flag 和回滚夹具。未完成前继续明确拒绝 @js、webJs 等脚本，不引入运行时，也不连接真实书源。
-
-## M7.5 诊断与维护
-
-### M7.5a 单源重试（已完成）
-
-- 新增 `retry_source_search` Tauri 命令，只加载指定且已启用的书源，复用现有分页上限、取消 token、失败隔离和脱敏错误边界。
-- 多源搜索的失败列表增加“重试此源”入口；重试只替换该源的结果、诊断和失败项，不清空其他书源结果，也不改变全局启用数量。
-- 结果合并按“来源 ID + 标题 + 作者”去重；重试成功和再次失败都在状态提示中明确展示。
-- GitHub Actions run [31309322671](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31309322671) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 70 个 Rust 测试。
-
-### M7.5b 本地失败历史（已完成首个切片）
-
-- SQLite 0008 迁移新增 `source_failure_history`，只保存搜索阶段的来源、阶段、有限原因码、截断消息和时间；查询上限 256，当前 UI 默认读取最近 64 条。
-- 多源搜索和单源重试会记录失败摘要；记录失败不会覆盖或阻断原搜索结果，写入异常只进入本地错误日志。
-- 书源页显示脱敏失败历史，支持按当前书源筛选、刷新和清空；不上传关键词、正文、Cookie、认证头或遥测。
-- GitHub Actions run [31309951094](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31309951094) 已通过前端检查、Rust fmt/check 和 71 个 Rust 测试。
-
-### M7.5c 书籍/章节失败历史（首个切片已完成）
-
-- 书籍详情和章节请求失败会写入同一份本机历史，阶段分别标记为 `book` / `chapter`；取消操作不记为失败，stale 缓存回退仍返回原内容并保留刷新错误。
-- 原因码继续使用有限集合（request、timeout、cancelled、parse、config、body_limit），消息按字符上限截断；GitHub Actions run [31310413566](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31310413566) 已通过前端检查、Rust fmt/check 和 71 个 Rust 测试。
-
-### M7.5d 本地保留与统计（首个切片已完成）
-
-- 失败历史写入后按时间和 ID 保留最近 512 条；列表查询仍限制 256 条，默认 UI 展示 64 条，避免数据库无限增长。
-- 新增本地统计命令和书源页摘要，按原因码、请求阶段和总量聚合；统计不读取关键词、正文或请求头，也不上传遥测。
-- GitHub Actions run [31311000040](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31311000040) 已通过前端检查、Rust fmt/check 和 71 个 Rust 测试。
-
-### M7.5e 跨请求关联与本地报告（已完成首个切片）
-
-- SQLite 0009 为失败历史增加可选 `operation_id`；搜索、单源重试、书籍详情和章节正文统一写入规范化任务 ID，取消请求仍不记为失败。
-- 书源页显示任务 ID，并可导出最近 64 条脱敏失败摘要、按原因/阶段统计和当前筛选范围；报告使用 `schema_version: 1`、256 KB 上限，不包含关键词、正文、Cookie、请求头或未脱敏 URL。
-- GitHub Actions run [31311905146](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31311905146) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 71 个 Rust 测试。
-
-### M7.5f 原因分类与数据库升级（已完成首个切片）
-
-- 失败原因码已细化为 `timeout`、`cancelled`、`rate_limit`、`auth`、`http_status`、`body_limit`、`parse`、`config`、`network`、`request`，并用回归夹具锁定有限集合；SQLite 0008 → 0009 升级夹具确认旧数据库可继续读写 `operation_id`；GitHub Actions run [31314339077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31314339077) 已通过前端检查、Rust fmt/check 和 73 个 Rust 测试。
-
-### M7.5g 报告版本兼容与后续指标（已完成首个实现切片）
-
-- 新增 [本地书源失败报告格式](source-failure-report-schema.md)，固定 `schema_version: 1`、字段语义、旧记录 `operation_id = null` 的迁移规则、未知字段处理和隐私边界。
-- 书源安全面板与诊断/失败报告增加 `source_metrics`：总/启用书源、审计通过/关注数、失败记录数、缓存占用，以及 SQLite 0010 聚合的网络请求成功/失败/缓存命中次数和明确分母的比例；取消请求和 stale 回退不计入成功/失败/命中。GitHub Actions run [31318523294](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31318523294) 已通过前端检查、Rust fmt/check 和 74 个 Rust 测试。
-
-### M7.5i 规则执行指标（首个实现切片已完成）
-
-- 新增 SQLite 0011 `source_rule_metrics`，按 `source_id + stage + rule_key` 保存四个解析阶段（`search`、`book_info`、`toc`、`content`）的 attempts、successes、no_matches 和 failures；`delete_source`、replace-all 导入和迁移路径都会清理或保留一致的指标状态。
-- SourceEngine 在搜索分页、书籍标题、目录条目、章节正文及受限 next-page 正文成功路径发出规则评估事件；解析错误和明确 no-match 错误分类为 failure/no_match，网络、取消、缓存和策略拒绝不会伪装成规则失败。首个切片使用 `item`、`title`、`content` 等必需输出代理键。
-- 新增 `get_source_rule_metrics` 命令和书源页汇总，展示 attempts、success/no-match/failure、成功率/失败率和按规则分解；没有观测值时保留 `observed=false`。诊断报告的 `source_metrics.rule_metrics` 为可选字段，继续遵守本地-only 和脱敏边界。
-- 分母固定为 `attempts = successes + no_matches + failures`；新鲜缓存命中、stale 回退和取消不重复执行或进入规则分母。GitHub Actions run [31320769641](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31320769641) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 **76 个 Rust 测试**。
-
-### M7.5j 字段级规则键与 skipped 可观测性（已完成）
-
-- SQLite 0012 为 `source_rule_metrics` 增加 `skipped` 列；未配置或策略跳过只增加 skipped，不增加 attempts，因此不会改变成功率/失败率分母；旧 0011 数据库启动时自动升级。
-- 搜索、书籍信息、目录和正文事件现在按字段级键发出：`item`、`title`、`author`、`url`、`intro`、`cover`、`content`、`next`；未配置字段明确记录为 skipped，正文分页/受限追链按响应页分别评估。
-- 书源页显示 skipped 总量和按规则分解；零观测时给出“尚未采集规则执行”的说明。规则状态枚举包含 success/no_match/failure/skipped，但 skipped 始终不进入成功/失败率。
-- GitHub Actions run [31322235077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31322235077) 已通过前端 typecheck/build/UI contract/release preflight、Rust fmt/check 和 **76 个 Rust 测试**；下一步可转入 M8 内容格式 v2，同时保留授权合成边界夹具的持续补充。
-## GitHub 执行方式
-
-每个子阶段拆为 Issue → 小 PR → CI → 兼容性矩阵更新 → 路线图记录。前端 typecheck/build/UI contract、Rust fmt/check/test 必须通过；涉及安装器的任务额外等待 M6.5 Windows Actions 验收。本地不执行构建或安装。
+- WebView2 缺失：安装 Microsoft Edge WebView2 Runtime 后重启应用。
+- Vite 端口被占用：释放 1420 端口，或调整 `vite.config.ts` 与 `tauri.conf.json` 中的端口配置。
+- 浏览器预览模式下，SQLite 和 Tauri 命令不可用是正常现象；请使用 `npm run tauri dev` 验证桌面桥接。
+- 如果本地书籍导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB；书源 JSON 或在线 URL 导入则检查 128 MiB bundle 上限、30 秒拉取超时和 URL 长度边界。

@@ -2,6 +2,8 @@
 
 > 后续维护状态（2026-08-20）：main `89185e6` 已包含 PR10–PR13；CI `32368235610`、Windows Release `32368262290` 和 installer smoke `32369094467` 均通过。自动化检查不替代目标 Windows 环境的升级、WebView2、离线错误、中文字体、窄窗口和键盘焦点验收。
 
+> 当前候选（2026-08-21）：PR18 `fa9a1c0` 的 0.2.0 Windows Release `32402250634` 与 installer smoke `32403363944` 均通过；书源配置导入上限为 128 MiB，阅读位置与已读状态已纳入 SQLite。目标 Windows 手工验收仍需按模板记录。
+
 
 ## 必备环境
 
@@ -109,7 +111,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 - 书源可填写 `permission` 权限记录；“安全审计”会检查权限状态、主机范围、敏感请求头和结构错误。
 - “缓存状态”只显示条目数、字节数、过期条目数与容量上限，不展示缓存正文；应用启动和缓存写入后的淘汰会在 Rust stderr 记录实际删除数量。
-- Rust 网络客户端最多跟随 5 次重定向；普通书源请求默认 15 秒/2 MiB 响应体，书源配置导入的本地 JSON/在线 URL 另受 16 MiB bundle 上限和 30 秒拉取超时约束；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
+- Rust 网络客户端最多跟随 5 次重定向；普通书源请求默认 15 秒/2 MiB 响应体，书源配置导入的本地 JSON/在线 URL 另受 128 MiB bundle 上限和 30 秒拉取超时约束；WebView CSP 已关闭任意 HTTPS `connect-src`，远程来源请求统一经由 Rust。
 - Windows 图标已加入仓库，`bundle.active=true`；签名证书暂缓，GitHub Actions 发布的安装器和便携 ZIP 会明确标记为未签名。自动化 smoke 已覆盖首次安装、启动、卸载和数据保留，覆盖升级、WebView2 缺失、离线/网络错误、中文字体、窄窗口和键盘焦点仍需目标环境回归。
 - 当前可执行验收：`npm run typecheck`、`npm run build`、`npm run test:rust`、`cargo fmt --check --manifest-path src-tauri/Cargo.toml` 和 `cargo check --manifest-path src-tauri/Cargo.toml`。
 
@@ -140,4 +142,4 @@ cargo check --manifest-path src-tauri/Cargo.toml
 - WebView2 缺失：安装 Microsoft Edge WebView2 Runtime 后重启应用。
 - Vite 端口被占用：释放 1420 端口，或调整 `vite.config.ts` 与 `tauri.conf.json` 中的端口配置。
 - 浏览器预览模式下，SQLite 和 Tauri 命令不可用是正常现象；请使用 `npm run tauri dev` 验证桌面桥接。
-- 如果本地书籍导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB；书源 JSON 或在线 URL 导入则检查 16 MiB bundle 上限、30 秒拉取超时和 URL 长度边界。
+- 如果本地书籍导入失败，先确认扩展名为 `.txt` 或 `.epub`，并检查文件是否超过 64 MB；书源 JSON 或在线 URL 导入则检查 128 MiB bundle 上限、30 秒拉取超时和 URL 长度边界。

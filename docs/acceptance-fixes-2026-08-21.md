@@ -20,4 +20,4 @@
 1. `npm run typecheck`、`npm run build`、UI contract 和 `npm run verify:release:strict` 在 Windows Release 工作流中通过。
 2. Rust fmt/check/test 覆盖新迁移、进度写入与书源能力字段。
 3. Release workflow 生成 NSIS、MSI、便携 ZIP 和 `release-sha256.txt`；installer smoke 继续校验启动、安装/卸载、校验和与数据保留。
-4. 目标 Windows 人工验收重点复测：在线搜索结果点击、详情/正文加载、滚动后重开恢复、已读/未读切换和超过 16 MiB 的书源集合导入。
+4. 目标 Windows 人工验收重点复测：在线搜索结果点击、详情/正文加载、滚动后重开恢复、已读/未读切换和超过 128 MiB 的书源集合导入。

@@ -4,6 +4,8 @@ Windows-first open-source desktop reader inspired by the extensible reading expe
 
 > 状态（2026-08-20）：main 基线为 89185e6；PR10、PR11、PR12、PR13 已按顺序合并。合并后 CI run 32368235610、Windows Release run 32368262290、installer smoke run 32369094467 全部成功；Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16` 的摘要为 `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`；目标 Windows 手工验收仍待执行，签名暂缓。
 
+> 当前候选（2026-08-21）：PR18 分支 `fa9a1c0` 已将验收缺陷修复并升级到 `0.2.0`；CI run [32401610084](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32401610084)、Windows Release run [32402250634](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32402250634) 和 installer smoke run [32403363944](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32403363944) 全部成功。候选安装包为未签名构建，目标 Windows 人工验收仍待执行。
+
 ## 目标
 
 - 本地优先：支持 TXT/EPUB 等个人或公版内容的阅读与离线缓存。
@@ -55,7 +57,7 @@ npm install
 npm run tauri dev
 ```
 
-M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4/M4.1 将搜索、详情、目录和首章正文串成可测试链路，并加入书源持久化、启停和调试诊断；M5–M7.5 已支持多源搜索、缓存、正文替换、分页策略、取消、失败历史、规则指标和安全兼容边界。书源配置支持本地 JSON 和 HTTP(S) URL 导入：bundle/在线响应体上限为 16 MiB，在线拉取超时 30 秒；URL 本身仍限制为 2 KiB，结构校验、规则安全闸门、脚本/Cookie/Authorization 拒绝和内存防护不变。M8–M9 已完成 TXT/EPUB 大文件、图片序列、书架恢复和文件变更检测切片。当前视觉刷新统一了导航、书架、书源、阅读器和设置面板；PR10 已将搜索结果独立为左侧工作区，并把本地书籍与书源书籍分区展示；PR11–PR13 已补齐治理记录、书源快照保留和 EPUB 资源诊断。GitHub Actions 会在 `v*` 标签或手动 Release 上生成未签名安装器、便携 ZIP 和 SHA-256 清单；`89185e6` 的 Release（`32368262290`）与 installer smoke（`32369094467`）已通过，目标 Windows 手工回归仍是正式推广前置条件。XPath、JavaScript、认证态和音频书源按兼容性矩阵明确标记或拒绝。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)，当前维护决策见 [docs/maintenance-audit-2026-08-12.md](docs/maintenance-audit-2026-08-12.md)。
+M2 支持导入 TXT/EPUB、章节目录、阅读进度和字体/行距/主题设置。M3 增加书源 JSON 校验、HTML/JSON 提取器与受限 HTTP 预览；M4/M4.1 将搜索、详情、目录和首章正文串成可测试链路，并加入书源持久化、启停和调试诊断；M5–M7.5 已支持多源搜索、缓存、正文替换、分页策略、取消、失败历史、规则指标和安全兼容边界。书源配置支持本地 JSON 和 HTTP(S) URL 导入：bundle/在线响应体上限为 128 MiB，在线拉取超时 30 秒；URL 本身仍限制为 2 KiB，结构校验、规则安全闸门、脚本/Cookie/Authorization 拒绝和内存防护不变。M8–M9 已完成 TXT/EPUB 大文件、图片序列、书架恢复和文件变更检测切片。当前视觉刷新统一了导航、书架、书源、阅读器和设置面板；PR10 已将搜索结果独立为左侧工作区，并把本地书籍与书源书籍分区展示；PR11–PR13 已补齐治理记录、书源快照保留和 EPUB 资源诊断。GitHub Actions 会在 `v*` 标签或手动 Release 上生成未签名安装器、便携 ZIP 和 SHA-256 清单；`89185e6` 的 Release（`32368262290`）与 installer smoke（`32369094467`）已通过，目标 Windows 手工回归仍是正式推广前置条件。XPath、JavaScript、认证态和音频书源按兼容性矩阵明确标记或拒绝。详细检查命令见 [docs/development.md](docs/development.md)，流程说明见 [docs/source-pipeline.md](docs/source-pipeline.md)，当前维护决策见 [docs/maintenance-audit-2026-08-12.md](docs/maintenance-audit-2026-08-12.md)。
 
 ## 参与开发
 
