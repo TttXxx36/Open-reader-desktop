@@ -2,7 +2,7 @@
 
 兼容性按“已验证”而不是“理论上可解析”记录。测试内容必须是用户自有、已授权、公开测试或公版内容。每一行同时说明“导入状态”和“执行状态”，避免把导入成功误认为运行成功。
 
-> 后续维护复核（2026-08-21）：0.2.0 Windows Release/installer smoke 已通过，Computer Use 手工记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 的 0016 生命周期和纯文本事务合并已由 CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 验证；M7 P1 两轮安全切片已补齐 item 自身节点匹配、响应解码、目录章节链接回退和正文安全 CSS 回退，CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 全部通过；授权夹具、字段差异和乱码降级仍在收尾。许可证与内容边界见 [ADR 0002](adr/0002-license-and-source-policy.md)。
+> 后续维护复核（2026-08-21）：0.2.0 Windows Release/installer smoke 已通过，Computer Use 手工记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 的 0016 生命周期和纯文本事务合并由 CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 验证，d3 的 0018 撤销状态、7 天撤销、冲突保护和旧 ID 单跳解析由 CI [32470836506](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32470836506) 验证；M7 P1 两轮安全切片已补齐 item 自身节点匹配、响应解码、目录章节链接回退和正文安全 CSS 回退，CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 全部通过；授权夹具、字段差异和乱码降级仍在收尾。许可证与内容边界见 [ADR 0002](adr/0002-license-and-source-policy.md)。
 
 | 能力 | 目标版本 | 导入状态 | 执行状态 | 当前边界/下一步 |
 | --- | --- | --- | --- | --- |
@@ -24,7 +24,7 @@
 | 缓存、章节指纹和 stale 回退 | M5/M7.2/M7.5c/d/e/f/g/h/i | 已实现 | 已实现 | TTL、容量上限、过期清理和刷新失败回退；书籍/章节返回 cache_hit，阅读器显示缓存来源；脱敏诊断快照已合并 pipeline、书籍/章节请求步骤、缓存回退事件与多源失败摘要，并提供相对 order/start_ms 排序；SQLite 0008/0009/0010 保存搜索、book、chapter 阶段的有限失败摘要、请求/缓存聚合与跨请求 operation_id，取消不记失败；历史按时间保留最近 512 条，书源页提供按原因/阶段统计、请求失败率/缓存命中率和脱敏报告导出；缓存命中率分母为已完成网络请求次数加新鲜缓存命中次数，stale 回退不计命中；规则指标设计明确缓存命中和 stale 回退均不重复执行规则；旧库升级夹具已覆盖 0008 → 0009，0010 在启动时自动迁移；报告 schema_version 兼容约定已记录 |
 | MOBI/AZW | M8.5.1/M8.5.2/M8.5.3 | 只读探测 | 暂不导入 | 已校验 PalmDB 记录偏移与 `MOBI` 标记，并返回记录偏移/头长度元数据；扩展名/签名不一致拒绝；导入与预览现在统一经过 `require_importable_format`，MOBI/AZW/AZW3 保持只读且明确不会绕过 DRM；run [31336890258](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31336890258) 的 100 个 Rust 测试、前端检查、TXT 性能证据和 Windows 编译/峰值 RSS 采样通过；正式解析前仍需许可证、内存上限和 DRM 拒绝策略 |
 | PDF | M8.5.1/M8.5.2/M8.5.4a/b/M8.5.5 | 只读探测 | 暂不导入 | 已校验 `%PDF-` 签名并返回版本；M8.5.4a 的导入前 UI 会显示 PDF 版本并明确阻止导入，M8.5.4b 已定义独立渲染/搜索/目录模型与依赖采用闸门；尚未引入解析/渲染依赖，不转成普通文本章节；M8.5.5 继续保持 PDF 探测边界，待后续单独完成渲染路径、供应链和受保护内容拒绝验证 |
-| 漫画/图片 | M8.5.1/M8.5.2/M8.5.4a/b/M8.5.5/M9.0/M9.1/M9.2 | 多图片已可预览并接入 SQLite 书架 | 单图、多图片预览、缩略图缓存、位置恢复、重启恢复、页级状态检测、重新关联和 stale 复核已实现 | 图片内容仍受签名、尺寸、像素、页数、输入总量和缓存配额限制；M9.2.5 已加入 15 秒扫描超时与协作式取消；缺页/变化页不会静默当作正常；M9.3.1-d2 仅允许纯文本、无正文冲突合并，图片序列/远程封面继续默认阻止；下一步为 d3 撤销与旧 ID 兼容 |
+| 漫画/图片 | M8.5.1/M8.5.2/M8.5.4a/b/M8.5.5/M9.0/M9.1/M9.2 | 多图片已可预览并接入 SQLite 书架 | 单图、多图片预览、缩略图缓存、位置恢复、重启恢复、页级状态检测、重新关联和 stale 复核已实现 | 图片内容仍受签名、尺寸、像素、页数、输入总量和缓存配额限制；M9.2.5 已加入 15 秒扫描超时与协作式取消；缺页/变化页不会静默当作正常；M9.3.1-d2/d3 合并仍仅允许纯文本、无正文冲突、无远程封面，图片序列继续默认阻止；d3-e 需在 Windows 手工验证撤销与旧 ID 行为 |
 | 音频书源/TTS | M12 | 可部分导入 | 暂不执行 | 元数据和原始规则可保存并在预览中提示；当前阅读执行器不执行音频/TTS，后续再做播放器、系统 TTS、隐私和缓存评估 |
 | RSS/Atom/OPDS | M11 | 暂不支持 | 暂不支持 | 先做订阅/目录模型和授权提示，不聚合未经授权内容 |
 
