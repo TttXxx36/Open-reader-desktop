@@ -1,6 +1,6 @@
 # M4 单书源端到端流程
 
-> 维护状态（2026-08-21）：M4/M5 的合成夹具、书源导入和诊断链路仍由 main CI 验证；PR18 候选已将书源配置导入统一为 128 MiB bundle 上限，在线拉取超时 30 秒。0.2.0 目标 Windows 手工记录已完成；M7 P1 首轮已修复 item 自身节点漏匹配并加入响应字符集识别，测试源规则差异、乱码降级和授权夹具仍在收尾。
+> 维护状态（2026-08-21）：M4/M5 的合成夹具、书源导入和诊断链路仍由 main CI 验证；PR18 候选已将书源配置导入统一为 128 MiB bundle 上限，在线拉取超时 30 秒。0.2.0 目标 Windows 手工记录已完成；M7 P1 两轮安全切片已加入 item 自身节点匹配、响应字符集识别、目录章节链接回退和正文安全 CSS 回退，CI [32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 已通过，授权响应夹具、乱码降级和字段差异诊断仍在收尾。
 
 M4 把 M3 的书源协议串成一条可测试的最小链路：
 
@@ -45,7 +45,7 @@ Tauri 命令 `run_source_pipeline` 接收两个参数：
 
 响应文本解码按以下顺序处理：BOM、HTTP `Content-Type` 的 `charset`、HTML 前 16 KiB 内的 `charset` 元信息、有效 UTF-8，最后使用 GB18030 兼容回退；支持 UTF-8、UTF-16LE/BE、GBK/GB2312/GB18030 和 Windows-1252。声明字符集产生替换字符时，会比较 GB18030 回退结果并选择质量更好的文本。调试步骤只记录 `encoding` 与必要的 `encoding_warning`，不保存或导出响应正文。
 
-该首轮切片由自身节点、GB18030、UTF-16LE 合成夹具和远程 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 验证。它不扩大 XPath/JavaScript 执行边界；下一步继续补充授权响应夹具、乱码标题降级展示和 `toc/content` 字段级差异诊断。
+该首轮切片由自身节点、GB18030、UTF-16LE 合成夹具和远程 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 验证。第二轮在规则无匹配时提供安全候选：目录最多扫描 256 个可导航链接，并要求章节特征；正文按 `.content`、`#content`、`article.content`、`.read-content`、`.chapter-content`、`articleBody`、`article`、`main` 顺序回退，同时保留正文 HTML。第二轮由 [32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 验证。回退不扩大 XPath/JavaScript 执行边界；下一步继续补充授权响应夹具、乱码标题降级展示和字段级 `toc/content` 差异诊断。
 
 ## M5.2 配置包与强制刷新
 

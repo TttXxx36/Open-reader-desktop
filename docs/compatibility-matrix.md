@@ -2,7 +2,7 @@
 
 兼容性按“已验证”而不是“理论上可解析”记录。测试内容必须是用户自有、已授权、公开测试或公版内容。每一行同时说明“导入状态”和“执行状态”，避免把导入成功误认为运行成功。
 
-> 后续维护复核（2026-08-21）：0.2.0 Windows Release/installer smoke 已通过，Computer Use 手工记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 的 0016 生命周期和纯文本事务合并已由 CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 验证；M7 P1 首轮已补齐 item 自身节点匹配与 UTF-8/UTF-16/GB18030/Windows-1252 响应解码，CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 全部通过；规则差异和乱码降级仍在收尾。许可证与内容边界见 [ADR 0002](adr/0002-license-and-source-policy.md)。
+> 后续维护复核（2026-08-21）：0.2.0 Windows Release/installer smoke 已通过，Computer Use 手工记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 的 0016 生命周期和纯文本事务合并已由 CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 验证；M7 P1 两轮安全切片已补齐 item 自身节点匹配、响应解码、目录章节链接回退和正文安全 CSS 回退，CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 全部通过；授权夹具、字段差异和乱码降级仍在收尾。许可证与内容边界见 [ADR 0002](adr/0002-license-and-source-policy.md)。
 
 | 能力 | 目标版本 | 导入状态 | 执行状态 | 当前边界/下一步 |
 | --- | --- | --- | --- | --- |
@@ -11,8 +11,8 @@
 | Legado 基础 JSON | M3/M6 | 已实现 | 已实现安全子集 | 支持项目包、对象、数组、BOM、包装对象、常见别名和本地/HTTPS URL 预览与确认导入；导入 bundle 上限 128 MiB，在线拉取超时 30 秒，超过上限明确拒绝 |
 | Legado 书源元数据 | M7.0 | 已实现 | 已保存 | 支持 bookSourceUrl、分组、类型、权重、发现开关、自定义顺序、备注和 URL 模式；音频类型明确拒绝 |
 | 书源管理元数据 | M7.1a/b/c/d | 已实现 | 已实现基础管理 | SQLite 迁移、旧配置回填、分组筛选、排序、搜索/发现开关、元数据编辑、多选批量操作、同组拖拽与上下移动、批量分组/备注/权重编辑、导入 diff、更新/跳过/新建冲突策略、导入前快照和原子恢复已验证；快照保留策略和 Windows 手工流程待完善 |
-| CSS/JSoup 选择器 | M3/M7 | 已实现 | 已实现 | 支持文本/属性提取、单选择器和规则别名；Legado 的空可选规则会被省略；支持 `||` 顺序回退、`&&` 安全组合、`@content`/`@html`、常见 `data-*` 属性和 `##正则##替换`；可将 `class./id./tag.` 与安全链式索引转换为 CSS；字段选择器现在先匹配 item 自身再匹配后代，覆盖“条目本身为 `<a>`”的常见形态；无法安全转换的表达式保留为 Legacy；授权夹具和字段级差异诊断仍待补齐；CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 已通过 |
-| 书源响应字符集 | M7 P1 | 已实现首轮 | 已实现首轮 | 按 BOM、HTTP/HTML `charset` 和 UTF-8 有效性识别 UTF-8、UTF-16LE/BE、GB18030/GBK、Windows-1252；声明字符集异常时比较 GB18030 回退的替换字符数量，并在调试变量记录 encoding/encoding_warning；乱码标题降级展示和授权真实响应夹具仍待补齐 |
+| CSS/JSoup 选择器 | M3/M7 | 已实现 | 已实现 | 支持文本/属性提取、单选择器和规则别名；Legado 的空可选规则会被省略；支持 `||` 顺序回退、`&&` 安全组合、`@content`/`@html`、常见 `data-*` 属性和 `##正则##替换`；可将 `class./id./tag.` 与安全链式索引转换为 CSS；字段选择器现在先匹配 item 自身再匹配后代，覆盖“条目本身为 `<a>`”的常见形态；目录规则无结果时启用带章节特征的有限链接回退，正文无结果时启用 `.content`/`article`/`main` 等安全 CSS 回退并保留 inner HTML；无法安全转换的表达式保留为 Legacy；授权夹具和字段级差异诊断仍待补齐；CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 已通过 |
+| 书源响应字符集 | M7 P1 | 已实现两轮安全切片 | 已实现两轮安全切片 | 按 BOM、HTTP/HTML `charset` 和 UTF-8 有效性识别 UTF-8、UTF-16LE/BE、GB18030/GBK、Windows-1252；声明字符集异常时比较 GB18030 回退的替换字符数量，并在调试变量记录 encoding/encoding_warning；乱码标题降级展示和授权真实响应夹具仍待补齐 |
 | 正则替换/提取 | M3/M5 | 已实现 | 已实现受限版 | 首个捕获组和 replaceRules；有数量、长度和超时边界 |
 | JSONPath | M3/M7 | 已实现 | 已实现安全子集 | 支持对象字段、数组下标、数组/对象通配、连续括号字段别名、单字段等值过滤和 json: 前缀；路径/字段/值/节点数有上限，不等式、逻辑组合、函数和任意脚本拒绝 |
 | 分页变量/模板变量 | M7.2 | 已实现受限版 | 已实现首个切片 | 支持 page/pageNum/pageIndex/page+1/page-1、keyword/key、bookUrl/bookId/chapterId；多页最多 20 页，空页/无新增结果终止；调试变量脱敏展示；后续补解析数量、终止原因和链式规则 |
