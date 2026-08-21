@@ -2,7 +2,7 @@
 
 > 后续维护复核（2026-08-20）：main 提交 [89185e6](https://github.com/TttXxx36/Open-reader-desktop/commit/89185e640cefb2665510fc8b4622d918a9f1ab16) 已按顺序合并 PR11、PR12、PR13；CI [32368235610](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368235610)、Windows Release [32368262290](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32368262290) 和 installer smoke [32369094467](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32369094467) 均通过。Artifact `open-reader-windows-main-89185e640cefb2665510fc8b4622d918a9f1ab16` 的 digest 为 `sha256:9372402dc2fb734a16fd75cd763c7971b197e54f717b754042557a894ddea7da`；正式发布仍受目标 Windows 手工验收和签名暂缓约束。
 
-> 当前候选（2026-08-21）：PR18 `fa9a1c0` 的 0.2.0 Windows Release [32402250634](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32402250634) 与 installer smoke [32403363944](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32403363944) 已通过；Computer Use 手工验收记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。随后完成 M9.3.1-d2 的 `0016` 迁移、纯文本单事务合并、生命周期过滤和回滚夹具；CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 全部通过。下一步进入 M7 书源兼容性 P1 与 M9.3.1-d3 撤销设计。
+> 当前候选（2026-08-21）：PR18 `0.2.0` Windows Release [32402250634](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32402250634) 与 installer smoke [32403363944](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32403363944) 已通过；Computer Use 手工验收记录见 [windows-manual-acceptance-2026-08-21.md](windows-manual-acceptance-2026-08-21.md)。M9.3.1-d2 的 `0016` 迁移、纯文本单事务合并、生命周期过滤和回滚夹具已由 CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 验证。随后完成 M7 P1 首轮切片（item 自身节点匹配、响应字符集识别、调试编码提示），CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 全部通过；下一步补授权夹具、乱码降级和规则差异诊断，再进入 M9.3.1-d3。
 
 路线图按“可独立验收、可回滚、可持续兼容”的里程碑推进。每个里程碑都必须在 GitHub Issue、PR、自动化检查和变更记录中留下证据；“已实现”只表示代码与远程 CI 通过，不替代 Windows 安装包手工验收。
 
@@ -81,6 +81,7 @@
 - **M7.3 XPath 评估（静态识别、离线 PoC、授权夹具与耗时指标预览已完成）**：导入预览在规则上下文中识别 `//`、`xpath:`、`xpath=`、`@xpath` 等表达式，最多保留 8 条、每条 512 字节并展示原始值、不执行原因、静态解析状态、步数和估算工作量；离线 PoC 只解析受限路径/谓词并统计合成 HTML 节点，首轮夹具覆盖 6 条受限语法和 6 条拒绝语法，明确拒绝函数、联合、轴、父节点和超限输入，不翻译为 CSS、不访问网络。授权合成夹具、解析耗时分布和边界/回归夹具已完成（70 个 Rust 测试，run 31307700513）；继续保持不执行真实网络。
 - **M7.4 JavaScript 评估闸门**：设计条件已记录在 [M7.4 JavaScript 评估安全闸门](m7-js-evaluation-gate.md)；许可证/供应链、独立隔离、资源配额、API 白名单、脱敏审计、逐源授权、回滚和 Windows 合成夹具全部通过前，不引入运行时，默认仍拒绝脚本。
 - **M7.5 书源诊断**：单源重试、搜索/书籍/章节失败历史、本地保留与统计、跨请求 `operation_id`、本地失败报告、有限原因分类、旧库升级夹具、报告 schema_version 兼容约定、`source_metrics` 请求/缓存观测摘要和规则执行指标已完成；SQLite 0010 按书源/阶段统计网络请求，SQLite 0011/0012 按来源/阶段/字段规则键统计 attempts、success/no-match/failure/skipped，其中 skipped 不进入分母；书源页和报告展示明确比例、按规则分解与 `observed` 状态。规则指标边界详见 [规则执行指标边界](source-rule-metrics.md)；CI run [31322235077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31322235077) 已通过前端检查、Rust fmt/check 和 76 个 Rust 测试。M7.5j 完成，下一步进入 M8 内容格式 v2。
+- **M7 P1 兼容性首轮（已完成首切片）**：HTML/CSS 书源的 `item` 规则现在会匹配条目自身节点，再回退到后代节点，修复条目本身为 `<a>` 时搜索/目录为空的问题；普通 HTTP 响应按 BOM、`charset`、HTML 元信息和 UTF-8 有效性识别 UTF-8、UTF-16LE/BE、GB18030/GBK 与 Windows-1252，异常时使用替换字符更少的 GB18030 回退；调试步骤记录 `encoding`，必要时记录 `encoding_warning`。自身节点、GB18030 和 UTF-16LE 合成夹具已通过 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)。剩余工作是授权真实响应夹具、乱码标题降级展示和 `toc/content` 规则差异诊断；仍不执行 XPath/JavaScript。
 
 ### M8 — 阅读内容与本地格式 v2
 
@@ -144,7 +145,7 @@
 
 ## 当前执行顺序
 
-1. **P1 书源兼容性收尾**：针对手工验收发现的 `toc/content` 规则不匹配、乱码标题和异常结果，补充编码识别、规则诊断与授权合成夹具；继续明确拒绝 XPath/脚本执行。
+1. **P1 书源兼容性收尾**：首轮已完成编码识别和 `item` 自身节点匹配（CI 32466122037）；继续针对手工验收发现的 `toc/content` 规则不匹配、乱码标题和异常结果，补充授权合成夹具、降级展示与字段级诊断；继续明确拒绝 XPath/脚本执行。
 2. **M9.3.1-d3 撤销与旧 ID 跳转**：在 d2 CI 基线稳定后设计 7 天撤销、外部修改冲突、单跳 alias 和环检测；继续禁止物理删除与静默覆盖。
 3. **M7.1/M8 横向收尾**：补快照保留/清理、缺失资源提示、窄窗口/键盘可用性和兼容矩阵回归。
 4. **M10 备份/恢复**：在 d3 边界稳定后，再实现版本化备份、导入预览、校验和、损坏恢复和冲突策略；WebDAV/RSS/OPDS/TTS 继续排在后续阶段。

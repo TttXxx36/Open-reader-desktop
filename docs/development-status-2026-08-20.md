@@ -8,6 +8,12 @@
 - 在 P0 记录完成后，M9.3.1-d2 已实现：`0016_book_merge.sql`、active/merged 生命周期、操作/来源快照/单跳 alias、预览指纹二次校验、纯文本无冲突单事务提交和写入拒绝边界。
 - 实现提交 `5184451b38a27123b7ac2330ca957c222f790b26`；CI [32463202309](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32463202309) 的前端、Linux Rust、Windows 编译/峰值 RSS 采样均通过；本轮未在本地构建或安装。
 
+## 0.2 追加执行结果（2026-08-21）
+
+- M7 P1 首轮切片已完成：HTML/CSS 书源字段选择器先匹配 item 自身节点，再匹配后代节点；普通响应按 BOM、HTTP/HTML `charset`、UTF-8 有效性识别 UTF-8、UTF-16LE/BE、GB18030/GBK 和 Windows-1252，异常时选择替换字符更少的 GB18030 回退。
+- 调试步骤只记录 `encoding`，必要时记录 `encoding_warning`；不保存或导出响应正文。新增自身节点、GB18030、UTF-16LE 夹具，CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 的 Frontend、Rust checks、Windows sampler 全部通过。
+- P1 尚未收口：授权真实响应夹具、乱码标题降级展示和 `toc/content` 字段级差异诊断仍需继续；XPath/JavaScript/认证头边界不变。
+
 ## 0. 后续执行结果（2026-08-20）
 
 - **当前 main**：`89185e640cefb2665510fc8b4622d918a9f1ab16`（`89185e6`），已包含 PR10、PR11、PR12、PR13。
@@ -42,7 +48,7 @@
 | M6 Windows 体验与阅读质量 | 代码切片完成 | 安装包回归、中文字体、窄窗口、键盘焦点、高对比度和书源导入体验待人工验收 |
 | M6.5 Windows 发布闸门 | Actions 自动化完成 | 原地升级、WebView2 缺失、离线/网络错误、卸载数据保留和正式发布记录待目标 Windows；签名继续暂缓 |
 | M6.6 阅读工作区视觉系统 | 已合并（PR9、PR10） | 搜索工作区与书架信息架构已进入 main，合并后 Release/smoke 已通过；等待目标 Windows 体验验收 |
-| M7 书源兼容性 v2 | 核心代码完成，收尾待验收 | PR12 已补齐 20 条/16 MiB 快照保留闸门；仍需窄窗口与键盘批量操作、拒绝边界真实提示回归 |
+| M7 书源兼容性 v2 | 核心代码完成，P1 首轮通过 CI，收尾待验收 | item 自身节点匹配、响应字符集识别和编码诊断已通过 CI 32466122037；仍需授权响应夹具、乱码标题降级、`toc/content` 字段级差异诊断，以及窄窗口/键盘批量操作与拒绝边界真实提示回归 |
 | M8 内容格式 v2 | 大部分完成，PR13 自动化已通过 | PR13 已补齐 h1-h6 标题和缺失章节/图片/stylesheet 预览提示；PDF 独立渲染/搜索/目录模型评估与 MOBI/AZW/AZW3 只读解析器评估仍待后续
 | M9 书架、元数据与历史 | M9.0–M9.3.1-d2 完成 | d3 的 7 天撤销、旧 ID 一跳跳转、外部修改冲突和环检测仍未开始 |
 | M10 备份与恢复 | 未开始 | 版本化 JSON/ZIP、校验和、损坏恢复、导入预览和冲突策略；必须等待 d2 边界稳定 |
@@ -60,7 +66,7 @@
 ### P1：P0 证据满足后按依赖推进
 
 4. **M0 文档治理收口（Issue #1，已完成）**：README、CONTRIBUTING、SECURITY、product-scope、source-protocol、compatibility-matrix 已统一链接 ADR 0002，远程 CI 通过，Issue #1 已关闭。
-5. **M7.1 横向收尾**：PR12 的快照数量/大小保留闸门已通过 CI，仍需合并评审、窄窗口和键盘批量操作；保留 XPath、JavaScript、Cookie、Authorization、音频的显式拒绝。
+5. **M7 书源兼容性 P1 收尾**：首轮 item 自身节点匹配与响应字符集识别已通过 CI 32466122037；继续补授权响应夹具、乱码标题降级和 `toc/content` 字段级差异诊断，保留 XPath、JavaScript、Cookie、Authorization、音频的显式拒绝。
 6. **M8 格式收尾**：PR13 的 EPUB 标题层级与缺失资源诊断已通过 CI，仍需合并评审和 CSS/Windows 回归；完成 PDF/MOBI/AZW 只读评估，不在许可证、供应链、内存和 DRM 拒绝未通过前引入运行时。
 7. **M9.3.1-d2**：已完成 0016 schema、旧库默认 active、预览二次校验、单事务纯文本无冲突合并、source snapshot、merged 生命周期和一跳 alias；物理删除、静默覆盖和自动选择 canonical 仍禁止。
 8. **M9.3.1-d3**：下一步做 7 天撤销、旧 ID 重定向、外部修改冲突和 alias 环检测。
@@ -97,4 +103,4 @@
 - BLOCKED.md：明确 P0 外部验收与 d2 迁移边界；
 - docs/roadmap.md：更新最新维护基线并链接本审计。
 
-下一步依赖顺序调整为：**M7 书源兼容性 P1（规则诊断/编码质量）→ M9.3.1-d3 撤销与旧 ID 跳转设计 → M7/M8 横向收尾 → M10 备份/恢复**。Windows 安装、升级、字体、焦点和窄窗口仍需用户目标环境继续补充证据。
+下一步依赖顺序调整为：**M7 书源兼容性 P1 收尾（授权夹具/乱码降级/字段级诊断）→ M9.3.1-d3 撤销与旧 ID 跳转设计 → M7/M8 横向收尾 → M10 备份/恢复**。Windows 安装、升级、字体、焦点和窄窗口仍需用户目标环境继续补充证据。

@@ -1,6 +1,6 @@
 # M4 单书源端到端流程
 
-> 维护状态（2026-08-21）：M4/M5 的合成夹具、书源导入和诊断链路仍由 main CI 验证；PR18 候选已将书源配置导入统一为 128 MiB bundle 上限，在线拉取超时 30 秒。0.2.0 目标 Windows 手工记录已完成，测试源规则不匹配和乱码标题转入 M7 P1 兼容性收尾。
+> 维护状态（2026-08-21）：M4/M5 的合成夹具、书源导入和诊断链路仍由 main CI 验证；PR18 候选已将书源配置导入统一为 128 MiB bundle 上限，在线拉取超时 30 秒。0.2.0 目标 Windows 手工记录已完成；M7 P1 首轮已修复 item 自身节点漏匹配并加入响应字符集识别，测试源规则差异、乱码降级和授权夹具仍在收尾。
 
 M4 把 M3 的书源协议串成一条可测试的最小链路：
 
@@ -38,6 +38,14 @@ Tauri 命令 `run_source_pipeline` 接收两个参数：
 - 缓存数据只保存在本机 SQLite，不会把远程书籍写入本地书架；应用启动时会清理过期缓存。
 
 远程章节阅读仍遵守 M3/M4 的限制：只允许 HTTP/HTTPS，不执行 JavaScript，不携带 Cookie/Authorization，不绕过验证码或付费限制。
+
+## M7 P1 书源兼容性首轮
+
+为覆盖常见 Legado CSS 书源形态，HTML/CSS 规则提取会先检查当前 `item` 节点是否匹配字段选择器，再检查后代节点；因此“条目本身就是链接”的搜索结果和目录项不再因 `ElementRef.select` 只遍历后代而丢失。
+
+响应文本解码按以下顺序处理：BOM、HTTP `Content-Type` 的 `charset`、HTML 前 16 KiB 内的 `charset` 元信息、有效 UTF-8，最后使用 GB18030 兼容回退；支持 UTF-8、UTF-16LE/BE、GBK/GB2312/GB18030 和 Windows-1252。声明字符集产生替换字符时，会比较 GB18030 回退结果并选择质量更好的文本。调试步骤只记录 `encoding` 与必要的 `encoding_warning`，不保存或导出响应正文。
+
+该首轮切片由自身节点、GB18030、UTF-16LE 合成夹具和远程 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037) 验证。它不扩大 XPath/JavaScript 执行边界；下一步继续补充授权响应夹具、乱码标题降级展示和 `toc/content` 字段级差异诊断。
 
 ## M5.2 配置包与强制刷新
 
