@@ -9,12 +9,13 @@ mod source_import;
 mod xpath_poc;
 
 use db::{
-    BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMergePreview,
-    BookMergePreviewRequest, BookMergePreviewRevalidateRequest, BookMetadataBatchWrite,
-    BookMetadataWrite, BookSummary, ChapterContent, Database, DuplicateBookGroup,
-    ImageSequenceDetail, ImageSequenceSummary, ImageSequenceWrite, SourceCacheStats,
-    SourceFailureHistory, SourceFailureStats, SourceMetadata, SourceRequestMetrics,
-    SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary, SourceSummary, SourceWrite,
+    BookCoverSummary, BookCoverWrite, BookDetail, BookListOptions, BookMergeCommitRequest,
+    BookMergeCommitResult, BookMergePreview, BookMergePreviewRequest,
+    BookMergePreviewRevalidateRequest, BookMetadataBatchWrite, BookMetadataWrite, BookSummary,
+    ChapterContent, Database, DuplicateBookGroup, ImageSequenceDetail, ImageSequenceSummary,
+    ImageSequenceWrite, SourceCacheStats, SourceFailureHistory, SourceFailureStats, SourceMetadata,
+    SourceRequestMetrics, SourceRuleMetrics, SourceRuleOutcome, SourceSnapshotSummary,
+    SourceSummary, SourceWrite,
 };
 use image_relink::{ImageRelinkAssignment, ImageRelinkPreview};
 use library::{
@@ -623,6 +624,16 @@ fn save_progress(
             reading_position.unwrap_or(0.0),
             read_state.as_deref(),
         )
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn commit_book_merge(
+    database: tauri::State<'_, Database>,
+    request: BookMergeCommitRequest,
+) -> Result<BookMergeCommitResult, String> {
+    database
+        .commit_book_merge(request)
         .map_err(|error| error.to_string())
 }
 
@@ -2219,6 +2230,7 @@ pub fn run() {
             find_duplicate_books,
             preview_book_merge,
             revalidate_book_merge_preview,
+            commit_book_merge,
             list_books_with_options,
             update_book_metadata,
             rename_book,
