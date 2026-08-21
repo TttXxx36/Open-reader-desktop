@@ -36,6 +36,16 @@ const MAX_REDIRECTS: usize = 5;
 const MAX_STAGE_BUDGET_SECS: u64 = 60;
 const MAX_PIPELINE_BUDGET_SECS: u64 = 120;
 const MAX_CHARSET_SCAN_BYTES: usize = 16 * 1024;
+const CONTENT_FALLBACK_SELECTORS: &[(&str, Option<&str>)] = &[
+    (".content", Some("html")),
+    ("#content", Some("html")),
+    ("article.content", Some("html")),
+    (".read-content", Some("html")),
+    (".chapter-content", Some("html")),
+    ("[itemprop=\"articleBody\"]", Some("html")),
+    ("article", Some("html")),
+    ("main", Some("html")),
+];
 
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -1443,8 +1453,12 @@ impl SourceEngine {
                 .map_err(|error| rule_error("content", "content", error))?
         } else {
             let document = Html::parse_document(&body);
-            extract_document_rule(&document, rules.content.as_ref())
-                .map_err(|error| rule_error("content", "content", error))?
+            extract_document_rule_with_fallback(
+                &document,
+                rules.content.as_ref(),
+                CONTENT_FALLBACK_SELECTORS,
+            )
+            .map_err(|error| rule_error("content", "content", error))?
         }
         .ok_or_else(|| rule_error("content", "content", SourceError::NoMatch))?;
         let next_url = if let Some(next_rule) = rules.next.as_ref() {
@@ -1814,8 +1828,12 @@ fn parse_chapter_page(
             .map_err(|error| rule_error("content", "content", error))?
     } else {
         let document = Html::parse_document(body);
-        extract_document_rule(&document, rules.content.as_ref())
-            .map_err(|error| rule_error("content", "content", error))?
+        extract_document_rule_with_fallback(
+            &document,
+            rules.content.as_ref(),
+            CONTENT_FALLBACK_SELECTORS,
+        )
+        .map_err(|error| rule_error("content", "content", error))?
     }
     .ok_or_else(|| rule_error("content", "content", SourceError::NoMatch))?;
 
@@ -2223,7 +2241,61 @@ fn parse_chapter_list(
         chapters.push(SourceChapter { title, url, index });
     }
 
+    if chapters.is_empty() {
+        chapters = fallback_chapters_from_links(&document, base_url);
+    }
+
     Ok(chapters)
+}
+
+fn fallback_chapters_from_links(document: &Html, base_url: &str) -> Vec<SourceChapter> {
+    let Ok(selector) = parse_selector("a[href]") else {
+        return Vec::new();
+    };
+    document
+        .select(&selector)
+        .take(256)
+        .enumerate()
+        .filter_map(|(index, link)| {
+            let href = link.value().attr("href")?.trim();
+            if !is_navigable_reference(href) {
+                return None;
+            }
+            let title = link
+                .text()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if title.is_empty() || !is_likely_chapter_link(link, &title, href) {
+                return None;
+            }
+            Some(SourceChapter {
+                title,
+                url: absolutize_url(base_url, href),
+                index,
+            })
+        })
+        .collect()
+}
+
+fn is_likely_chapter_link(link: ElementRef<'_>, title: &str, href: &str) -> bool {
+    let metadata = [
+        href,
+        link.value().attr("class").unwrap_or_default(),
+        link.value().attr("id").unwrap_or_default(),
+    ]
+    .join(" ")
+    .to_ascii_lowercase();
+    let title = title.to_ascii_lowercase();
+    metadata.contains("chapter")
+        || metadata.contains("chap")
+        || metadata.contains("section")
+        || (title.contains('第')
+            && ["章", "节", "回", "卷", "集"]
+                .iter()
+                .any(|marker| title.contains(marker)))
 }
 
 fn extract_document_rule_from_element(
@@ -5239,6 +5311,41 @@ mod tests {
         assert_eq!(chapters.len(), 1);
         assert_eq!(chapters[0].title, "Chapter one");
         assert_eq!(chapters[0].url, "https://example.test/chapter/1");
+    }
+
+    #[test]
+    fn html_toc_falls_back_to_chapter_links_when_item_rule_misses() {
+        let rules = PageRules {
+            item: Some(".missing-chapter-item".to_string()),
+            title: Some(SourceRule::Selector(".missing-title".to_string())),
+            url: Some(SourceRule::Selector(".missing-url".to_string())),
+            ..PageRules::default()
+        };
+        let chapters = parse_chapter_list(
+            &rules,
+            r#"<nav><a class="chapter-link" href="/chapter/1">第一章 初见</a></nav>"#,
+            "https://example.test/book/",
+        )
+        .expect("fallback chapter links");
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].title, "第一章 初见");
+        assert_eq!(chapters[0].url, "https://example.test/chapter/1");
+    }
+
+    #[test]
+    fn html_content_falls_back_to_safe_content_selectors() {
+        let rules = PageRules {
+            content: Some(SourceRule::Selector(".missing-content".to_string())),
+            ..PageRules::default()
+        };
+        let (content, next_url) = parse_chapter_page(
+            &rules,
+            r#"<article class="content"><p>正文内容</p></article>"#,
+            "https://example.test/chapter/1",
+        )
+        .expect("fallback content");
+        assert_eq!(content, "<p>正文内容</p>");
+        assert_eq!(next_url, None);
     }
 
     #[test]
