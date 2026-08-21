@@ -7,6 +7,12 @@ const formatDebugVariables = (variables: Record<string, string> = {}) =>
   Object.entries(variables)
     .map(([key, value]) => `${key}=${value}`)
     .join(" · ");
+const ruleStatusLabel = (status: string) => ({
+  success: "成功",
+  no_match: "无匹配",
+  failure: "失败",
+  skipped: "跳过",
+}[status] ?? status);
 const retainedImportCount = (preview: any) =>
   preview.entries.filter((entry: any) => entry.valid && entry.unsupported_rules.length > 0).length;
 const runnableImportCount = (preview: any) =>
@@ -495,6 +501,13 @@ function openSourcePanel(panel: SourcePanel) {
           <div class="source-debug-summary">
             <strong>{{ sourcePipeline.book_info.title }}</strong>
             <span>{{ sourcePipeline.search_results.length }} 个搜索结果 · {{ sourcePipeline.chapters.length }} 个章节</span>
+          </div>
+          <div v-if="sourcePipeline.rule_evaluations?.length" class="source-failure-stats source-rule-diagnostics">
+            <strong>字段级规则诊断</strong>
+            <small v-for="evaluation in sourcePipeline.rule_evaluations" :key="evaluation.stage + '-' + evaluation.rule_key">
+              {{ evaluation.stage }}.{{ evaluation.rule_key }}：{{ ruleStatusLabel(evaluation.status) }}
+              <template v-if="evaluation.detail"> · {{ evaluation.detail }}</template>
+            </small>
           </div>
           <ol class="source-debug-steps">
             <li v-for="step in sourcePipeline.debug_steps" :key="step.stage">

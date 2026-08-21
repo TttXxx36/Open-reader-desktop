@@ -404,11 +404,11 @@ pub struct SourceSearchFailure {
     pub source_id: String,
     pub source_name: String,
     pub message: String,
-    #[serde(skip_serializing)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceRuleEvaluationStatus {
     Success,
@@ -417,11 +417,13 @@ pub enum SourceRuleEvaluationStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceRuleEvaluation {
     pub stage: String,
     pub rule_key: String,
     pub status: SourceRuleEvaluationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -431,7 +433,7 @@ pub struct SourceSearchDiagnostics {
     pub pages_scanned: usize,
     pub parsed_items: usize,
     pub stop_reason: String,
-    #[serde(skip_serializing)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -448,6 +450,7 @@ pub fn rule_evaluation_for_output(
         } else {
             SourceRuleEvaluationStatus::NoMatch
         },
+        detail: None,
     }
 }
 
@@ -462,6 +465,7 @@ fn rule_evaluation_for_rule(
             stage: stage.to_string(),
             rule_key: rule_key.to_string(),
             status: SourceRuleEvaluationStatus::Skipped,
+            detail: None,
         };
     }
     rule_evaluation_for_output(stage, rule_key, has_output)
@@ -608,6 +612,11 @@ pub fn rule_evaluation_from_error(
         stage: stage.to_string(),
         rule_key: rule_key.to_string(),
         status,
+        detail: Some(if status == SourceRuleEvaluationStatus::NoMatch {
+            "no_match".to_string()
+        } else {
+            "rule_error".to_string()
+        }),
     })
 }
 
@@ -658,7 +667,7 @@ pub struct SourceChapterContent {
     pub title: String,
     pub content: String,
     pub next_url: Option<String>,
-    #[serde(skip)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -755,7 +764,7 @@ pub struct SourcePipelineResult {
     pub chapters: Vec<SourceChapter>,
     pub first_chapter: SourceChapterContent,
     pub debug_steps: Vec<SourceDebugStep>,
-    #[serde(skip_serializing)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -764,7 +773,7 @@ pub struct SourceBookDetail {
     pub book_info: BookInfo,
     pub chapters: Vec<SourceChapter>,
     pub debug_steps: Vec<SourceDebugStep>,
-    #[serde(skip)]
+    #[serde(default)]
     pub rule_evaluations: Vec<SourceRuleEvaluation>,
 }
 
@@ -1333,7 +1342,7 @@ impl SourceEngine {
             book_url,
         );
         let context = SourceRequestContext::book(book_url);
-        let (body, _url) = self
+        let (body, fetched_url) = self
             .fetch_stage_chain(
                 "book_info",
                 template,
@@ -1343,12 +1352,15 @@ impl SourceEngine {
             )
             .await?;
         if rules.is_json() {
-            return parse_book_info_json(rules, &body, book_url)
-                .map_err(|error| rule_error("book_info", "document", error));
+            let mut book_info = parse_book_info_json(rules, &body, book_url)
+                .map_err(|error| rule_error("book_info", "document", error))?;
+            let downgraded_fields = downgrade_garbled_book_fields(&mut book_info);
+            append_text_quality_debug_step(debug_steps, &fetched_url, &downgraded_fields);
+            return Ok(book_info);
         }
         let document = Html::parse_document(&body);
 
-        Ok(BookInfo {
+        let mut book_info = BookInfo {
             title: extract_document_rule_with_fallback(
                 &document,
                 rules.title.as_ref(),
@@ -1402,7 +1414,10 @@ impl SourceEngine {
                 .map_err(|error| rule_error("book_info", "cover", error))?,
             ),
             book_url: book_url.to_string(),
-        })
+        };
+        let downgraded_fields = downgrade_garbled_book_fields(&mut book_info);
+        append_text_quality_debug_step(debug_steps, &fetched_url, &downgraded_fields);
+        Ok(book_info)
     }
 
     async fn fetch_toc(
@@ -1980,6 +1995,7 @@ fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> DecodedResp
                         < replacement_char_count(&decoded.body)
                     {
                         fallback.encoding = "gb18030-fallback".to_string();
+                        fallback.had_decode_errors = true;
                         return fallback;
                     }
                 }
@@ -1996,11 +2012,11 @@ fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> DecodedResp
         };
     }
 
-    let (text, _, had_decode_errors) = GB18030.decode(payload);
+    let (text, _, _) = GB18030.decode(payload);
     DecodedResponse {
         body: text.into_owned(),
         encoding: "gb18030-fallback".to_string(),
-        had_decode_errors,
+        had_decode_errors: true,
     }
 }
 
@@ -2084,6 +2100,71 @@ fn replacement_char_count(value: &str) -> usize {
         .chars()
         .filter(|character| *character == '\u{fffd}')
         .count()
+}
+
+fn is_suspicious_decoded_text(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    if value.contains('\u{fffd}')
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return true;
+    }
+    ["Ã", "Â", "Ð", "Ñ", "â€", "ä¸", "æ–", "ï¿½"]
+        .iter()
+        .any(|marker| value.contains(marker))
+}
+
+fn downgrade_garbled_book_fields(book_info: &mut BookInfo) -> Vec<&'static str> {
+    let mut downgraded = Vec::new();
+    if is_suspicious_decoded_text(&book_info.title) {
+        book_info.title = "未命名书籍".to_string();
+        downgraded.push("title");
+    }
+    if book_info
+        .author
+        .as_deref()
+        .is_some_and(is_suspicious_decoded_text)
+    {
+        book_info.author = None;
+        downgraded.push("author");
+    }
+    if book_info
+        .intro
+        .as_deref()
+        .is_some_and(is_suspicious_decoded_text)
+    {
+        book_info.intro = None;
+        downgraded.push("intro");
+    }
+    downgraded
+}
+
+fn append_text_quality_debug_step(
+    debug_steps: &mut Vec<SourceDebugStep>,
+    url: &str,
+    downgraded_fields: &[&str],
+) {
+    if downgraded_fields.is_empty() {
+        return;
+    }
+    debug_steps.push(SourceDebugStep {
+        stage: "book_info.text_quality".to_string(),
+        url: redact_url(url),
+        duration_ms: 0,
+        status: None,
+        bytes: None,
+        error: None,
+        variables: BTreeMap::from([
+            ("reason".to_string(), "garbled_text_downgraded".to_string()),
+            ("fields".to_string(), downgraded_fields.join(",")),
+        ]),
+        cache_hit: false,
+    });
 }
 
 fn extract_document_rule(
@@ -5467,5 +5548,55 @@ mod tests {
         assert_eq!(decoded.body, "第一章");
         assert_eq!(decoded.encoding, "utf-16le");
         assert!(!decoded.had_decode_errors);
+
+        let invalid_utf8 = vec![0xe4, 0xb8, 0xad, 0xff];
+        let decoded = decode_response_body(&invalid_utf8, None);
+        assert_eq!(decoded.encoding, "gb18030-fallback");
+        assert!(decoded.had_decode_errors);
+    }
+
+    #[test]
+    fn downgrades_garbled_book_fields_and_records_safe_reason() {
+        let mut info = BookInfo {
+            title: "ä¸­æ–‡ä¹¦å".to_string(),
+            author: Some("正常作者".to_string()),
+            intro: Some("���".to_string()),
+            cover_url: None,
+            book_url: "https://example.test/book/1".to_string(),
+        };
+        let downgraded = downgrade_garbled_book_fields(&mut info);
+        assert_eq!(info.title, "未命名书籍");
+        assert_eq!(info.author.as_deref(), Some("正常作者"));
+        assert_eq!(info.intro, None);
+        assert_eq!(downgraded, vec!["title", "intro"]);
+
+        let mut steps = Vec::new();
+        append_text_quality_debug_step(
+            &mut steps,
+            "https://example.test/book/1?token=secret",
+            &downgraded,
+        );
+        assert_eq!(steps[0].stage, "book_info.text_quality");
+        assert_eq!(steps[0].url, "https://example.test/book/1");
+        assert_eq!(
+            steps[0].variables.get("reason").map(String::as_str),
+            Some("garbled_text_downgraded")
+        );
+    }
+
+    #[test]
+    fn serializes_field_level_rule_diagnostics_without_response_body() {
+        let payload = serde_json::to_value(SourceRuleEvaluation {
+            stage: "toc".to_string(),
+            rule_key: "url".to_string(),
+            status: SourceRuleEvaluationStatus::NoMatch,
+            detail: Some("no_match".to_string()),
+        })
+        .expect("rule evaluation should serialize");
+        assert_eq!(payload["stage"], "toc");
+        assert_eq!(payload["rule_key"], "url");
+        assert_eq!(payload["status"], "no_match");
+        assert_eq!(payload["detail"], "no_match");
+        assert!(!payload.to_string().contains("response"));
     }
 }

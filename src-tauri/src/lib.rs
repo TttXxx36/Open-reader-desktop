@@ -1473,6 +1473,8 @@ struct RemoteBookDetail {
     chapters: Vec<source::SourceChapter>,
     debug_steps: Vec<source::SourceDebugStep>,
     #[serde(default)]
+    rule_evaluations: Vec<source::SourceRuleEvaluation>,
+    #[serde(default)]
     chapter_fingerprint: String,
     #[serde(default)]
     chapter_update: Option<source::ChapterUpdateSummary>,
@@ -1498,6 +1500,8 @@ struct RemoteChapterContent {
     cache_hit: bool,
     #[serde(default)]
     debug_steps: Vec<source::SourceDebugStep>,
+    #[serde(default)]
+    rule_evaluations: Vec<source::SourceRuleEvaluation>,
 }
 
 impl From<source::SourceChapterContent> for RemoteChapterContent {
@@ -1510,6 +1514,7 @@ impl From<source::SourceChapterContent> for RemoteChapterContent {
             refresh_error: None,
             cache_hit: false,
             debug_steps: Vec::new(),
+            rule_evaluations: content.rule_evaluations,
         }
     }
 }
@@ -1696,6 +1701,7 @@ async fn fetch_source_book(
         chapter_fingerprint: source::chapter_fingerprint(&detail.chapters),
         chapters: detail.chapters,
         debug_steps: detail.debug_steps,
+        rule_evaluations: detail.rule_evaluations,
         chapter_update,
         stale: false,
         refresh_error: None,

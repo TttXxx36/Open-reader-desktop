@@ -523,12 +523,22 @@ interface SourceDebugStep {
   cache_hit: boolean;
 }
 
+type SourceRuleEvaluationStatus = "success" | "no_match" | "failure" | "skipped";
+
+interface SourceRuleEvaluation {
+  stage: string;
+  rule_key: string;
+  status: SourceRuleEvaluationStatus;
+  detail?: string | null;
+}
+
 interface SourcePipelineResult {
   search_results: Array<{ title: string; author: string | null; book_url: string | null; source_name: string }>;
   book_info: { title: string; author: string | null; intro: string | null; cover_url: string | null; book_url: string };
   chapters: Array<{ title: string; url: string; index: number }>;
   first_chapter: { title: string; content: string; next_url: string | null };
   debug_steps: SourceDebugStep[];
+  rule_evaluations: SourceRuleEvaluation[];
 }
 
 interface ExportedDiagnosticStep extends SourceDebugStep {
@@ -574,6 +584,7 @@ interface SourceDiagnosticSnapshot {
   } | null;
   cache: SourceCacheStatus | null;
   source_metrics: SourceMetrics;
+  rule_evaluations: SourceRuleEvaluation[];
   steps: ExportedDiagnosticStep[];
   truncated_steps: boolean;
   privacy: string[];
@@ -629,6 +640,7 @@ interface RemoteBookDetail {
   };
   chapters: RemoteChapter[];
   debug_steps: SourceDebugStep[];
+  rule_evaluations: SourceRuleEvaluation[];
   chapter_fingerprint: string;
   chapter_update: ChapterUpdateSummary | null;
   stale: boolean;
@@ -644,6 +656,7 @@ interface RemoteChapterContent {
   refresh_error: string | null;
   cache_hit: boolean;
   debug_steps: SourceDebugStep[];
+  rule_evaluations: SourceRuleEvaluation[];
 }
 
 interface RemoteNextPageStatus {
@@ -658,6 +671,7 @@ interface SourceSearchDiagnostics {
   pages_scanned: number;
   parsed_items: number;
   stop_reason: string;
+  rule_evaluations: SourceRuleEvaluation[];
 }
 
 interface MultiSourceSearchResult {
@@ -666,6 +680,7 @@ interface MultiSourceSearchResult {
     source_id: string;
     source_name: string;
     message: string;
+    rule_evaluations: SourceRuleEvaluation[];
   }>;
   diagnostics: SourceSearchDiagnostics[];
   enabled_sources: number;
@@ -2606,6 +2621,15 @@ function sanitizeDiagnosticMessage(value: string) {
   );
 }
 
+function sanitizeRuleEvaluations(values: SourceRuleEvaluation[] = []): SourceRuleEvaluation[] {
+  return values.slice(0, 128).map((evaluation) => ({
+    stage: truncateDiagnostic(evaluation.stage, 64),
+    rule_key: truncateDiagnostic(evaluation.rule_key, 64),
+    status: evaluation.status,
+    detail: evaluation.detail ? truncateDiagnostic(evaluation.detail, 64) : null,
+  }));
+}
+
 function cacheDiagnosticStep(stage: string, url: string, error: string | null): SourceDebugStep {
   return {
     stage,
@@ -2676,6 +2700,13 @@ function exportSourceDiagnostics() {
     ...rawSteps.map(({ step, prefix }) => sanitizeDiagnosticStep(step, prefix)),
     ...cacheEvents,
   ];
+  const ruleEvaluations = sanitizeRuleEvaluations([
+    ...(pipeline?.rule_evaluations ?? []),
+    ...(remoteBook.value?.rule_evaluations ?? []),
+    ...(remoteChapter.value?.rule_evaluations ?? []),
+    ...(searchResult.value?.failures ?? []).flatMap((failure) => failure.rule_evaluations ?? []),
+    ...(searchResult.value?.diagnostics ?? []).flatMap((diagnostic) => diagnostic.rule_evaluations ?? []),
+  ]);
   let elapsedMs = 0;
   const steps: ExportedDiagnosticStep[] = sanitizedSteps
     .slice(0, MAX_DIAGNOSTIC_STEPS)
@@ -2724,6 +2755,7 @@ function exportSourceDiagnostics() {
     } : null,
     cache: sourceCacheStatus.value ? { ...sourceCacheStatus.value } : null,
     source_metrics: { ...sourceMetrics.value },
+    rule_evaluations: ruleEvaluations,
     steps,
     truncated_steps: sanitizedSteps.length > steps.length,
     privacy: [

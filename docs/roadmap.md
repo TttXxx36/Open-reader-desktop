@@ -81,7 +81,7 @@
 - **M7.3 XPath 评估（静态识别、离线 PoC、授权夹具与耗时指标预览已完成）**：导入预览在规则上下文中识别 `//`、`xpath:`、`xpath=`、`@xpath` 等表达式，最多保留 8 条、每条 512 字节并展示原始值、不执行原因、静态解析状态、步数和估算工作量；离线 PoC 只解析受限路径/谓词并统计合成 HTML 节点，首轮夹具覆盖 6 条受限语法和 6 条拒绝语法，明确拒绝函数、联合、轴、父节点和超限输入，不翻译为 CSS、不访问网络。授权合成夹具、解析耗时分布和边界/回归夹具已完成（70 个 Rust 测试，run 31307700513）；继续保持不执行真实网络。
 - **M7.4 JavaScript 评估闸门**：设计条件已记录在 [M7.4 JavaScript 评估安全闸门](m7-js-evaluation-gate.md)；许可证/供应链、独立隔离、资源配额、API 白名单、脱敏审计、逐源授权、回滚和 Windows 合成夹具全部通过前，不引入运行时，默认仍拒绝脚本。
 - **M7.5 书源诊断**：单源重试、搜索/书籍/章节失败历史、本地保留与统计、跨请求 `operation_id`、本地失败报告、有限原因分类、旧库升级夹具、报告 schema_version 兼容约定、`source_metrics` 请求/缓存观测摘要和规则执行指标已完成；SQLite 0010 按书源/阶段统计网络请求，SQLite 0011/0012 按来源/阶段/字段规则键统计 attempts、success/no-match/failure/skipped，其中 skipped 不进入分母；书源页和报告展示明确比例、按规则分解与 `observed` 状态。规则指标边界详见 [规则执行指标边界](source-rule-metrics.md)；CI run [31322235077](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/31322235077) 已通过前端检查、Rust fmt/check 和 76 个 Rust 测试。M7.5j 完成，下一步进入 M8 内容格式 v2。
-- **M7 P1 兼容性安全切片（两轮已完成）**：HTML/CSS 书源的 `item` 规则现在会匹配条目自身节点，再回退到后代节点；普通 HTTP 响应按 BOM、`charset`、HTML 元信息和 UTF-8 有效性识别 UTF-8、UTF-16LE/BE、GB18030/GBK 与 Windows-1252，异常时使用替换字符更少的 GB18030 回退；调试步骤记录 `encoding`，必要时记录 `encoding_warning`。当目录/正文原始规则无结果时，目录使用带章节特征的有限链接回退，正文使用安全 CSS 候选并保留 inner HTML。自身节点、GB18030、UTF-16LE、目录链接和正文回退夹具已通过 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226)。剩余工作是授权真实响应夹具、乱码标题降级展示和字段级 `toc/content` 规则差异诊断；仍不执行 XPath/JavaScript。
+- **M7 P1 兼容性安全切片（安全回退、字段诊断与乱码降级代码已完成）**：HTML/CSS 书源的 `item` 规则现在会匹配条目自身节点，再回退到后代节点；普通 HTTP 响应按 BOM、`charset`、HTML 元信息和 UTF-8 有效性识别 UTF-8、UTF-16LE/BE、GB18030/GBK 与 Windows-1252，异常时使用替换字符更少的 GB18030 回退并明确记录 `encoding_warning`。当目录/正文原始规则无结果时，目录使用带章节特征的有限链接回退，正文使用安全 CSS 候选并保留 inner HTML；搜索、书籍和章节响应现在对外提供字段级 `stage/rule_key/status`，诊断页和脱敏快照均可见；标题、作者、简介检测到替换字符、控制字符或常见乱码序列时安全降级并记录 `book_info.text_quality`。自身节点、GB18030、UTF-16LE、目录链接、正文回退、字段诊断和乱码降级夹具待 CI [32466122037](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32466122037)、[32468240226](https://github.com/TttXxx36/Open-reader-desktop/actions/runs/32468240226) 之外的新一轮验证；授权真实响应夹具和 Windows 手工回归仍待推进，继续不执行 XPath/JavaScript。
 
 ### M8 — 阅读内容与本地格式 v2
 
@@ -145,7 +145,7 @@
 
 ## 当前执行顺序
 
-1. **P1 书源兼容性收尾**：两轮安全切片已完成编码识别、`item` 自身节点匹配、目录章节链接回退和正文安全 CSS 回退（CI 32466122037、32468240226）；继续补授权响应夹具、乱码降级展示与字段级 `toc/content` 诊断，明确拒绝 XPath/脚本执行。
+1. **P1 书源兼容性收尾**：编码识别、`item` 自身节点匹配、目录章节链接回退、正文安全 CSS 回退、字段级 `toc/content` 诊断和乱码标题降级代码已完成；下一步只补授权响应夹具与 Windows 手工回归，继续明确拒绝 XPath/脚本执行。
 2. **M9.3.1-e Windows 手工验收**：使用后续 Release/便携产物验证撤销窗口、外部修改冲突提示、旧 ID 打开/进度回写、升级和数据保留；未完成前不把 M9 标记为人工收尾。
 3. **M7.1/M8 横向收尾**：补快照保留/清理、缺失资源提示、窄窗口/键盘可用性和兼容矩阵回归。
 4. **M10 备份/恢复**：在 d3 边界和 Windows 手工证据稳定后，再实现版本化备份、导入预览、校验和、损坏恢复和冲突策略；WebDAV/RSS/OPDS/TTS 继续排在后续阶段。
